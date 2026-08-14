@@ -26,12 +26,11 @@ public static class ModelProviderPresets
 {
     public static readonly ModelProviderPreset[] All =
     {
-        new("mock", "Mock（无需模型）", "mock", string.Empty, string.Empty, false, "无需 API Key，用于安全测试桌面能力。"),
-        new("deepseek", "DeepSeek API", "openai-compatible", "https://api.deepseek.com", "deepseek-v4-flash", true, "粘贴 DeepSeek API Key 即可，保存后立即用于普通对话。"),
-        new("ollama", "Ollama 本地模型", "openai-compatible", "http://127.0.0.1:11434/v1", string.Empty, false, "本机 Ollama OpenAI 兼容入口；填模型 ID，通常无需 API Key。"),
-        new("lmstudio", "LM Studio 本地模型", "openai-compatible", "http://127.0.0.1:1234/v1", string.Empty, false, "本机 LM Studio OpenAI 兼容服务；填模型 ID，通常无需 API Key。"),
-        new("openai-compatible", "OpenAI 兼容 API / 中转站", "openai-compatible", string.Empty, string.Empty, false, "填写 Base URL、模型 ID，API Key 按服务要求填写。"),
-        new("deepseek-harness", "DeepSeek Harness（高级）", "harness", "https://api.deepseek.com", "deepseek-v4-flash", true, "完整 Agent + MCP 模式；需要配置 TURINGDESK_HARNESS_COMMAND 指向 Harness Runtime。")
+        new("mock", "Mock（无需模型）", "mock", string.Empty, string.Empty, false, "无需 API Key，用于安全测试桌面能力。真实模型全部由内置 DeepSeek Harness 驱动。"),
+        new("deepseek", "DeepSeek API", "harness", "https://api.deepseek.com", "deepseek-v4-flash", true, "推荐。粘贴 DeepSeek API Key 后，TuringDesk 会自动启动内置 Harness Agent + Windows MCP。"),
+        new("ollama", "Ollama 本地模型", "harness", "http://127.0.0.1:11434/v1", string.Empty, false, "本机 Ollama OpenAI 兼容入口；只需填写模型 ID，通常无需 API Key。Agent 仍由 Harness 驱动。"),
+        new("lmstudio", "LM Studio 本地模型", "harness", "http://127.0.0.1:1234/v1", string.Empty, false, "本机 LM Studio OpenAI 兼容服务；填写模型 ID，通常无需 API Key。Agent 仍由 Harness 驱动。"),
+        new("openai-compatible", "OpenAI 兼容 API / 中转站", "harness", string.Empty, string.Empty, false, "填写 Base URL、模型 ID，按服务要求粘贴 API Key。由 Harness 通用模型适配层统一驱动。")
     };
 
     public static ModelProviderPreset Find(string? id) =>
