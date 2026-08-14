@@ -21,6 +21,8 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm build
       - run: pnpm test:mcp
+      - name: Boot bundled DeepSeek Harness + TuringDesk MCP
+        run: pnpm test:harness
 
   desktop:
     runs-on: windows-latest
@@ -44,7 +46,7 @@ jobs:
         with:
           dotnet-version: 8.0.x
       - run: corepack enable
-      - name: Build portable package
+      - name: Build and verify portable package
         shell: pwsh
         run: ./scripts/package-portable.ps1 -Version "v0.2"
       - name: Upload portable package
