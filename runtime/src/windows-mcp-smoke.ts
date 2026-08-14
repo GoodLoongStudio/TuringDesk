@@ -57,8 +57,9 @@ try {
   assert.equal(result.isError, undefined)
   assert.equal(calls.at(-1)?.name, 'window.list')
 
-  const first = result.content[0]
-  assert(first && first.type === 'text' && first.text.includes('Smoke Window'))
+  const content = result.content as Array<{ type?: string; text?: string }>
+  const first = content[0]
+  assert(first && first.type === 'text' && typeof first.text === 'string' && first.text.includes('Smoke Window'))
   process.stdout.write('TuringDesk Windows MCP smoke passed.\n')
 } finally {
   await client.close().catch(() => undefined)
