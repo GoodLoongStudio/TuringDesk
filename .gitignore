@@ -10,6 +10,9 @@ node_modules/
 dist/
 .pnpm-store/
 
+# Build/package output
+artifacts/
+
 # Environment / secrets
 .env
 .env.*
