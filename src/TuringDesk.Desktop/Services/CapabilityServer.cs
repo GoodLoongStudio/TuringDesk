@@ -167,9 +167,10 @@ public sealed class CapabilityServer : IAsyncDisposable
         _app = null;
         if (app is null) return;
 
+        using var stopCts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
         try
         {
-            await app.StopAsync(TimeSpan.FromSeconds(2));
+            await app.StopAsync(stopCts.Token);
         }
         finally
         {
