@@ -1,121 +1,294 @@
 <Window x:Class="TuringDesk.Desktop.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="TuringDesk"
-        MinWidth="1100" MinHeight="720"
+        Title="TuringDesk · 图灵桌面"
+        MinWidth="1180" MinHeight="760"
         WindowState="Maximized"
-        Background="#0B0E14"
-        Foreground="{StaticResource TextBrush}">
+        Background="{StaticResource WindowBrush}"
+        Foreground="{StaticResource TextBrush}"
+        FontFamily="Segoe UI Variable, Segoe UI">
     <Grid>
         <Grid.RowDefinitions>
-            <RowDefinition Height="54"/>
+            <RowDefinition Height="56"/>
             <RowDefinition Height="*"/>
-            <RowDefinition Height="82"/>
+            <RowDefinition Height="86"/>
         </Grid.RowDefinitions>
 
-        <Border Grid.Row="0" Background="#10141C" BorderBrush="#232A38" BorderThickness="0,0,0,1">
+        <!-- Familiar desktop header: product, current workspace and system state. -->
+        <Border Grid.Row="0"
+                Background="{StaticResource SidebarBrush}"
+                BorderBrush="{StaticResource StrokeBrush}"
+                BorderThickness="0,0,0,1">
             <Grid Margin="18,0">
                 <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="26"/>
                     <ColumnDefinition Width="*"/>
                     <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
+
                 <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                    <TextBlock Text="TuringDesk" FontSize="18" FontWeight="SemiBold"/>
-                    <TextBlock Text="  图灵桌面" Foreground="{StaticResource MutedBrush}" VerticalAlignment="Center"/>
+                    <Border Width="30" Height="30" CornerRadius="8" Background="{StaticResource AccentSoftBrush}" Margin="0,0,10,0">
+                        <TextBlock Text="✦" FontSize="17" Foreground="{StaticResource AccentBrush}" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                    </Border>
+                    <StackPanel VerticalAlignment="Center">
+                        <TextBlock Text="TuringDesk" FontSize="15" FontWeight="SemiBold"/>
+                        <TextBlock Text="图灵桌面" FontSize="11" Foreground="{StaticResource MutedBrush}"/>
+                    </StackPanel>
                 </StackPanel>
-                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                    <Ellipse x:Name="RuntimeDot" Width="8" Height="8" Fill="#F2A65A" Margin="0,0,8,0"/>
-                    <TextBlock x:Name="RuntimeStatus" Text="Runtime connecting…" Foreground="{StaticResource MutedBrush}" VerticalAlignment="Center"/>
-                    <Border Width="1" Height="22" Background="#30394B" Margin="14,0"/>
-                    <Button x:Name="SpeechButton" Content="🎙 Voice starting…" Click="SpeechToggle_Click" Padding="10,5" Margin="0,0,8,0"/>
-                    <TextBlock x:Name="ModelStatus" Text="Model: Mock" Foreground="{StaticResource MutedBrush}" VerticalAlignment="Center" Margin="0,0,10,0"/>
-                    <Button Content="⚙ 模型" Click="ModelSettings_Click" Padding="10,5"/>
+
+                <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                    <Border Width="1" Height="24" Background="{StaticResource StrokeBrush}" Margin="0,0,20,0"/>
+                    <TextBlock Text="桌面" Foreground="{StaticResource MutedBrush}" FontSize="13" VerticalAlignment="Center"/>
+                    <TextBlock Text="  /  " Foreground="{StaticResource SubtleBrush}" FontSize="13" VerticalAlignment="Center"/>
+                    <TextBlock Text="AI Home" FontSize="13" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                </StackPanel>
+
+                <StackPanel Grid.Column="3" Orientation="Horizontal" VerticalAlignment="Center">
+                    <Border Background="{StaticResource Surface2Brush}" BorderBrush="{StaticResource StrokeBrush}" BorderThickness="1" CornerRadius="14" Padding="10,5" Margin="0,0,8,0">
+                        <StackPanel Orientation="Horizontal">
+                            <Ellipse x:Name="RuntimeDot" Width="7" Height="7" Fill="{StaticResource WarningBrush}" Margin="0,0,7,0" VerticalAlignment="Center"/>
+                            <TextBlock x:Name="RuntimeStatus" Text="Runtime connecting…" Foreground="{StaticResource MutedBrush}" FontSize="12" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </Border>
+                    <TextBlock x:Name="ModelStatus" Text="Model: Mock" Foreground="{StaticResource MutedBrush}" FontSize="12" VerticalAlignment="Center" Margin="4,0,10,0"/>
+                    <Button Content="设置" Click="ModelSettings_Click" Padding="12,6"/>
                 </StackPanel>
             </Grid>
         </Border>
 
-        <Grid Grid.Row="1" Margin="14">
+        <Grid Grid.Row="1" Margin="14,14,14,10">
             <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="210"/>
+                <ColumnDefinition Width="220"/>
                 <ColumnDefinition Width="14"/>
                 <ColumnDefinition Width="*"/>
                 <ColumnDefinition Width="14"/>
-                <ColumnDefinition Width="320"/>
+                <ColumnDefinition Width="330"/>
             </Grid.ColumnDefinitions>
 
-            <Border Grid.Column="0" Background="{StaticResource SurfaceBrush}" CornerRadius="14" Padding="14">
-                <StackPanel>
-                    <TextBlock Text="Workspace" FontWeight="SemiBold" Margin="4,2,0,14"/>
-                    <Button Content="✦  AI Home" HorizontalContentAlignment="Left"/>
-                    <Button Content="▣  Apps" HorizontalContentAlignment="Left"/>
-                    <Button Content="☰  Files" HorizontalContentAlignment="Left"/>
-                    <Button Content="✓  Tasks" HorizontalContentAlignment="Left"/>
-                    <Button Content="◌  Memory" HorizontalContentAlignment="Left"/>
-
-                    <Border Height="1" Background="#2A3140" Margin="0,18,0,14"/>
-                    <TextBlock Text="Quick launch" Foreground="{StaticResource MutedBrush}" Margin="4,0,0,8"/>
-                    <Button Content="Chrome" Click="Chrome_Click" HorizontalContentAlignment="Left"/>
-                    <Button Content="VS Code" Click="VSCode_Click" HorizontalContentAlignment="Left"/>
-                    <Button Content="Terminal" Click="Terminal_Click" HorizontalContentAlignment="Left"/>
-                </StackPanel>
-            </Border>
-
-            <Border Grid.Column="2" Background="{StaticResource SurfaceBrush}" CornerRadius="14" Padding="24">
+            <!-- Navigation stays conventional so existing Windows habits continue to work. -->
+            <Border Grid.Column="0" Background="{StaticResource SidebarBrush}" BorderBrush="{StaticResource StrokeBrush}" BorderThickness="1" CornerRadius="12" Padding="12">
                 <Grid>
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="*"/>
+                        <RowDefinition Height="Auto"/>
                     </Grid.RowDefinitions>
+
                     <StackPanel>
-                        <TextBlock Text="AI Workspace" FontSize="24" FontWeight="SemiBold"/>
-                        <TextBlock Text="Apps remain native Windows windows; TuringDesk manages intent, layout and context."
-                                   Foreground="{StaticResource MutedBrush}" Margin="0,7,0,20"/>
+                        <TextBlock Text="工作区" FontSize="11" FontWeight="SemiBold" Foreground="{StaticResource SubtleBrush}" Margin="10,4,0,7"/>
+                        <Button Style="{StaticResource NavButtonActiveStyle}" Content="✦   AI Home"/>
+                        <Button Style="{StaticResource NavButtonStyle}" Content="▦   应用"/>
+                        <Button Style="{StaticResource NavButtonStyle}" Content="▤   文件"/>
+                        <Button Style="{StaticResource NavButtonStyle}" Content="✓   任务"/>
+                        <Button Style="{StaticResource NavButtonStyle}" Content="◌   记忆"/>
+
+                        <Border Height="1" Background="{StaticResource StrokeBrush}" Margin="6,14,6,12"/>
+                        <TextBlock Text="快速启动" FontSize="11" FontWeight="SemiBold" Foreground="{StaticResource SubtleBrush}" Margin="10,0,0,7"/>
+                        <Button Style="{StaticResource NavButtonStyle}" Click="Chrome_Click" Content="◉   Chrome"/>
+                        <Button Style="{StaticResource NavButtonStyle}" Click="VSCode_Click" Content="⌘   VS Code"/>
+                        <Button Style="{StaticResource NavButtonStyle}" Click="Terminal_Click" Content=">_   Terminal"/>
                     </StackPanel>
-                    <Border Grid.Row="1" Background="#10151E" CornerRadius="12" Padding="22">
-                        <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" MaxWidth="680">
-                            <TextBlock Text="✦" FontSize="42" HorizontalAlignment="Center" Foreground="{StaticResource AccentBrush}"/>
-                            <TextBlock Text="What do you want to do?" FontSize="26" FontWeight="SemiBold" HorizontalAlignment="Center" Margin="0,14,0,10"/>
-                            <TextBlock Text="键盘：打开 Chrome 和 VS Code，左右排列"
-                                       Foreground="{StaticResource MutedBrush}" FontSize="15" TextAlignment="Center"/>
-                            <TextBlock Text="语音：说“图灵桌面”，再说命令；也可以一句话说“图灵桌面，打开 Chrome”"
-                                       Foreground="{StaticResource MutedBrush}" FontSize="14" TextAlignment="Center" Margin="0,7,0,0"/>
-                        </StackPanel>
-                    </Border>
+
+                    <StackPanel Grid.Row="2">
+                        <Border Height="1" Background="{StaticResource StrokeBrush}" Margin="6,0,6,10"/>
+                        <Button Style="{StaticResource NavButtonStyle}" Click="ModelSettings_Click" Content="⚙   设置与模型"/>
+                        <TextBlock Text="Developer Preview · v0.2" FontSize="10" Foreground="{StaticResource SubtleBrush}" Margin="10,8,0,2"/>
+                    </StackPanel>
                 </Grid>
             </Border>
 
-            <Border Grid.Column="4" Background="{StaticResource SurfaceBrush}" CornerRadius="14" Padding="16">
+            <!-- Center remains a normal workspace, not a giant chat window. -->
+            <ScrollViewer Grid.Column="2" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                <StackPanel>
+                    <Grid Margin="4,2,4,16">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <StackPanel>
+                            <TextBlock Text="今天" FontSize="28" FontWeight="SemiBold"/>
+                            <TextBlock Text="像普通 Windows 一样使用；需要时直接让图灵帮你。" Foreground="{StaticResource MutedBrush}" FontSize="13" Margin="0,5,0,0"/>
+                        </StackPanel>
+                        <Button Grid.Column="1" Style="{StaticResource PrimaryButtonStyle}" Content="✦  问图灵" Click="FocusAgent_Click" VerticalAlignment="Center"/>
+                    </Grid>
+
+                    <Border Style="{StaticResource CardBorderStyle}" Padding="22" Margin="0,0,0,14">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="260"/>
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Margin="2,0,28,0">
+                                <TextBlock Text="继续你的工作" FontSize="20" FontWeight="SemiBold"/>
+                                <TextBlock Text="图灵桌面会逐步记住你的项目、窗口布局和常用应用。当前版本先从应用与窗口能力开始。"
+                                           TextWrapping="Wrap" Foreground="{StaticResource MutedBrush}" FontSize="13" Margin="0,8,0,18"/>
+                                <StackPanel Orientation="Horizontal">
+                                    <Button Style="{StaticResource PrimaryButtonStyle}" Content="打开 VS Code" Click="VSCode_Click" Margin="0,0,8,0"/>
+                                    <Button Content="打开 Chrome" Click="Chrome_Click"/>
+                                </StackPanel>
+                            </StackPanel>
+                            <Border Grid.Column="1" Background="{StaticResource AccentSoftBrush}" CornerRadius="10" Padding="16">
+                                <StackPanel>
+                                    <TextBlock Text="✦  Agent 建议" Foreground="{StaticResource AccentBrush}" FontWeight="SemiBold"/>
+                                    <TextBlock x:Name="WorkspaceSuggestion" Text="试着说：图灵桌面，打开 Chrome 和 VS Code，左右排列。"
+                                               TextWrapping="Wrap" FontSize="13" Margin="0,9,0,0"/>
+                                </StackPanel>
+                            </Border>
+                        </Grid>
+                    </Border>
+
+                    <TextBlock Text="常用应用" FontSize="16" FontWeight="SemiBold" Margin="4,4,0,10"/>
+                    <Grid Margin="0,0,0,18">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="10"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="10"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+
+                        <Button Grid.Column="0" Click="Chrome_Click" HorizontalContentAlignment="Stretch" Padding="16">
+                            <StackPanel>
+                                <TextBlock Text="◉" FontSize="25" Foreground="{StaticResource AccentBrush}"/>
+                                <TextBlock Text="Chrome" FontWeight="SemiBold" FontSize="14" Margin="0,9,0,2"/>
+                                <TextBlock Text="浏览器" Foreground="{StaticResource MutedBrush}" FontSize="11"/>
+                            </StackPanel>
+                        </Button>
+                        <Button Grid.Column="2" Click="VSCode_Click" HorizontalContentAlignment="Stretch" Padding="16">
+                            <StackPanel>
+                                <TextBlock Text="⌘" FontSize="25" Foreground="{StaticResource AccentBrush}"/>
+                                <TextBlock Text="VS Code" FontWeight="SemiBold" FontSize="14" Margin="0,9,0,2"/>
+                                <TextBlock Text="开发" Foreground="{StaticResource MutedBrush}" FontSize="11"/>
+                            </StackPanel>
+                        </Button>
+                        <Button Grid.Column="4" Click="Terminal_Click" HorizontalContentAlignment="Stretch" Padding="16">
+                            <StackPanel>
+                                <TextBlock Text=">_" FontSize="23" Foreground="{StaticResource AccentBrush}"/>
+                                <TextBlock Text="Terminal" FontWeight="SemiBold" FontSize="14" Margin="0,9,0,2"/>
+                                <TextBlock Text="系统工具" Foreground="{StaticResource MutedBrush}" FontSize="11"/>
+                            </StackPanel>
+                        </Button>
+                    </Grid>
+
+                    <TextBlock Text="工作区" FontSize="16" FontWeight="SemiBold" Margin="4,0,0,10"/>
+                    <Border Style="{StaticResource CardBorderStyle}" Padding="20">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="18"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <Border Width="46" Height="46" Background="{StaticResource Surface2Brush}" CornerRadius="10">
+                                <TextBlock Text="▦" FontSize="20" HorizontalAlignment="Center" VerticalAlignment="Center" Foreground="{StaticResource AccentBrush}"/>
+                            </Border>
+                            <StackPanel Grid.Column="2" VerticalAlignment="Center">
+                                <TextBlock Text="桌面工作区" FontWeight="SemiBold"/>
+                                <TextBlock Text="真实 Windows 应用保持原生窗口，Agent 负责启动、聚焦和布局。" Foreground="{StaticResource MutedBrush}" FontSize="12" Margin="0,4,0,0"/>
+                            </StackPanel>
+                            <Border Grid.Column="3" Background="#183322" CornerRadius="12" Padding="9,4" VerticalAlignment="Center">
+                                <TextBlock Text="ACTIVE" Foreground="{StaticResource SuccessBrush}" FontSize="10" FontWeight="SemiBold"/>
+                            </Border>
+                        </Grid>
+                    </Border>
+                </StackPanel>
+            </ScrollViewer>
+
+            <!-- Agent is persistent and visible, but never blocks the normal desktop flow. -->
+            <Border Grid.Column="4" Background="{StaticResource SidebarBrush}" BorderBrush="{StaticResource StrokeBrush}" BorderThickness="1" CornerRadius="12" Padding="14">
                 <Grid>
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
                         <RowDefinition Height="*"/>
                     </Grid.RowDefinitions>
-                    <TextBlock Text="Activity" FontWeight="SemiBold" Margin="4,2,0,12"/>
-                    <ListBox x:Name="ActivityList" Grid.Row="1" Background="Transparent" BorderThickness="0" Foreground="{StaticResource TextBrush}"/>
+
+                    <Border Background="{StaticResource AccentSoftBrush}" CornerRadius="10" Padding="15">
+                        <StackPanel>
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Orientation="Horizontal">
+                                    <Border Width="30" Height="30" Background="#353C68" CornerRadius="15" Margin="0,0,9,0">
+                                        <TextBlock Text="✦" Foreground="{StaticResource AccentBrush}" FontSize="16" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                    </Border>
+                                    <StackPanel>
+                                        <TextBlock Text="Turing Agent" FontWeight="SemiBold" FontSize="14"/>
+                                        <TextBlock Text="系统级助手" Foreground="{StaticResource MutedBrush}" FontSize="10"/>
+                                    </StackPanel>
+                                </StackPanel>
+                                <Ellipse Grid.Column="1" x:Name="AgentStateDot" Width="9" Height="9" Fill="{StaticResource WarningBrush}" VerticalAlignment="Center"/>
+                            </Grid>
+                            <TextBlock x:Name="AgentStateTitle" Text="正在连接能力层…" FontSize="15" FontWeight="SemiBold" Margin="0,14,0,5"/>
+                            <TextBlock x:Name="AgentStateDetail" Text="图灵会把正在理解和执行的事情显示在这里。" TextWrapping="Wrap" Foreground="{StaticResource MutedBrush}" FontSize="12"/>
+                        </StackPanel>
+                    </Border>
+
+                    <Border Grid.Row="1" Style="{StaticResource CardBorderStyle}" Padding="12" Margin="0,10,0,10">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <StackPanel>
+                                <TextBlock Text="常驻语音" FontWeight="SemiBold" FontSize="12"/>
+                                <TextBlock x:Name="VoiceStateText" Text="正在启动 Windows 语音识别…" Foreground="{StaticResource MutedBrush}" FontSize="10" Margin="0,3,0,0"/>
+                            </StackPanel>
+                            <Button Grid.Column="1" x:Name="SpeechButton" Content="🎙 启动中" Click="SpeechToggle_Click" Padding="10,6" VerticalAlignment="Center"/>
+                        </Grid>
+                    </Border>
+
+                    <Grid Grid.Row="2" Margin="4,0,4,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Text="执行记录" FontSize="12" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                        <TextBlock Grid.Column="1" Text="实时" Foreground="{StaticResource SubtleBrush}" FontSize="10" VerticalAlignment="Center"/>
+                    </Grid>
+
+                    <ListBox x:Name="ActivityList" Grid.Row="3"
+                             Background="Transparent" BorderThickness="0"
+                             Foreground="{StaticResource TextBrush}"
+                             ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <TextBlock Text="{Binding}" TextWrapping="Wrap" FontSize="11" Foreground="{StaticResource MutedBrush}"/>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
                 </Grid>
             </Border>
         </Grid>
 
-        <Border Grid.Row="2" Background="#10141C" BorderBrush="#232A38" BorderThickness="0,1,0,0" Padding="18,14">
+        <!-- Persistent agent bar: familiar search-like input with voice always one click away. -->
+        <Border Grid.Row="2" Background="{StaticResource SidebarBrush}" BorderBrush="{StaticResource StrokeBrush}" BorderThickness="0,1,0,0" Padding="14,12">
             <Grid>
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*"/>
-                    <ColumnDefinition Width="10"/>
-                    <ColumnDefinition Width="52"/>
-                    <ColumnDefinition Width="10"/>
-                    <ColumnDefinition Width="110"/>
-                </Grid.ColumnDefinitions>
-                <TextBox x:Name="CommandBox"
-                         FontSize="16"
-                         Padding="16,12"
-                         Background="#1A202C"
-                         Foreground="{StaticResource TextBrush}"
-                         BorderBrush="#30394B"
-                         BorderThickness="1"
-                         KeyDown="CommandBox_KeyDown"
-                         ToolTip="Ask TuringDesk anything"/>
-                <Button Grid.Column="2" x:Name="MicButton" Content="🎙" Click="SpeechToggle_Click" ToolTip="暂停/恢复常驻语音"/>
-                <Button Grid.Column="4" Content="Ask  ✦" Click="Ask_Click" Background="#334A8A"/>
+                <Border MaxWidth="980" HorizontalAlignment="Center" Background="{StaticResource SurfaceBrush}" BorderBrush="#3A3E47" BorderThickness="1" CornerRadius="14" Padding="8">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="40"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="42"/>
+                            <ColumnDefinition Width="86"/>
+                        </Grid.ColumnDefinitions>
+                        <Border Width="32" Height="32" Background="{StaticResource AccentSoftBrush}" CornerRadius="8" VerticalAlignment="Center">
+                            <TextBlock Text="✦" Foreground="{StaticResource AccentBrush}" HorizontalAlignment="Center" VerticalAlignment="Center" FontSize="15"/>
+                        </Border>
+                        <TextBox Grid.Column="1" x:Name="CommandBox"
+                                 FontSize="15" Padding="10,8" Margin="2,0,8,0"
+                                 Background="Transparent" BorderThickness="0"
+                                 Foreground="{StaticResource TextBrush}"
+                                 KeyDown="CommandBox_KeyDown"
+                                 ToolTip="直接输入：打开 Chrome 和 VS Code，左右排列"/>
+                        <Button Grid.Column="2" x:Name="MicButton" Style="{StaticResource IconButtonStyle}" Content="&#xE720;" Click="SpeechToggle_Click" ToolTip="暂停或恢复常驻语音"/>
+                        <Button Grid.Column="3" Style="{StaticResource PrimaryButtonStyle}" Content="发送" Click="Ask_Click" Margin="7,0,0,0"/>
+                    </Grid>
+                </Border>
             </Grid>
         </Border>
     </Grid>
