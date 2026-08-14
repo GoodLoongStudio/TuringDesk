@@ -6,7 +6,7 @@ Target: Windows 11 x64
 HOW TO RUN
 1. Extract the whole archive to a normal folder.
 2. Double-click Start-TuringDesk.cmd.
-3. Close the TuringDesk window when finished. The bundled local Runtime is stopped automatically.
+3. Close the TuringDesk window when finished. The bundled local Runtime and its Agent processes are stopped automatically.
 
 VOICE
 - TuringDesk starts Windows Desktop Speech recognition when an installed recognizer is available.
@@ -20,6 +20,15 @@ MODEL SETUP
 - For cloud APIs, paste the API key and click Test / Save.
 - The active API key is stored in Windows Credential Manager rather than the JSON settings file.
 - Local OpenAI-compatible models can normally leave the API key empty.
+- DeepSeek Harness is already bundled. There is no Harness command, npm package, profile, or MCP configuration for the user to install manually.
+- Every real model provider is routed through the embedded Harness Agent Kernel; Mock is the safe no-key test mode.
+
+EMBEDDED AGENT KERNEL
+- DeepSeek Harness runtime family: 0.1.0-rc.6.
+- TuringDesk automatically starts the bundled dsh-jsonrpc-agent when a real model is applied.
+- TuringDesk automatically loads its own safe Cordis profile and Windows MCP bridge.
+- The Runtime verifies Harness identifies itself as deepseek-harness-sdk-runtime before accepting the model configuration.
+- Unexpected Harness exits use bounded automatic restart attempts.
 
 SAFETY BOUNDARY
 - No installer.
@@ -32,16 +41,18 @@ SAFETY BOUNDARY
 - app.launch is allow-listed to Chrome, VS Code and Terminal.
 - TuringDesk refuses to target its own window with the window capability API.
 - Destructive capabilities such as window.close, file.delete, install and power operations are intentionally not exposed yet.
+- The embedded Harness profile does not expose unrestricted Bash/PowerShell/admin execution to the Agent.
 - Deleting this folder removes the portable preview. Model metadata remains in LocalAppData and the API key remains in Windows Credential Manager until changed/cleared through the model settings UI.
 
 WHAT IT CAN DO IN v0.2
 - Run the TuringDesk desktop shell.
 - Start a loopback-only Windows Capability Server on 127.0.0.1:4318.
+- Run DeepSeek Harness as the embedded Agent Kernel for real models.
+- Automatically expose TuringDesk Windows tools to Harness through MCP.
 - Launch Chrome, VS Code and Windows Terminal when available.
 - List/find/focus/move/resize/tile ordinary top-level Windows windows.
-- Route no-key desktop commands through Runtime -> Capability API -> Win32.
-- Provide a TuringDesk Windows MCP Server for DeepSeek Harness.
-- Use a configured DeepSeek/OpenAI-compatible/local model for normal chat.
+- Use DeepSeek, Ollama, LM Studio or a custom OpenAI-compatible model through Harness.
+- Keep Mock mode available for safe no-key desktop testing.
 
 TRY THIS
 - 图灵桌面，打开 Chrome
@@ -51,8 +62,8 @@ TRY THIS
 
 KNOWN LIMITATIONS
 - This is an unsigned developer preview. Windows SmartScreen may show a warning.
-- Full DeepSeek Harness + MCP mode still requires a configured Harness Runtime command.
 - Speech quality/language availability depends on the Windows speech recognizers installed on the machine.
-- Interactive microphone and live Harness behavior still need validation on a normal Windows 11 desktop session.
+- Live model inference still requires the chosen provider/local server to be reachable and correctly configured.
+- Interactive microphone quality and real-world Agent behavior should still be exercised on a normal Windows 11 desktop session.
 
 If anything behaves unexpectedly, close TuringDesk. Explorer and the normal Windows desktop remain independent in v0.2.
