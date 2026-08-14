@@ -1,7 +1,7 @@
 param(
     [string]$Configuration = "Release",
     [string]$RuntimeIdentifier = "win-x64",
-    [string]$Version = "v0.1",
+    [string]$Version = "v0.2",
     [string]$NodeVersion = "22.19.0"
 )
 
@@ -45,6 +45,16 @@ dotnet publish $Project `
 
 Write-Host "Copying runtime..." -ForegroundColor Cyan
 Copy-Item (Join-Path $Root "runtime\dist\*") $RuntimeAppDir -Recurse -Force
+Copy-Item (Join-Path $Root "runtime\package.json") $RuntimeAppDir -Force
+
+Write-Host "Installing portable Runtime production dependencies..." -ForegroundColor Cyan
+Push-Location $RuntimeAppDir
+try {
+    npm install --omit=dev --ignore-scripts --package-lock=false
+}
+finally {
+    Pop-Location
+}
 
 Write-Host "Downloading embedded Node.js $NodeVersion..." -ForegroundColor Cyan
 $TempRoot = if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { $env:TEMP }

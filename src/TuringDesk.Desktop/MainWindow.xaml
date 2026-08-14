@@ -13,7 +13,6 @@
             <RowDefinition Height="82"/>
         </Grid.RowDefinitions>
 
-        <!-- Top bar -->
         <Border Grid.Row="0" Background="#10141C" BorderBrush="#232A38" BorderThickness="0,0,0,1">
             <Grid Margin="18,0">
                 <Grid.ColumnDefinitions>
@@ -26,12 +25,15 @@
                 </StackPanel>
                 <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
                     <Ellipse x:Name="RuntimeDot" Width="8" Height="8" Fill="#F2A65A" Margin="0,0,8,0"/>
-                    <TextBlock x:Name="RuntimeStatus" Text="Runtime connecting…" Foreground="{StaticResource MutedBrush}"/>
+                    <TextBlock x:Name="RuntimeStatus" Text="Runtime connecting…" Foreground="{StaticResource MutedBrush}" VerticalAlignment="Center"/>
+                    <Border Width="1" Height="22" Background="#30394B" Margin="14,0"/>
+                    <Button x:Name="SpeechButton" Content="🎙 Voice starting…" Click="SpeechToggle_Click" Padding="10,5" Margin="0,0,8,0"/>
+                    <TextBlock x:Name="ModelStatus" Text="Model: Mock" Foreground="{StaticResource MutedBrush}" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                    <Button Content="⚙ 模型" Click="ModelSettings_Click" Padding="10,5"/>
                 </StackPanel>
             </Grid>
         </Border>
 
-        <!-- Main workspace -->
         <Grid Grid.Row="1" Margin="14">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="210"/>
@@ -70,11 +72,13 @@
                                    Foreground="{StaticResource MutedBrush}" Margin="0,7,0,20"/>
                     </StackPanel>
                     <Border Grid.Row="1" Background="#10151E" CornerRadius="12" Padding="22">
-                        <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" MaxWidth="620">
+                        <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" MaxWidth="680">
                             <TextBlock Text="✦" FontSize="42" HorizontalAlignment="Center" Foreground="{StaticResource AccentBrush}"/>
                             <TextBlock Text="What do you want to do?" FontSize="26" FontWeight="SemiBold" HorizontalAlignment="Center" Margin="0,14,0,10"/>
-                            <TextBlock Text="Try: 打开 Chrome 和 VS Code，左右排列"
+                            <TextBlock Text="键盘：打开 Chrome 和 VS Code，左右排列"
                                        Foreground="{StaticResource MutedBrush}" FontSize="15" TextAlignment="Center"/>
+                            <TextBlock Text="语音：说“图灵桌面”，再说命令；也可以一句话说“图灵桌面，打开 Chrome”"
+                                       Foreground="{StaticResource MutedBrush}" FontSize="14" TextAlignment="Center" Margin="0,7,0,0"/>
                         </StackPanel>
                     </Border>
                 </Grid>
@@ -92,12 +96,13 @@
             </Border>
         </Grid>
 
-        <!-- Command bar -->
         <Border Grid.Row="2" Background="#10141C" BorderBrush="#232A38" BorderThickness="0,1,0,0" Padding="18,14">
             <Grid>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*"/>
-                    <ColumnDefinition Width="12"/>
+                    <ColumnDefinition Width="10"/>
+                    <ColumnDefinition Width="52"/>
+                    <ColumnDefinition Width="10"/>
                     <ColumnDefinition Width="110"/>
                 </Grid.ColumnDefinitions>
                 <TextBox x:Name="CommandBox"
@@ -109,7 +114,8 @@
                          BorderThickness="1"
                          KeyDown="CommandBox_KeyDown"
                          ToolTip="Ask TuringDesk anything"/>
-                <Button Grid.Column="2" Content="Ask  ✦" Click="Ask_Click" Background="#334A8A"/>
+                <Button Grid.Column="2" x:Name="MicButton" Content="🎙" Click="SpeechToggle_Click" ToolTip="暂停/恢复常驻语音"/>
+                <Button Grid.Column="4" Content="Ask  ✦" Click="Ask_Click" Background="#334A8A"/>
             </Grid>
         </Border>
     </Grid>

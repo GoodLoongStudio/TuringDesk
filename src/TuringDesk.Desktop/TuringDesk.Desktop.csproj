@@ -8,4 +8,9 @@
     <AssemblyName>TuringDesk.Desktop</AssemblyName>
     <RootNamespace>TuringDesk.Desktop</RootNamespace>
   </PropertyGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <PackageReference Include="System.Speech" Version="8.0.0" />
+  </ItemGroup>
 </Project>

@@ -1,9 +1,12 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
-import { createAgentGateway } from './harness-gateway.js'
+import { DesktopIntentAgent } from './mock-agent.js'
+import { ModelGatewayManager } from './model-gateway.js'
+import type { RuntimeModelConfig } from './model-config.js'
 
 const host = '127.0.0.1'
 const port = Number(process.env.TURINGDESK_RUNTIME_PORT ?? '4317')
-const gateway = createAgentGateway()
+const desktopAgent = new DesktopIntentAgent()
+const models = new ModelGatewayManager()
 
 function json(res: ServerResponse, status: number, body: unknown): void {
   res.writeHead(status, {
@@ -22,14 +25,31 @@ async function readJson(req: IncomingMessage): Promise<any> {
     if (bytes > 256 * 1024) throw new Error('Request too large')
     chunks.push(buffer)
   }
-  if (chunks.length === 0) return {}
-  return JSON.parse(Buffer.concat(chunks).toString('utf8'))
+  return chunks.length === 0 ? {} : JSON.parse(Buffer.concat(chunks).toString('utf8'))
 }
 
 const server = createServer(async (req, res) => {
   try {
     if (req.method === 'GET' && req.url === '/health') {
-      json(res, 200, { ok: true, mode: gateway.mode, version: '0.1.0' })
+      json(res, 200, { ok: true, mode: models.mode, version: '0.2.0', model: models.current })
+      return
+    }
+
+    if (req.method === 'GET' && req.url === '/v1/config/model') {
+      json(res, 200, models.current)
+      return
+    }
+
+    if (req.method === 'POST' && req.url === '/v1/config/model') {
+      const body = await readJson(req) as RuntimeModelConfig
+      const configured = await models.configure(body)
+      json(res, 200, configured)
+      return
+    }
+
+    if (req.method === 'POST' && req.url === '/v1/config/model/test') {
+      const reply = await models.test()
+      json(res, 200, { ok: true, reply })
       return
     }
 
@@ -40,7 +60,16 @@ const server = createServer(async (req, res) => {
         return
       }
 
-      const reply = await gateway.run(body.message.trim())
+      const message = body.message.trim()
+      if (models.mode !== 'harness') {
+        const nativeReply = await desktopAgent.tryRun(message)
+        if (nativeReply) {
+          json(res, 200, { reply: nativeReply })
+          return
+        }
+      }
+
+      const reply = await models.run(message)
       json(res, 200, { reply })
       return
     }
@@ -54,11 +83,11 @@ const server = createServer(async (req, res) => {
 })
 
 server.listen(port, host, () => {
-  console.log(`[TuringDesk Runtime] http://${host}:${port} mode=${gateway.mode}`)
+  console.log(`[TuringDesk Runtime] http://${host}:${port} mode=${models.mode}`)
 })
 
 async function shutdown(): Promise<void> {
-  await gateway.close?.()
+  await models.close().catch(() => undefined)
   server.close(() => process.exit(0))
 }
 
