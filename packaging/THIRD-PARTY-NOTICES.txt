@@ -5,8 +5,8 @@ DeepSeek Harness
 ----------------
 DeepSeek Harness is used as the embedded Agent runtime in TuringDesk.
 Upstream project: deepseek-ai/deepseek-harness
-Pinned TuringDesk v0.2 runtime family: 0.1.0-rc.5
-Pinned upstream commit used for integration verification:
+Pinned TuringDesk v0.2 published runtime family: 0.1.0-rc.6
+Upstream commit used as the integration/profile baseline:
 47f943859bef60e4160492346772ded9b24f765a
 
 MIT License
