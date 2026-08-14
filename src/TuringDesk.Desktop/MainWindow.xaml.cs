@@ -1,4 +1,5 @@
 using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using TuringDesk.Desktop.Services;
@@ -23,6 +24,7 @@ public partial class MainWindow : Window
         _speech.StatusChanged += OnSpeechStatusChanged;
         Loaded += OnLoaded;
         Closed += OnClosed;
+        StateChanged += (_, _) => UpdateMaximizeGlyph();
     }
 
     private async void OnLoaded(object sender, RoutedEventArgs e)
@@ -94,6 +96,74 @@ public partial class MainWindow : Window
             await _capabilities.DisposeAsync();
             _capabilities = null;
         }
+    }
+
+    private void TitleBar_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        if (e.ChangedButton != MouseButton.Left) return;
+
+        if (e.ClickCount == 2)
+        {
+            ToggleMaximize();
+            return;
+        }
+
+        try
+        {
+            DragMove();
+        }
+        catch
+        {
+            // Window state can change between the mouse event and DragMove.
+        }
+    }
+
+    private void CommandBar_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        // Keep clicks inside the title-bar Agent box from turning into window drags.
+        e.Handled = true;
+    }
+
+    private void Minimize_Click(object sender, RoutedEventArgs e) => WindowState = WindowState.Minimized;
+    private void Maximize_Click(object sender, RoutedEventArgs e) => ToggleMaximize();
+    private void Close_Click(object sender, RoutedEventArgs e) => Close();
+
+    private void ToggleMaximize()
+    {
+        WindowState = WindowState == WindowState.Maximized ? WindowState.Normal : WindowState.Maximized;
+        UpdateMaximizeGlyph();
+    }
+
+    private void UpdateMaximizeGlyph()
+    {
+        if (MaximizeButton is null) return;
+        MaximizeButton.Content = WindowState == WindowState.Maximized ? "❐" : "□";
+    }
+
+    private void NavHome_Click(object sender, RoutedEventArgs e) => ShowPage(HomePage, NavHomeButton);
+    private void NavApps_Click(object sender, RoutedEventArgs e) => ShowPage(AppsPage, NavAppsButton);
+    private void NavWorkspaces_Click(object sender, RoutedEventArgs e) => ShowPage(WorkspacesPage, NavWorkspacesButton);
+    private void NavTasks_Click(object sender, RoutedEventArgs e) => ShowPage(TasksPage, NavTasksButton);
+    private void NavMemory_Click(object sender, RoutedEventArgs e) => ShowPage(MemoryPage, NavMemoryButton);
+
+    private void ShowPage(ScrollViewer page, Button selectedButton)
+    {
+        foreach (var candidate in new[] { HomePage, AppsPage, WorkspacesPage, TasksPage, MemoryPage })
+        {
+            candidate.Visibility = candidate == page ? Visibility.Visible : Visibility.Collapsed;
+        }
+
+        foreach (var button in new[] { NavHomeButton, NavAppsButton, NavWorkspacesButton, NavTasksButton, NavMemoryButton })
+        {
+            button.Style = (Style)FindResource(button == selectedButton ? "TopNavButtonActiveStyle" : "TopNavButtonStyle");
+        }
+    }
+
+    private void AgentPanel_Click(object sender, RoutedEventArgs e)
+    {
+        AgentPanel.Visibility = AgentPanel.Visibility == Visibility.Visible
+            ? Visibility.Collapsed
+            : Visibility.Visible;
     }
 
     private async void Chrome_Click(object sender, RoutedEventArgs e) => await LaunchAsync("chrome");
@@ -257,8 +327,8 @@ public partial class MainWindow : Window
     {
         var preset = ModelProviderPresets.Find(_modelSettings.ProviderId);
         ModelStatus.Text = _modelSettings.ProviderId == "mock"
-            ? "Model: Mock"
-            : $"Model: {preset.Name} · {_modelSettings.Model}";
+            ? "Mock"
+            : $"{preset.Name} · {_modelSettings.Model}";
     }
 
     private void SetAgentState(string title, string detail, Color color)
@@ -272,6 +342,7 @@ public partial class MainWindow : Window
         AgentStateTitle.Text = title;
         AgentStateDetail.Text = detail;
         AgentStateDot.Fill = new SolidColorBrush(color);
+        AgentStatusText.Text = TrimForUi(title, 22);
     }
 
     private static string TrimForUi(string text, int maxLength)
