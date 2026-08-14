@@ -10,9 +10,9 @@
 - [x] discover native top-level windows
 - [x] native side-by-side window layout demo
 - [x] CI builds both Runtime and Windows Desktop
+- [x] package a downloadable self-contained win-x64 developer build
 - [ ] test the interactive shell on a real Windows 11 desktop session
 - [ ] run a live DeepSeek Harness turn on Windows with a real API key
-- [ ] package a downloadable developer build
 
 ## v0.2 — Harness-controlled Windows tools
 
