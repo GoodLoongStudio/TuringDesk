@@ -89,8 +89,8 @@ $BuildInfo = @"
 TuringDesk $Version
 Runtime: $RuntimeIdentifier
 Node: $NodeVersion
-DeepSeek Harness: 0.1.0-rc.5
-Harness upstream commit: 47f943859bef60e4160492346772ded9b24f765a
+DeepSeek Harness: 0.1.0-rc.6
+Harness integration baseline commit: 47f943859bef60e4160492346772ded9b24f765a
 Harness profile: runtime/app/harness/turingdesk.cordis.yml
 Build commit: $env:GITHUB_SHA
 Build time (UTC): $([DateTime]::UtcNow.ToString("o"))
