@@ -16,7 +16,8 @@ The first bootstrap contains:
 - native Win32 window discovery, focus and tiling
 - a stable local Runtime HTTP boundary (`127.0.0.1:4317`)
 - mock runtime by default, so the desktop works without an API key
-- optional DeepSeek Harness SDK gateway, pinned to `@deepseek-ai/dsh-sdk-client@0.1.0-rc.5`
+- DeepSeek Harness gateway using the official newline-delimited stdio JSON-RPC protocol
+- one persistent Harness session for desktop chat context
 - architecture and roadmap docs
 - Windows + Node CI
 
@@ -38,7 +39,7 @@ Windows 11
    │
    └── TuringDesk Runtime (Node / TypeScript)
           ├── stable local API
-          ├── Harness Gateway
+          ├── Harness JSON-RPC Gateway
           └── DeepSeek Harness (optional in v0.1)
 ```
 
@@ -48,7 +49,7 @@ See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
 - Windows 11
 - .NET 8 SDK
-- Node.js 22+
+- Node.js 22.19+
 - Corepack / pnpm
 
 ## Run
@@ -78,28 +79,42 @@ Or run both with:
 ./scripts/run-dev.ps1
 ```
 
-## DeepSeek Harness mode
+## DeepSeek Harness mode on Windows
 
-TuringDesk keeps DeepSeek Harness behind a small gateway instead of modifying Harness Core. The current Harness TypeScript SDK is designed to drive a Harness runtime out-of-process over stdio JSON-RPC, which matches this architecture.
+TuringDesk does not modify Harness Core and does not require the Harness npm client package. The runtime speaks Harness's documented stdio JSON-RPC protocol directly and launches an external Harness JSON-RPC runtime process.
 
-Configure the runtime process and model route before starting `pnpm dev`:
+For v0.1 on Windows, use a source-built DeepSeek Harness Node runtime:
 
 ```powershell
+git clone https://github.com/deepseek-ai/deepseek-harness.git
+cd deepseek-harness
+corepack enable
+pnpm install
+pnpm run build
+```
+
+Then configure TuringDesk before starting `pnpm dev` in `TuringDesk/runtime`:
+
+```powershell
+$env:DEEPSEEK_API_KEY="sk-..."
 $env:TURINGDESK_RUNTIME_MODE="harness"
 $env:TURINGDESK_HARNESS_COMMAND="node"
-$env:TURINGDESK_HARNESS_ARGS='["C:\\path\\to\\harness\\lib\\bin.js","C:\\path\\to\\cordis.yml"]'
+$env:TURINGDESK_HARNESS_ARGS='["C:\\path\\to\\deepseek-harness\\packages\\examples\\jsonrpc-demo\\lib\\bin.js","C:\\path\\to\\deepseek-harness\\examples\\jsonrpc-agent\\cordis.yml"]'
 $env:TURINGDESK_HARNESS_PROVIDER="deepseek-official"
 $env:TURINGDESK_HARNESS_MODEL="deepseek-v4-flash"
+$env:TURINGDESK_AGENT_CWD="C:\\Users\\you"
 pnpm dev
 ```
 
-The exact Harness runtime command/config is deliberately external. This lets TuringDesk pin and upgrade Harness independently.
+The exact Harness checkout/runtime command is deliberately external. TuringDesk owns only the stable gateway boundary, so Harness can be pinned and upgraded independently.
+
+> DeepSeek Harness currently ships its bundled Python SDK runtime carriers for Linux/macOS, while the Harness product itself has native Windows runtime paths. TuringDesk therefore uses the Node/source-build path on Windows for this developer preview.
 
 ## Repository layout
 
 ```text
 src/TuringDesk.Desktop/    Windows desktop shell
-runtime/                   AI runtime + Harness adapter boundary
+runtime/                   AI runtime + Harness protocol boundary
 docs/                      architecture and roadmap
 scripts/                   developer commands
 .github/workflows/         CI
