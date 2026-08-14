@@ -1,7 +1,11 @@
 packages:
   - .
 
-# pnpm 10+ blocks dependency lifecycle scripts unless they are explicitly reviewed.
-# tsx depends on esbuild, which needs its native binary install step.
+# pnpm 11 blocks dependency lifecycle scripts unless they are explicitly reviewed.
+# Keep this allow-list narrow: these packages are present in the pinned Harness
+# dependency tree and require their normal installation/build steps.
 allowBuilds:
   esbuild: true
+  '@google/genai': true
+  koffi: true
+  protobufjs: true
