@@ -1,9 +1,11 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { resolve } from 'node:path'
+import { createBundledHarnessSpawnSpec } from './harness-runtime.js'
 
 export interface AgentGateway {
   readonly mode: string
+  ensureReady?(): Promise<void>
   run(message: string): Promise<string>
   close?(): Promise<void>
 }
@@ -11,8 +13,10 @@ export interface AgentGateway {
 class MockGateway implements AgentGateway {
   readonly mode = 'mock'
 
+  async ensureReady(): Promise<void> {}
+
   async run(message: string): Promise<string> {
-    return `TuringDesk v0.1 received: “${message}”. Native app/window commands are handled by the Windows desktop now; DeepSeek Harness tool wiring is the next milestone.`
+    return `TuringDesk Mock received: “${message}”. Choose a model in Settings to run the full DeepSeek Harness agent kernel.`
   }
 }
 
@@ -55,10 +59,16 @@ class DeepSeekHarnessGateway implements AgentGateway {
   private initializePromise: Promise<void> | undefined
   private activeRun: ActiveRun | undefined
   private closing = false
+  private restartTimer: ReturnType<typeof setTimeout> | undefined
+  private restartAttempts = 0
+
+  async ensureReady(): Promise<void> {
+    await this.start()
+  }
 
   async run(message: string): Promise<string> {
     await this.start()
-    if (this.activeRun) throw new Error('TuringDesk v0.1 supports one Harness turn at a time')
+    if (this.activeRun) throw new Error('TuringDesk supports one Harness turn at a time')
 
     return new Promise<string>((resolveRun, rejectRun) => {
       const run: ActiveRun = {
@@ -95,13 +105,18 @@ class DeepSeekHarnessGateway implements AgentGateway {
 
   async close(): Promise<void> {
     this.closing = true
+    if (this.restartTimer) {
+      clearTimeout(this.restartTimer)
+      this.restartTimer = undefined
+    }
+
     const child = this.child
     if (!child) return
 
     try {
       await this.request('shutdown', undefined, 2_000)
     } catch {
-      // Best effort; the process teardown below is authoritative.
+      // Best effort; process teardown below is authoritative.
     }
 
     child.stdin.end()
@@ -111,6 +126,12 @@ class DeepSeekHarnessGateway implements AgentGateway {
   }
 
   private start(): Promise<void> {
+    if (this.restartTimer) {
+      clearTimeout(this.restartTimer)
+      this.restartTimer = undefined
+    }
+    this.closing = false
+
     if (!this.initializePromise) {
       this.initializePromise = this.initialize().catch((error) => {
         this.initializePromise = undefined
@@ -124,24 +145,29 @@ class DeepSeekHarnessGateway implements AgentGateway {
     this.ensureProcess()
     const maxTokens = positiveInteger(process.env.TURINGDESK_HARNESS_MAX_TOKENS, 8192)
 
-    await this.request('initialize', {
+    const result = await this.request('initialize', {
       cwd: resolve(process.env.TURINGDESK_AGENT_CWD ?? process.cwd()),
       provider: process.env.TURINGDESK_HARNESS_PROVIDER ?? 'deepseek-official',
       model: process.env.TURINGDESK_HARNESS_MODEL ?? 'deepseek-v4-flash',
       maxTokens
     }, 30_000)
+
+    if (!isRecord(result)
+      || !isRecord(result.serverInfo)
+      || result.serverInfo.name !== 'deepseek-harness-sdk-runtime') {
+      throw new Error('Bundled process did not identify itself as the DeepSeek Harness SDK runtime')
+    }
+
+    this.restartAttempts = 0
   }
 
   private ensureProcess(): ChildProcessWithoutNullStreams {
     if (this.child && this.child.exitCode === null) return this.child
 
-    const command = process.env.TURINGDESK_HARNESS_COMMAND
-    if (!command) throw new Error('TURINGDESK_HARNESS_COMMAND is required in harness mode')
-
-    const args = parseStringArray(process.env.TURINGDESK_HARNESS_ARGS)
-    const child = spawn(command, args, {
-      cwd: process.env.TURINGDESK_HARNESS_PROCESS_CWD ?? process.cwd(),
-      env: process.env,
+    const spec = createBundledHarnessSpawnSpec()
+    const child = spawn(spec.command, spec.args, {
+      cwd: spec.cwd,
+      env: spec.env,
       stdio: ['pipe', 'pipe', 'pipe'],
       windowsHide: true
     }) as ChildProcessWithoutNullStreams
@@ -158,10 +184,29 @@ class DeepSeekHarnessGateway implements AgentGateway {
       const reason = new Error(`Harness runtime exited (code=${code ?? 'null'}, signal=${signal ?? 'none'})`)
       this.child = undefined
       this.initializePromise = undefined
-      if (!this.closing) this.failRuntime(reason)
+      if (!this.closing) {
+        this.failRuntime(reason)
+        this.scheduleRestart()
+      }
     })
 
+    process.stderr.write(`[harness] bundled runtime started with profile ${spec.profilePath}\n`)
     return child
+  }
+
+  private scheduleRestart(): void {
+    if (this.closing || this.restartTimer || this.restartAttempts >= 5) return
+    const delay = Math.min(1000 * (2 ** this.restartAttempts), 10_000)
+    this.restartAttempts += 1
+    process.stderr.write(`[harness] restart scheduled in ${delay}ms (attempt ${this.restartAttempts}/5)\n`)
+    this.restartTimer = setTimeout(() => {
+      this.restartTimer = undefined
+      if (this.closing) return
+      void this.start().catch((error: unknown) => {
+        process.stderr.write(`[harness] restart failed: ${asError(error).message}\n`)
+        this.scheduleRestart()
+      })
+    }, delay)
   }
 
   private request(method: string, params: unknown, timeoutMs: number): Promise<unknown> {
@@ -304,15 +349,6 @@ function finalResponse(events: unknown[]): string {
       .join('')
   }
   return ''
-}
-
-function parseStringArray(value: string | undefined): string[] {
-  if (!value) return []
-  const parsed: unknown = JSON.parse(value)
-  if (!Array.isArray(parsed) || !parsed.every((item) => typeof item === 'string')) {
-    throw new Error('TURINGDESK_HARNESS_ARGS must be a JSON array of strings')
-  }
-  return parsed
 }
 
 function positiveInteger(value: string | undefined, fallback: number): number {
