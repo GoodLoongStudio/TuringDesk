@@ -4,12 +4,14 @@
 
 - [x] Windows desktop shell UI
 - [x] local runtime process boundary
-- [x] optional DeepSeek Harness SDK adapter
+- [x] DeepSeek Harness stdio JSON-RPC gateway
+- [x] persistent Harness chat session identity
 - [x] launch Chrome / VS Code / Terminal
 - [x] discover native top-level windows
 - [x] native side-by-side window layout demo
-- [x] CI skeleton
-- [ ] test on a real Windows 11 machine
+- [x] CI builds both Runtime and Windows Desktop
+- [ ] test the interactive shell on a real Windows 11 desktop session
+- [ ] run a live DeepSeek Harness turn on Windows with a real API key
 - [ ] package a downloadable developer build
 
 ## v0.2 — Harness-controlled Windows tools
@@ -18,9 +20,10 @@
 - [ ] expose `app.*` and `window.*` as Harness tools
 - [ ] tool approval UI
 - [ ] streaming agent activity into Desktop
-- [ ] persistent sessions
+- [ ] persistent/recoverable session storage
 - [ ] app catalog/index
 - [ ] robust process/window identity (not title matching)
+- [ ] Harness compatibility tests for protocol/runtime upgrades
 
 Target demo:
 
