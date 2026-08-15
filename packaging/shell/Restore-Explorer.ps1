@@ -9,7 +9,7 @@ $previous = (Get-ItemProperty -Path $StatePath -Name PreviousShell -ErrorAction 
 
 if ($current -and $current.ToString().Contains("TuringDesk.ShellHost.exe", [System.StringComparison]::OrdinalIgnoreCase)) {
     if ($previous) {
-        Set-ItemProperty -Path $PolicyPath -Name Shell -Value $previous.ToString()
+        New-ItemProperty -Path $PolicyPath -Name Shell -PropertyType String -Value $previous.ToString() -Force | Out-Null
     }
     else {
         Remove-ItemProperty -Path $PolicyPath -Name Shell -ErrorAction SilentlyContinue
@@ -17,7 +17,7 @@ if ($current -and $current.ToString().Contains("TuringDesk.ShellHost.exe", [Syst
 }
 
 if (Test-Path $StatePath) {
-    Set-ItemProperty -Path $StatePath -Name Enabled -Type DWord -Value 0
+    New-ItemProperty -Path $StatePath -Name Enabled -PropertyType DWord -Value 0 -Force | Out-Null
 }
 
 Get-Process TuringDesk.ShellHost -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
