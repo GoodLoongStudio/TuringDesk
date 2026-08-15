@@ -1,7 +1,7 @@
 param(
     [string]$Configuration = "Release",
     [string]$RuntimeIdentifier = "win-x64",
-    [string]$Version = "v0.2",
+    [string]$Version = "v0.3",
     [string]$NodeVersion = "22.19.0"
 )
 
@@ -11,6 +11,7 @@ $PackageName = "TuringDesk-$Version-$RuntimeIdentifier"
 $ArtifactsRoot = Join-Path $Root "artifacts"
 $PackageRoot = Join-Path $ArtifactsRoot $PackageName
 $DesktopDir = Join-Path $PackageRoot "desktop"
+$ShellHostDir = Join-Path $PackageRoot "shellhost"
 $RuntimeAppDir = Join-Path $PackageRoot "runtime\app"
 $RuntimeNodeDir = Join-Path $PackageRoot "runtime\node"
 
@@ -19,7 +20,7 @@ Write-Host "Building $PackageName" -ForegroundColor Cyan
 if (Test-Path $PackageRoot) {
     Remove-Item $PackageRoot -Recurse -Force
 }
-New-Item -ItemType Directory -Force -Path $DesktopDir, $RuntimeAppDir, $RuntimeNodeDir | Out-Null
+New-Item -ItemType Directory -Force -Path $DesktopDir, $ShellHostDir, $RuntimeAppDir, $RuntimeNodeDir | Out-Null
 
 Write-Host "Building TypeScript runtime..." -ForegroundColor Cyan
 Push-Location (Join-Path $Root "runtime")
@@ -34,8 +35,8 @@ finally {
 }
 
 Write-Host "Publishing self-contained Windows desktop..." -ForegroundColor Cyan
-$Project = Join-Path $Root "src\TuringDesk.Desktop\TuringDesk.Desktop.csproj"
-dotnet publish $Project `
+$DesktopProject = Join-Path $Root "src\TuringDesk.Desktop\TuringDesk.Desktop.csproj"
+dotnet publish $DesktopProject `
     --configuration $Configuration `
     --runtime $RuntimeIdentifier `
     --self-contained true `
@@ -43,6 +44,17 @@ dotnet publish $Project `
     -p:DebugType=None `
     -p:DebugSymbols=false `
     --output $DesktopDir
+
+Write-Host "Publishing resilient replacement ShellHost..." -ForegroundColor Cyan
+$ShellHostProject = Join-Path $Root "src\TuringDesk.ShellHost\TuringDesk.ShellHost.csproj"
+dotnet publish $ShellHostProject `
+    --configuration $Configuration `
+    --runtime $RuntimeIdentifier `
+    --self-contained true `
+    -p:PublishSingleFile=false `
+    -p:DebugType=None `
+    -p:DebugSymbols=false `
+    --output $ShellHostDir
 
 Write-Host "Copying runtime and Harness profile..." -ForegroundColor Cyan
 Copy-Item (Join-Path $Root "runtime\dist\*") $RuntimeAppDir -Recurse -Force
@@ -80,9 +92,21 @@ if ($LASTEXITCODE -ne 0) {
 
 Copy-Item (Join-Path $PSScriptRoot "Start-TuringDesk.cmd") $PackageRoot -Force
 Copy-Item (Join-Path $PSScriptRoot "Start-TuringDesk.ps1") $PackageRoot -Force
+Copy-Item (Join-Path $Root "packaging\shell\*.ps1") $PackageRoot -Force
+Copy-Item (Join-Path $Root "packaging\shell\*.cmd") $PackageRoot -Force
 Copy-Item (Join-Path $Root "packaging\PORTABLE-README.txt") (Join-Path $PackageRoot "README.txt") -Force
 if (Test-Path (Join-Path $Root "packaging\THIRD-PARTY-NOTICES.txt")) {
     Copy-Item (Join-Path $Root "packaging\THIRD-PARTY-NOTICES.txt") (Join-Path $PackageRoot "THIRD-PARTY-NOTICES.txt") -Force
+}
+
+foreach ($Required in @(
+    (Join-Path $ShellHostDir "TuringDesk.ShellHost.exe"),
+    (Join-Path $PackageRoot "Enable-TuringDeskShell.ps1"),
+    (Join-Path $PackageRoot "Restore-Explorer.ps1")
+)) {
+    if (-not (Test-Path $Required)) {
+        throw "Shell replacement package is incomplete: $Required"
+    }
 }
 
 $BuildInfo = @"
@@ -90,7 +114,9 @@ TuringDesk $Version
 Runtime: $RuntimeIdentifier
 Node: $NodeVersion
 DeepSeek Harness: 0.1.0-rc.6
-Harness integration baseline commit: 47f943859bef60e4160492346772ded9b24f765a
+Shell mode: Windows Custom User Interface (current-user policy)
+Shell host: shellhost/TuringDesk.ShellHost.exe
+Recovery: Restore-Explorer.ps1
 Harness profile: runtime/app/harness/turingdesk.cordis.yml
 Build commit: $env:GITHUB_SHA
 Build time (UTC): $([DateTime]::UtcNow.ToString("o"))
