@@ -37,13 +37,13 @@ if (-not $alreadyTuringDesk) {
         Remove-ItemProperty -Path $StatePath -Name PreviousShell -ErrorAction SilentlyContinue
     }
     else {
-        Set-ItemProperty -Path $StatePath -Name PreviousShell -Value $current.ToString()
+        New-ItemProperty -Path $StatePath -Name PreviousShell -PropertyType String -Value $current.ToString() -Force | Out-Null
     }
 }
 
-Set-ItemProperty -Path $StatePath -Name InstallRoot -Value $InstallRoot
-Set-ItemProperty -Path $StatePath -Name Enabled -Type DWord -Value 1
-Set-ItemProperty -Path $PolicyPath -Name Shell -Value ('"' + $ShellHost + '"')
+New-ItemProperty -Path $StatePath -Name InstallRoot -PropertyType String -Value $InstallRoot -Force | Out-Null
+New-ItemProperty -Path $StatePath -Name Enabled -PropertyType DWord -Value 1 -Force | Out-Null
+New-ItemProperty -Path $PolicyPath -Name Shell -PropertyType String -Value ('"' + $ShellHost + '"') -Force | Out-Null
 
 Write-Host ""
 Write-Host "TuringDesk is now configured as the Custom User Interface for the CURRENT USER." -ForegroundColor Green
