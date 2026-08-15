@@ -35,6 +35,23 @@ jobs:
       - run: dotnet build src/TuringDesk.Desktop/TuringDesk.Desktop.csproj --configuration Release --no-restore
       - run: dotnet restore src/TuringDesk.ShellHost/TuringDesk.ShellHost.csproj
       - run: dotnet build src/TuringDesk.ShellHost/TuringDesk.ShellHost.csproj --configuration Release --no-restore
+      - name: Parse shell activation and recovery scripts
+        shell: pwsh
+        run: |
+          $files = @(
+            "packaging/shell/Enable-TuringDeskShell.ps1",
+            "packaging/shell/Restore-Explorer.ps1",
+            "packaging/shell/Preview-TuringDeskShell.ps1"
+          )
+          foreach ($file in $files) {
+            $tokens = $null
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $file), [ref]$tokens, [ref]$errors) | Out-Null
+            if ($errors.Count -gt 0) {
+              $errors | ForEach-Object { Write-Error "$file: $($_.Message)" }
+              throw "PowerShell parser rejected $file"
+            }
+          }
 
   portable-win-x64:
     needs: [runtime, desktop]
