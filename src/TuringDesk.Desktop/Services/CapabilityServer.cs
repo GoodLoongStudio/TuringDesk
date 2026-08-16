@@ -43,7 +43,7 @@ public sealed class CapabilityServer : IAsyncDisposable
         app.MapGet("/health", () => Results.Json(new
         {
             ok = true,
-            version = "0.2.0",
+            version = "0.3.0",
             endpoint = "/v1/capabilities/execute"
         }));
         app.MapGet("/v1/capabilities", () => Results.Json(CapabilityCatalog.All));
@@ -91,12 +91,36 @@ public sealed class CapabilityServer : IAsyncDisposable
     {
         switch (name)
         {
+            case "desktop.snapshot":
+            {
+                var monitors = DisplayManager.GetMonitors().Select(monitor => new
+                {
+                    monitor.Id,
+                    monitor.Left,
+                    monitor.Top,
+                    monitor.Width,
+                    monitor.Height,
+                    monitor.WorkLeft,
+                    monitor.WorkTop,
+                    monitor.WorkWidth,
+                    monitor.WorkHeight,
+                    monitor.IsPrimary
+                }).ToArray();
+                var windows = _windows.ListWindows().Take(48).ToArray();
+                return new
+                {
+                    capturedAt = DateTimeOffset.UtcNow,
+                    foregroundHandle = _windows.GetForegroundHandle(),
+                    monitors,
+                    windows
+                };
+            }
             case "app.launch":
             {
                 var app = RequireString(arguments, "app").ToLowerInvariant();
                 if (!AllowedApps.Contains(app))
                 {
-                    throw new ArgumentException("v0.2 app.launch only allows: chrome, code, terminal.");
+                    throw new ArgumentException("app.launch only allows: chrome, code, terminal.");
                 }
 
                 var launched = await _launcher.LaunchAsync(app);
@@ -192,6 +216,7 @@ public static class CapabilityCatalog
 {
     public static readonly CapabilityDescriptor[] All =
     {
+        new("desktop.snapshot", "Read a coherent snapshot of monitors, visible top-level windows and the foreground window.", "read"),
         new("app.launch", "Launch one allow-listed desktop app alias: chrome, code, or terminal.", "low"),
         new("window.list", "List visible top-level windows excluding TuringDesk itself.", "read"),
         new("window.find", "Find a visible top-level window by title or process name.", "read"),
