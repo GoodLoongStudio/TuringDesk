@@ -1,5 +1,6 @@
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Media;
 using TuringDesk.Desktop.Services;
 
 namespace TuringDesk.Desktop;
@@ -32,8 +33,8 @@ public sealed class NativeShellIcon : Image
 
     public NativeShellIcon()
     {
-        Stretch = System.Windows.Media.Stretch.Uniform;
-        RenderOptions.SetBitmapScalingMode(this, System.Windows.Media.BitmapScalingMode.HighQuality);
+        Stretch = Stretch.Uniform;
+        RenderOptions.SetBitmapScalingMode(this, BitmapScalingMode.HighQuality);
         Loaded += (_, _) => RefreshIcon();
     }
 
