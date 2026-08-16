@@ -1,7 +1,10 @@
 TuringDesk v0.7 Replacement Shell Developer Preview
 ===================================================
 
-Target: Windows 11 x64
+Target: Windows 11 x64 / ARM64
+Use the package that matches the Windows architecture:
+- TuringDesk-v0.7-win-x64
+- TuringDesk-v0.7-win-arm64
 
 IMPORTANT
 v0.7 can REALLY replace Explorer for the current Windows user. Test inside a VM first. Verify Preview mode and Explorer recovery before enabling the login shell.
@@ -22,73 +25,89 @@ NEW IN v0.7
 - Desktop items can be dragged outward using the standard Windows FileDrop data format.
 - A TuringDesk Notification Center now collects Shell and Agent activity.
 - Agent replies, taskbar changes, desktop drops and desktop folder creation can surface as TuringDesk notifications.
+- Native Windows ARM64 packaging uses win-arm64 .NET publishes, ARM64 Node.js, and an ARM64-native final Harness/MCP smoke test.
 
 DESKTOP
 - Reads current-user Desktop plus Public Desktop.
 - Uses native Windows icons when available.
 - Double-click opens targets through normal ShellExecute behavior.
 - Current Windows wallpaper is mirrored when readable.
-- Right-click: Refresh, New Folder, Desktop Folder, Display Settings, Personalization, TuringDesk.
-- Drop files/folders onto the primary desktop to COPY them to Desktop. TuringDesk does not silently move/delete the source.
+- External FileDrop into the primary desktop is explicit user action and copy-only.
 
 START MENU
-- Indexes current-user and all-user Start Menu shortcut trees.
-- Local search by app name/category.
-- Native Windows shortcut icons when available.
-- Right-click an indexed app to pin/unpin it from the TuringDesk taskbar.
+- Indexes current-user and all-user Start Menu shortcuts.
+- Search filters locally.
+- Right-click indexed applications to pin/unpin them from TuringDesk taskbars.
 
 TASKBAR / APPBAR
 - Start, Show Desktop, TuringDesk control center and Task Switcher.
-- Persistent pinned app area stored in %LOCALAPPDATA%\TuringDesk\shell-settings.json.
-- Drag pinned apps to reorder them.
-- Pin changes synchronize across multi-monitor taskbars in the same TuringDesk process.
-- Native running-window task buttons; click active task to minimize, inactive task to focus/restore.
-- Right-click a running task with an accessible executable path to pin it.
-- Agent input, network/sound/power status, Notification Center, clock/date and Session/Power menu.
+- Persistent pinned application area.
+- Drag pinned icons to reorder them.
+- Pin state/order synchronize across monitor taskbars during the current shell session.
+- Native top-level application task buttons remain ordinary Windows windows.
+- Network / sound / power status area, TuringDesk notifications, clock and session/power menu.
 
 NOTIFICATION CENTER
-- TuringDesk-owned notifications only; this is not an emulation of Explorer's undocumented third-party tray-host protocol.
-- Shows recent Shell and Agent activity.
-- Can be cleared by the user.
+- Stores TuringDesk-owned Shell and Agent activity for the current process lifetime.
+- Shows shell startup, pin changes, desktop operations and Agent replies/failures.
+- Can be cleared explicitly by the user.
+- Does not emulate Explorer's undocumented third-party notification-area protocol.
 
 TASK SWITCHING
-- Native Windows Alt+Tab remains untouched.
-- Ctrl+Alt+Space opens the TuringDesk Task Switcher when registration succeeds.
-
-SESSION / POWER
-- Lock, Sign out, Restart, Shut down and Restore Explorer.
-- High-impact actions require explicit user confirmation.
-- These actions remain UI-only and are not exposed to Harness/MCP.
+- Windows native Alt+Tab remains untouched.
+- Ctrl+Alt+Space opens the TuringDesk Task Switcher when the hotkey can be registered.
 
 RECOVERY
-Normal: Session / Power -> Restore Explorer -> confirm.
-Emergency:
-1. Ctrl+Shift+Esc
-2. Run new task: powershell
+Normal recovery:
+- Open the Session / Power menu on any TuringDesk Shell Bar.
+- Choose Restore Explorer and confirm.
+- ShellHost restores the previous/current-user shell policy and starts explorer.exe.
+
+Emergency recovery:
+1. Press Ctrl+Shift+Esc to open Task Manager.
+2. Run a new task: powershell
 3. Execute:
    & "$env:LOCALAPPDATA\TuringDesk\Shell\Restore-Explorer.ps1"
 4. Sign out/sign in if needed.
 
-AGENT KERNEL
+AUTOMATIC FAIL-SAFE
+- ShellHost supervises TuringDesk Desktop.
+- Repeated early shell exits cause automatic current-user Explorer recovery.
+- Recovery state is stored under HKCU\Software\TuringDesk\Shell.
+- The shell policy is current-user only; v0.7 does not overwrite the machine-wide Winlogon Shell value.
+
+VOICE
+- Windows Desktop Speech recognition remains available when an installed recognizer is available.
+- Keyboard and mouse continue to work normally when speech is unavailable.
+
+MODEL SETUP
+- Choose DeepSeek, Ollama, LM Studio, OpenAI-compatible, or Mock.
+- Cloud API setup is designed around selecting a provider and pasting an API key.
+- API keys are stored in Windows Credential Manager.
+- DeepSeek Harness is bundled and starts automatically for real model providers.
+
+EMBEDDED AGENT KERNEL
 - DeepSeek Harness runtime family: 0.1.0-rc.6.
-- Bundled TuringDesk Cordis profile + Windows MCP bridge.
-- Harness identity is verified before accepting a real model provider.
-- Capability path remains Harness -> MCP -> Capability API -> Win32.
+- TuringDesk loads its own Cordis profile and Windows MCP bridge.
+- Harness startup identity is verified before a real model is accepted.
+- The Windows capability path remains Harness -> MCP -> Capability API -> Win32.
 
 SAFETY BOUNDARY
-- Current-user CustomShell only; no machine-wide Winlogon Shell overwrite.
-- No driver/service install.
-- No unrestricted PowerShell/Bash tool for the Agent.
-- Destructive file/delete/install/power capabilities remain unavailable to the model.
-- Desktop drag/drop is explicit user interaction and COPY-only on inbound drops.
-- Session/power actions require explicit user interaction and confirmation.
+- Current-user shell replacement only.
+- No machine-wide Winlogon Shell overwrite.
+- No driver installation.
+- No service installation.
+- No unrestricted PowerShell/Bash capability is exposed to the Agent.
+- Destructive Agent capabilities such as file.delete, install and power actions are still not exposed.
+- Power/session actions are explicit user UI actions with confirmation.
+- Inbound desktop drops are explicit user action and copy-only.
 
 KNOWN LIMITATIONS
 - Third-party Explorer notification-area/tray icons are not hosted yet.
-- Jump Lists are not implemented yet.
-- Taskbar pin dragging currently reorders relative to another pinned item; advanced free-position/drop indicators come later.
-- Desktop icon free-position persistence is not implemented; items are still laid out by TuringDesk.
+- Jump Lists are not implemented.
+- Desktop icon free-position persistence is not implemented.
 - Wallpaper sync is not yet per-monitor slideshow aware.
-- Win+D registration can fail because Windows reserves Win-key hotkeys.
-- Fullscreen/exclusive-mode apps still need VM/real-device testing.
-- Unsigned developer build: SmartScreen may warn.
+- Win+D registration depends on Windows allowing that reserved hotkey in the active shell session.
+- Native icon extraction can be denied for protected/elevated processes.
+- Full-screen games and unusual exclusive-mode applications still need VM/real-device testing.
+- This is unsigned developer software, so SmartScreen may warn.
