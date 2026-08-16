@@ -1,6 +1,8 @@
 using System.Collections.ObjectModel;
+using System.IO;
 using System.Windows;
 using System.Windows.Input;
+using System.Windows.Media;
 using System.Windows.Threading;
 using TuringDesk.Desktop.Services;
 
@@ -13,7 +15,9 @@ public partial class DesktopSurfaceWindow : Window
     private readonly DispatcherTimer _refreshTimer;
     private readonly DisplayMonitor _monitor;
     private readonly bool _showDesktopItems;
+    private readonly Brush _fallbackBackground;
     private bool _refreshing;
+    private string? _wallpaperPath;
 
     public ObservableCollection<DesktopSurfaceItem> DesktopItems { get; } = new();
 
@@ -25,6 +29,7 @@ public partial class DesktopSurfaceWindow : Window
 
         InitializeComponent();
         DataContext = this;
+        _fallbackBackground = DesktopRoot.Background;
 
         DesktopItemsList.Visibility = showDesktopItems ? Visibility.Visible : Visibility.Collapsed;
         DesktopHint.Visibility = showDesktopItems ? Visibility.Visible : Visibility.Collapsed;
@@ -70,6 +75,7 @@ public partial class DesktopSurfaceWindow : Window
     {
         ClockText.Text = DateTime.Now.ToString("HH:mm");
         DateText.Text = DateTime.Now.ToString("yyyy年M月d日 · dddd");
+        RefreshWallpaper();
 
         if (!_showDesktopItems || _refreshing) return;
         _refreshing = true;
@@ -103,6 +109,15 @@ public partial class DesktopSurfaceWindow : Window
         }
     }
 
+    private void RefreshWallpaper()
+    {
+        var path = WallpaperService.GetCurrentWallpaperPath();
+        if (string.Equals(path, _wallpaperPath, StringComparison.OrdinalIgnoreCase)) return;
+
+        _wallpaperPath = path;
+        DesktopRoot.Background = WallpaperService.CreateCurrentWallpaperBrush() ?? _fallbackBackground;
+    }
+
     private void DesktopItemsList_MouseDoubleClick(object sender, MouseButtonEventArgs e)
     {
         if (DesktopItemsList.SelectedItem is DesktopSurfaceItem item)
@@ -115,9 +130,36 @@ public partial class DesktopSurfaceWindow : Window
 
     private async void Refresh_Click(object sender, RoutedEventArgs e) => await RefreshSurfaceAsync();
 
+    private async void NewFolder_Click(object sender, RoutedEventArgs e)
+    {
+        var desktop = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
+        var candidate = Path.Combine(desktop, "新建文件夹");
+        var suffix = 2;
+        while (Directory.Exists(candidate) || File.Exists(candidate))
+        {
+            candidate = Path.Combine(desktop, $"新建文件夹 ({suffix++})");
+        }
+
+        try
+        {
+            Directory.CreateDirectory(candidate);
+            await RefreshSurfaceAsync();
+        }
+        catch
+        {
+            MessageBox.Show("无法在桌面创建文件夹。", "TuringDesk", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+    }
+
     private void OpenDesktopFolder_Click(object sender, RoutedEventArgs e)
     {
         var path = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
         _ = ShellSurfaceCatalog.OpenTarget(path);
     }
+
+    private void DisplaySettings_Click(object sender, RoutedEventArgs e) =>
+        _ = ShellSurfaceCatalog.OpenTarget("ms-settings:display");
+
+    private void Personalize_Click(object sender, RoutedEventArgs e) =>
+        _ = ShellSurfaceCatalog.OpenTarget("ms-settings:personalization-background");
 }
