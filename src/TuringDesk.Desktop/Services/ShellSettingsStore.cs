@@ -5,9 +5,23 @@ namespace TuringDesk.Desktop.Services;
 
 public sealed record PinnedShellApp(string Name, string Target, string? IconTarget, string Glyph = "◆");
 
+public sealed class ShellAppearanceSettings
+{
+    public string WallpaperMode { get; set; } = "system";
+    public string? WallpaperPath { get; set; }
+    public string WallpaperFit { get; set; } = "cover";
+    public string AccentHex { get; set; } = "#8796FF";
+    public double TaskbarOpacity { get; set; } = 0.96;
+    public bool AgentCardsEnabled { get; set; } = true;
+    public double AgentCardOpacity { get; set; } = 0.96;
+    public int AgentCardAutoHideSeconds { get; set; } = 12;
+    public string AgentCardSide { get; set; } = "right";
+}
+
 public sealed class ShellSettings
 {
     public List<PinnedShellApp> PinnedApps { get; set; } = new();
+    public ShellAppearanceSettings Appearance { get; set; } = new();
 }
 
 public sealed class ShellSettingsStore
@@ -60,14 +74,52 @@ public sealed class ShellSettingsStore
         }
     }
 
-    private static ShellSettings Normalize(ShellSettings settings) => new()
+    public void ResetAppearance()
     {
-        PinnedApps = settings.PinnedApps
-            .Where(app => !string.IsNullOrWhiteSpace(app.Target))
-            .DistinctBy(app => app.Target, StringComparer.OrdinalIgnoreCase)
-            .Take(24)
-            .ToList()
-    };
+        var settings = Load();
+        settings.Appearance = CreateDefaultAppearance();
+        Save(settings);
+    }
+
+    private static ShellSettings Normalize(ShellSettings settings)
+    {
+        var appearance = settings.Appearance ?? new ShellAppearanceSettings();
+        appearance.WallpaperMode = appearance.WallpaperMode is "system" or "custom" or "solid"
+            ? appearance.WallpaperMode
+            : "system";
+        appearance.WallpaperPath = string.IsNullOrWhiteSpace(appearance.WallpaperPath)
+            ? null
+            : appearance.WallpaperPath.Trim();
+        appearance.WallpaperFit = appearance.WallpaperFit is "cover" or "contain" or "stretch"
+            ? appearance.WallpaperFit
+            : "cover";
+        appearance.AccentHex = NormalizeHex(appearance.AccentHex, "#8796FF");
+        appearance.TaskbarOpacity = Math.Clamp(appearance.TaskbarOpacity, 0.60, 1.0);
+        appearance.AgentCardOpacity = Math.Clamp(appearance.AgentCardOpacity, 0.70, 1.0);
+        appearance.AgentCardAutoHideSeconds = Math.Clamp(appearance.AgentCardAutoHideSeconds, 0, 60);
+        appearance.AgentCardSide = appearance.AgentCardSide is "left" or "right" ? appearance.AgentCardSide : "right";
+
+        return new ShellSettings
+        {
+            PinnedApps = settings.PinnedApps
+                .Where(app => !string.IsNullOrWhiteSpace(app.Target))
+                .DistinctBy(app => app.Target, StringComparer.OrdinalIgnoreCase)
+                .Take(24)
+                .ToList(),
+            Appearance = appearance
+        };
+    }
+
+    private static string NormalizeHex(string? value, string fallback)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return fallback;
+        var text = value.Trim();
+        if (!text.StartsWith('#')) text = $"#{text}";
+        if (text.Length != 7) return fallback;
+        return text.Skip(1).All(Uri.IsHexDigit) ? text.ToUpperInvariant() : fallback;
+    }
+
+    private static ShellAppearanceSettings CreateDefaultAppearance() => new();
 
     private static ShellSettings CreateDefaults() => new()
     {
@@ -76,6 +128,7 @@ public sealed class ShellSettingsStore
             new("Chrome", "chrome", null, "◉"),
             new("VS Code", "code", null, "⌘"),
             new("Terminal", "terminal", null, ">_")
-        ]
+        ],
+        Appearance = CreateDefaultAppearance()
     };
 }
