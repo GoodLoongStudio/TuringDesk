@@ -3,14 +3,20 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              Width="20" Height="20"
              IsHitTestVisible="False">
-    <Viewbox Stretch="Uniform">
-        <Path x:Name="IconPath"
-              Width="24" Height="24"
-              Fill="Transparent"
-              Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=UserControl}}"
-              StrokeThickness="1.8"
-              StrokeStartLineCap="Round"
-              StrokeEndLineCap="Round"
-              StrokeLineJoin="Round"/>
-    </Viewbox>
+    <Grid>
+        <Image x:Name="NativeIconImage"
+               Stretch="Uniform"
+               Visibility="Collapsed"
+               RenderOptions.BitmapScalingMode="HighQuality"/>
+        <Viewbox x:Name="VectorIconViewbox" Stretch="Uniform">
+            <Path x:Name="IconPath"
+                  Width="24" Height="24"
+                  Fill="Transparent"
+                  Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                  StrokeThickness="1.8"
+                  StrokeStartLineCap="Round"
+                  StrokeEndLineCap="Round"
+                  StrokeLineJoin="Round"/>
+        </Viewbox>
+    </Grid>
 </UserControl>
