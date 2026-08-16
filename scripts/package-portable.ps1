@@ -1,7 +1,7 @@
 param(
     [string]$Configuration = "Release",
     [string]$RuntimeIdentifier = "win-arm64",
-    [string]$Version = "v0.11.1",
+    [string]$Version = "v0.12.0",
     [string]$NodeVersion = "22.19.0"
 )
 
@@ -194,6 +194,8 @@ Node: $NodeVersion ($DetectedNodeArch)
 DeepSeek Harness: 0.1.0-rc.6
 Harness UI: official DeepSeek Harness WebUI wrapped by TuringDesk WebView2
 Harness WebUI: packaged and boot-smoke verified
+Default desktop mode: Explorer Desktop Enhancement (WorkerW/Progman scene host)
+Advanced desktop mode: explicit current-user Replacement Shell
 Install flow: standard Windows Installer (MSI)
 Install ownership: Windows Installer / Program Files
 Shell activation: explicit current-user action after installation
