@@ -1,192 +1,63 @@
-# TuringDesk（图灵桌面）
+# TuringDesk
 
-**An agent-native desktop environment for Windows.**
+TuringDesk（图灵桌面）是一个面向 Windows 的 AI Native 桌面项目：保留 Windows 原生应用生态与窗口管理，同时让常驻语音、AI Agent、桌面能力和 DeepSeek Harness 成为桌面的一等入口。
 
-TuringDesk is an AI-first desktop shell that sits on top of Windows. It keeps familiar Windows apps and interaction patterns, while adding a persistent Agent layer that can translate intent into reviewed desktop capabilities.
+## 当前方向
 
-> Product rule: **80% familiar desktop + 20% agent-native interaction.**
+- Windows 原生桌面壳与系统能力优先，不重复重做已有的 Windows 功能。
+- 系统功能和文件/应用图标优先使用 Windows 原生 Shell Icon；只有系统没有对应图标时才使用 TuringDesk 自绘图标。
+- TuringDesk Desktop 与 ShellHost 都嵌入真正的多尺寸 Windows Application Icon。
+- DeepSeek Harness 直接使用官方 WebUI；TuringDesk 只通过 WebView2 提供无浏览器地址栏/标签栏的原生窗口外壳，并注入 TuringDesk Windows MCP 能力。
+- 正式分发使用标准 Windows MSI 安装器，安装到 Program Files，提供开始菜单、修复/升级/卸载生命周期。
+- 将 TuringDesk 设置为当前用户 Shell 是安装后的显式操作；卸载时会先恢复 Windows Explorer。
 
-## v0.2 developer preview
+## DeepSeek Harness
 
-TuringDesk v0.2 includes:
+TuringDesk 不维护一套独立的 Harness 对话前端。安装包内包含官方 `@deepseek-ai/dsh`，桌面入口启动官方 `dsh --profile web`，监听本机回环地址，并用 WPF + WebView2 包装显示。
 
-- Windows desktop shell UI (WPF / .NET 8)
-- persistent Turing Agent rail and bottom command bar
-- always-on Windows Desktop Speech / SAPI wake-phrase flow
-- beginner-friendly model onboarding with Windows Credential Manager storage
-- DeepSeek, Ollama, LM Studio and custom OpenAI-compatible model entry points
-- **DeepSeek Harness embedded as the Agent Kernel for every real model**
-- automatic bundled `dsh-jsonrpc-agent` startup and supervision
-- a TuringDesk-owned Harness Cordis profile
-- automatic Windows MCP registration
-- loopback-only Windows Capability API (`127.0.0.1:4318`)
-- allow-listed app launch and native Win32 window management
-- Mock mode for safe no-key testing
-- self-contained Windows x64 portable packaging
+这意味着 Harness 的会话、设置和后续官方 WebUI 更新可以直接沿用上游实现，而 TuringDesk 只负责：
 
-TuringDesk v0.2 remains a normal application. It does **not** replace `explorer.exe`, install a driver/service, request administrator privileges, or modify the Windows shell registry.
+- 启动和托管本机 Harness Web 服务；
+- 在 WebView2 中提供桌面应用式窗口体验；
+- 通过 Harness MCP client 注入 TuringDesk Windows MCP；
+- 管理本机安装布局和运行时生命周期。
 
-## Architecture
+## Windows 安装
+
+Windows ARM64 CI 会生成：
 
 ```text
-Windows 11
-   |
-   +-- TuringDesk.Desktop (.NET / WPF)
-   |      +-- familiar desktop shell
-   |      +-- always-on voice entry
-   |      +-- model onboarding
-   |      +-- Capability Server :4318
-   |      +-- App Launcher / Window Manager
-   |
-   +-- TuringDesk Runtime (Node / TypeScript) :4317
-          |
-          +-- bundled Harness supervisor / JSON-RPC gateway
-                 |
-                 v
-          DeepSeek Harness 0.1.0-rc.6
-                 |
-                 +-- Agent spine / sessions / compaction
-                 +-- DeepSeek model adapter
-                 +-- generic OpenAI-compatible model adapter
-                 +-- TuringDesk Windows MCP client
-                         |
-                         v
-                  Windows MCP server
-                         |
-                         v
-                  Capability Server :4318
-                         |
-                         v
-                  Win32 / Windows apps
+TuringDesk-v0.11-win-arm64.msi
 ```
 
-See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), [`docs/HARNESS-MCP.md`](docs/HARNESS-MCP.md), and [`docs/DESKTOP-UX.md`](docs/DESKTOP-UX.md).
+MSI 负责应用文件、开始菜单入口、升级、修复和卸载。安装完成后，可从开始菜单显式选择“启用 TuringDesk 桌面”；需要恢复 Explorer 时可使用对应恢复入口。
 
-## Portable build
+## 开发
 
-The intended first-test experience is the self-contained Windows x64 package:
-
-```text
-TuringDesk-v0.2-win-x64/
-  Start-TuringDesk.cmd
-  desktop/
-  runtime/
-    node/node.exe
-    app/
-      server.js
-      harness/turingdesk.cordis.yml
-      node_modules/@deepseek-ai/...
-```
-
-Extract the package and double-click `Start-TuringDesk.cmd`. Node, .NET runtime files, DeepSeek Harness, the TuringDesk Harness profile, and the MCP bridge are bundled; the user does not install or configure Harness manually.
-
-## Model setup
-
-Open **模型** and select a provider:
-
-- **DeepSeek API** — paste the API key; Harness uses the official DeepSeek adapter.
-- **Ollama** — set the local model ID; API key is normally unnecessary.
-- **LM Studio** — set the local model ID; API key is normally unnecessary.
-- **OpenAI-compatible API / gateway** — set Base URL, model ID and key if required.
-- **Mock** — no model/key; safe desktop capability testing.
-
-Every non-Mock provider is routed through the embedded DeepSeek Harness Agent Kernel. Ollama, LM Studio and custom gateways use Harness's generic provider adapter rather than bypassing the Agent runtime.
-
-Secrets are stored in Windows Credential Manager. The JSON settings file contains model metadata, not the raw API key.
-
-## Windows Agent capabilities in v0.2
-
-Stable TuringDesk capability names:
-
-```text
-app.launch
-window.list
-window.find
-window.focus
-window.move
-window.resize
-window.tile
-```
-
-Harness receives these through the TuringDesk MCP server. Example intent:
-
-> `打开 Chrome 和 VS Code，左右排列`
-
-The Agent can launch allow-listed applications, discover their real top-level HWNDs, and tile them through policy-controlled native operations.
-
-## Safety
-
-Embedding Harness does not mean giving the model an unrestricted system shell. The v0.2 TuringDesk Harness profile deliberately omits unrestricted Bash, PowerShell, filesystem mutation, package installation, power and administrator tools.
-
-Current rules include:
-
-- no Explorer replacement
-- no administrator requirement
-- no shell-registry takeover
-- no driver/service installation
-- capability API is loopback-only
-- `app.launch` is allow-listed to Chrome, VS Code and Windows Terminal
-- TuringDesk refuses to manage its own window through the window API
-- no close/delete/install/power capability yet
-- move/resize operations are clamped to the Windows work area
-
-## Harness integration acceptance
-
-CI does not accept a portable build based on TypeScript compilation alone. Before the Windows artifact is uploaded it must pass:
-
-1. Harness dependency installation.
-2. Runtime typecheck/build.
-3. TuringDesk MCP smoke test.
-4. Real bundled `dsh-jsonrpc-agent` boot.
-5. TuringDesk Cordis profile load and MCP startup.
-6. JSON-RPC `initialize` identity verification (`deepseek-harness-sdk-runtime`).
-7. Windows desktop Release build.
-8. A second Harness boot from the **final portable directory** using the embedded Windows `node.exe` and packaged production dependencies.
-
-## Development
-
-Prerequisites for source development only:
-
-- Windows 11 for native desktop testing
-- .NET 8 SDK
-- Node.js 22.19+
-- Corepack / pnpm
-
-Run Runtime:
+Runtime：
 
 ```powershell
 cd runtime
 corepack enable
-pnpm install
-pnpm dev
+pnpm install --no-frozen-lockfile
+pnpm build
+pnpm test:mcp
+pnpm test:harness
 ```
 
-Run Desktop in another PowerShell:
+Windows Desktop：
 
 ```powershell
-dotnet run --project src/TuringDesk.Desktop/TuringDesk.Desktop.csproj
+dotnet build src/TuringDesk.Desktop/TuringDesk.Desktop.csproj -c Release
+dotnet build src/TuringDesk.ShellHost/TuringDesk.ShellHost.csproj -c Release
 ```
 
-Or:
+生成 Windows ARM64 MSI：
 
 ```powershell
-./scripts/run-dev.ps1
+./scripts/package-installer.ps1 -Version v0.11 -RuntimeIdentifier win-arm64
 ```
 
-Normal users of the portable package do not need these developer prerequisites.
+## License
 
-## Repository layout
-
-```text
-src/TuringDesk.Desktop/    Windows desktop shell + native capability server
-runtime/                   Runtime + bundled Harness gateway + MCP server
-runtime/harness/           TuringDesk-owned Harness Cordis profile
-docs/                      architecture / Harness / UX docs
-packaging/                 portable notices and user guide
-scripts/                   developer and packaging commands
-.github/workflows/         CI + portable acceptance gates
-```
-
-## Status
-
-**v0.2 developer preview.** The embedded DeepSeek Harness Agent Kernel, Windows MCP bridge, always-on voice entry, model onboarding and native window/app capabilities are wired and CI-gated. Real-world microphone quality and live provider/model behavior still require normal Windows 11 interactive testing.
+MIT
