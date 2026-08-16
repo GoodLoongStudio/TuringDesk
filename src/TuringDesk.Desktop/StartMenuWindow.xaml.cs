@@ -2,6 +2,7 @@ using System.Collections.ObjectModel;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Media;
 using TuringDesk.Desktop.Services;
 
 namespace TuringDesk.Desktop;
@@ -133,7 +134,14 @@ public partial class StartMenuWindow : Window
         var menu = new ContextMenu();
         var action = new MenuItem
         {
-            Header = existing is null ? "固定到任务栏" : "从任务栏取消固定"
+            Header = existing is null ? "固定到任务栏" : "从任务栏取消固定",
+            Icon = new ShellIcon
+            {
+                Kind = existing is null ? "Tasks" : "Close",
+                Width = 16,
+                Height = 16,
+                Foreground = new SolidColorBrush(Color.FromRgb(174, 184, 203))
+            }
         };
         action.Click += (_, _) =>
         {
