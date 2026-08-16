@@ -13,28 +13,21 @@ TuringDesk（图灵桌面）是一个面向 Windows 的 AI Native 桌面项目�
 
 ## DeepSeek Harness
 
-TuringDesk 不维护一套独立的 Harness 对话前端。安装包内包含官方 `@deepseek-ai/dsh`，桌面入口启动官方 `dsh --profile web`，监听本机回环地址，并用 WPF + WebView2 包装显示。
+TuringDesk 不维护独立的 Harness 对话前端。安装包包含官方 `@deepseek-ai/dsh`，桌面入口启动官方 `dsh --profile web`，监听本机回环地址，并用 WPF + WebView2 包装显示。
 
-这意味着 Harness 的会话、设置和后续官方 WebUI 更新可以直接沿用上游实现，而 TuringDesk 只负责：
-
-- 启动和托管本机 Harness Web 服务；
-- 在 WebView2 中提供桌面应用式窗口体验；
-- 通过 Harness MCP client 注入 TuringDesk Windows MCP；
-- 管理本机安装布局和运行时生命周期。
+TuringDesk 负责启动/托管 Harness、本机 WebView2 外壳、Windows MCP 注入，以及安装布局和运行时生命周期；Harness 的会话、设置和 WebUI 本身沿用上游实现。
 
 ## Windows 安装
 
-Windows ARM64 CI 会生成：
+Windows ARM64 CI 生成：
 
 ```text
 TuringDesk-v0.11-win-arm64.msi
 ```
 
-MSI 负责应用文件、开始菜单入口、升级、修复和卸载。安装完成后，可从开始菜单显式选择“启用 TuringDesk 桌面”；需要恢复 Explorer 时可使用对应恢复入口。
+MSI 负责应用文件、开始菜单入口、升级、修复和卸载。安装后可以显式选择“启用 TuringDesk 桌面”，也提供恢复 Windows Explorer 的入口。
 
-## 开发
-
-Runtime：
+## 构建
 
 ```powershell
 cd runtime
@@ -43,18 +36,10 @@ pnpm install --no-frozen-lockfile
 pnpm build
 pnpm test:mcp
 pnpm test:harness
-```
 
-Windows Desktop：
-
-```powershell
+cd ..
 dotnet build src/TuringDesk.Desktop/TuringDesk.Desktop.csproj -c Release
 dotnet build src/TuringDesk.ShellHost/TuringDesk.ShellHost.csproj -c Release
-```
-
-生成 Windows ARM64 MSI：
-
-```powershell
 ./scripts/package-installer.ps1 -Version v0.11 -RuntimeIdentifier win-arm64
 ```
 
