@@ -15,6 +15,7 @@ public partial class EnhancementWallpaperWindow : Window
     private string? _wallpaperSignature;
     private IntPtr _windowHandle;
     private bool _attached;
+    private bool _scenePaused;
 
     public EnhancementWallpaperWindow()
     {
@@ -29,11 +30,10 @@ public partial class EnhancementWallpaperWindow : Window
         Opacity = 0;
 
         SourceInitialized += OnSourceInitialized;
-        Loaded += OnLoaded;
         Closed += OnClosed;
 
-        _hostHealthTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(3) };
-        _hostHealthTimer.Tick += (_, _) => MaintainExplorerAttachment();
+        _hostHealthTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
+        _hostHealthTimer.Tick += (_, _) => MaintainScene();
     }
 
     public bool IsAttached => _attached;
@@ -41,25 +41,23 @@ public partial class EnhancementWallpaperWindow : Window
     private void OnSourceInitialized(object? sender, EventArgs e)
     {
         _windowHandle = new WindowInteropHelper(this).Handle;
-        _attached = ExplorerDesktopHost.TryAttach(_windowHandle);
+        ShellSettingsStore.SettingsChanged += OnShellSettingsChanged;
+        RefreshWallpaper(force: true);
 
+        _attached = ExplorerDesktopHost.TryAttach(_windowHandle);
         if (_attached)
         {
             Opacity = 1;
-            return;
+        }
+        else
+        {
+            // Never leave a failed wallpaper host as a normal full-screen window.
+            // The timer remains alive and can attach later if Explorer is still
+            // finishing its desktop hierarchy during user sign-in.
+            Hide();
         }
 
-        // Never leave a failed wallpaper host as a normal full-screen window.
-        // If Explorer's desktop seam cannot be found, hide the scene and keep
-        // the ordinary Windows desktop completely usable.
-        Hide();
-    }
-
-    private void OnLoaded(object sender, RoutedEventArgs e)
-    {
-        ShellSettingsStore.SettingsChanged += OnShellSettingsChanged;
-        RefreshWallpaper(force: true);
-        if (_attached) _hostHealthTimer.Start();
+        _hostHealthTimer.Start();
     }
 
     private void OnClosed(object? sender, EventArgs e)
@@ -77,6 +75,12 @@ public partial class EnhancementWallpaperWindow : Window
         }), DispatcherPriority.Background);
     }
 
+    private void MaintainScene()
+    {
+        MaintainExplorerAttachment();
+        ApplyPerformancePolicy();
+    }
+
     private void MaintainExplorerAttachment()
     {
         if (_windowHandle == IntPtr.Zero) return;
@@ -87,14 +91,23 @@ public partial class EnhancementWallpaperWindow : Window
             return;
         }
 
-        // Explorer can rebuild its WorkerW hierarchy after display topology or
-        // shell changes. Re-attach opportunistically without taking focus.
+        // Explorer can rebuild its WorkerW hierarchy after display topology,
+        // Explorer restart, or sign-in initialization. Re-attach without focus.
         _attached = ExplorerDesktopHost.TryAttach(_windowHandle);
         if (_attached && !IsVisible)
         {
             Show();
             Opacity = 1;
         }
+    }
+
+    private void ApplyPerformancePolicy()
+    {
+        var shouldPause = DesktopScenePerformancePolicy.ShouldPauseVisualScene();
+        if (shouldPause == _scenePaused) return;
+
+        _scenePaused = shouldPause;
+        AmbientSceneLayer.Visibility = shouldPause ? Visibility.Hidden : Visibility.Visible;
     }
 
     private void RefreshWallpaper(bool force)
