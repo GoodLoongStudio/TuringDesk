@@ -1,6 +1,7 @@
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
+using TuringDesk.Desktop.Services;
 
 namespace TuringDesk.Desktop;
 
@@ -12,6 +13,27 @@ public partial class ShellIcon : UserControl
     private const string CodePath = "M9,7 L4,12 9,17 M15,7 L20,12 15,17 M13,5 L11,19";
     private const string TerminalPath = "M4,5 L20,5 20,19 4,19 Z M7,9 L10,12 7,15 M12,15 L17,15";
     private const string AppPath = "M4,4 L10,4 10,10 4,10 Z M14,4 L20,4 20,10 14,10 Z M4,14 L10,14 10,20 4,20 Z M14,14 L20,14 20,20 14,20 Z";
+
+    private static readonly IReadOnlyDictionary<string, ShellStockIconId> NativeIconKinds = new Dictionary<string, ShellStockIconId>(StringComparer.OrdinalIgnoreCase)
+    {
+        ["Desktop"] = ShellStockIconId.DesktopPc,
+        ["Network"] = ShellStockIconId.Network,
+        ["Folder"] = ShellStockIconId.Folder,
+        ["OpenFolder"] = ShellStockIconId.FolderOpen,
+        ["Settings"] = ShellStockIconId.Settings,
+        ["Search"] = ShellStockIconId.Find,
+        ["User"] = ShellStockIconId.Users,
+        ["Lock"] = ShellStockIconId.Lock,
+        ["Rename"] = ShellStockIconId.Rename,
+        ["Delete"] = ShellStockIconId.Delete,
+        ["Clear"] = ShellStockIconId.Delete,
+        ["Info"] = ShellStockIconId.Info,
+        ["Warning"] = ShellStockIconId.Warning,
+        ["Error"] = ShellStockIconId.Error,
+        ["File"] = ShellStockIconId.DocumentNoAssociation,
+        ["TextFile"] = ShellStockIconId.DocumentAssociation,
+        ["App"] = ShellStockIconId.Application
+    };
 
     private static readonly IReadOnlyDictionary<string, string> Paths = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
     {
@@ -72,9 +94,22 @@ public partial class ShellIcon : UserControl
         ["Error"] = "M12,3 A9,9 0 1 0 12,21 A9,9 0 1 0 12,3 M8,8 L16,16 M16,8 L8,16"
     };
 
-    public ShellIcon() { InitializeComponent(); ApplyKind(Kind); }
-    public string Kind { get => (string)GetValue(KindProperty); set => SetValue(KindProperty, value); }
-    private static void OnKindChanged(DependencyObject d, DependencyPropertyChangedEventArgs e) { if (d is ShellIcon icon) icon.ApplyKind(e.NewValue as string ?? "Agent"); }
+    public ShellIcon()
+    {
+        InitializeComponent();
+        ApplyKind(Kind);
+    }
+
+    public string Kind
+    {
+        get => (string)GetValue(KindProperty);
+        set => SetValue(KindProperty, value);
+    }
+
+    private static void OnKindChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
+    {
+        if (d is ShellIcon icon) icon.ApplyKind(e.NewValue as string ?? "Agent");
+    }
 
     private static string ResolveKind(string kind)
     {
@@ -90,7 +125,25 @@ public partial class ShellIcon : UserControl
 
     private void ApplyKind(string kind)
     {
-        var data = Paths[ResolveKind(kind)];
+        var resolvedKind = ResolveKind(kind);
+
+        if (NativeIconKinds.TryGetValue(resolvedKind, out var stockIcon))
+        {
+            var source = ShellIconService.GetStockIcon(stockIcon, large: false);
+            if (source is not null)
+            {
+                NativeIconImage.Source = source;
+                NativeIconImage.Visibility = Visibility.Visible;
+                VectorIconViewbox.Visibility = Visibility.Collapsed;
+                return;
+            }
+        }
+
+        NativeIconImage.Source = null;
+        NativeIconImage.Visibility = Visibility.Collapsed;
+        VectorIconViewbox.Visibility = Visibility.Visible;
+
+        var data = Paths[resolvedKind];
         var geometry = Geometry.Parse(data);
         if (geometry.CanFreeze) geometry.Freeze();
         IconPath.Data = geometry;
