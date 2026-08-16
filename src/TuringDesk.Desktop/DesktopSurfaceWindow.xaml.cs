@@ -7,8 +7,9 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
 using System.Windows.Threading;
-using Microsoft.VisualBasic;
 using Microsoft.VisualBasic.FileIO;
+using VBFileSystem = Microsoft.VisualBasic.FileIO.FileSystem;
+using VBInteraction = Microsoft.VisualBasic.Interaction;
 using TuringDesk.Desktop.Services;
 
 namespace TuringDesk.Desktop;
@@ -329,7 +330,7 @@ public partial class DesktopSurfaceWindow : Window
         var oldFileName = Path.GetFileName(oldPath);
         var extension = item.IsDirectory ? string.Empty : Path.GetExtension(oldFileName);
         var defaultName = item.IsDirectory ? oldFileName : Path.GetFileNameWithoutExtension(oldFileName);
-        var entered = Interaction.InputBox("输入新的名称：", "TuringDesk · 重命名", defaultName).Trim();
+        var entered = VBInteraction.InputBox("输入新的名称：", "TuringDesk · 重命名", defaultName).Trim();
         if (string.IsNullOrWhiteSpace(entered) || entered == defaultName) return;
         if (entered.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)
         {
@@ -372,11 +373,11 @@ public partial class DesktopSurfaceWindow : Window
         {
             if (item.IsDirectory)
             {
-                FileSystem.DeleteDirectory(item.Path, UIOption.OnlyErrorDialogs, RecycleOption.SendToRecycleBin, UICancelOption.DoNothing);
+                VBFileSystem.DeleteDirectory(item.Path, UIOption.OnlyErrorDialogs, RecycleOption.SendToRecycleBin, UICancelOption.DoNothing);
             }
             else
             {
-                FileSystem.DeleteFile(item.Path, UIOption.OnlyErrorDialogs, RecycleOption.SendToRecycleBin, UICancelOption.DoNothing);
+                VBFileSystem.DeleteFile(item.Path, UIOption.OnlyErrorDialogs, RecycleOption.SendToRecycleBin, UICancelOption.DoNothing);
             }
             await RefreshSurfaceAsync();
             ShellNotificationService.Publish("已移至回收站", item.Name, "shell");
