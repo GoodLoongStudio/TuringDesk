@@ -10,12 +10,21 @@ public partial class App : Application
         base.OnStartup(e);
 
         var shellMode = e.Args.Any(arg => string.Equals(arg, "--shell", StringComparison.OrdinalIgnoreCase));
+        var controlOnly = e.Args.Any(arg => string.Equals(arg, "--control-only", StringComparison.OrdinalIgnoreCase));
         var window = new MainWindow();
         MainWindow = window;
 
         if (shellMode)
         {
+            // Advanced mode: TuringDesk becomes the current user's replacement shell.
             window.EnableShellMode();
+        }
+        else if (!controlOnly)
+        {
+            // Default mode: Wallpaper Engine-style integration. Explorer remains
+            // the Windows shell while TuringDesk attaches only its scene layer
+            // behind Explorer desktop icons and keeps AI services in user space.
+            window.EnableEnhancementMode();
         }
 
         window.Show();
@@ -37,9 +46,8 @@ public partial class App : Application
         }
         catch (Exception error)
         {
-            // Do not prevent the Windows desktop from starting if Harness has a
-            // transient startup/configuration problem. The console can retry it,
-            // while ordinary shell/application features remain usable.
+            // Do not prevent Windows/Explorer from starting or remaining usable
+            // if Harness has a transient startup/configuration problem.
             ShellNotificationService.Publish(
                 "DeepSeek Harness 启动失败",
                 error.Message,
