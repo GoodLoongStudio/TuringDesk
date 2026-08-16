@@ -16,6 +16,7 @@ public sealed record WindowSnapshot(
 
 public sealed class WindowManager
 {
+    private const int SwMinimize = 6;
     private const int SwRestore = 9;
     private const uint SpiGetWorkArea = 0x0030;
 
@@ -82,11 +83,48 @@ public sealed class WindowManager
         return result;
     }
 
+    public string? GetForegroundHandle()
+    {
+        var hWnd = GetForegroundWindow();
+        return hWnd == IntPtr.Zero || !IsManageableWindow(hWnd)
+            ? null
+            : hWnd.ToInt64().ToString(System.Globalization.CultureInfo.InvariantCulture);
+    }
+
     public bool Focus(string handle)
     {
         if (!TryResolveHandle(handle, out var hWnd) || !IsManageableWindow(hWnd)) return false;
         ShowWindow(hWnd, SwRestore);
         return SetForegroundWindow(hWnd);
+    }
+
+    public bool ToggleTask(string handle)
+    {
+        if (!TryResolveHandle(handle, out var hWnd) || !IsManageableWindow(hWnd)) return false;
+
+        if (GetForegroundWindow() == hWnd)
+        {
+            _ = ShowWindow(hWnd, SwMinimize);
+            return true;
+        }
+
+        _ = ShowWindow(hWnd, SwRestore);
+        return SetForegroundWindow(hWnd);
+    }
+
+    public int MinimizeAll()
+    {
+        var count = 0;
+        EnumWindows((hWnd, _) =>
+        {
+            if (IsManageableWindow(hWnd))
+            {
+                _ = ShowWindow(hWnd, SwMinimize);
+                count++;
+            }
+            return true;
+        }, IntPtr.Zero);
+        return count;
     }
 
     public bool Move(string handle, int x, int y)
@@ -254,6 +292,9 @@ public sealed class WindowManager
 
     [DllImport("user32.dll")]
     private static extern bool SetForegroundWindow(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetForegroundWindow();
 
     [DllImport("user32.dll", SetLastError = true)]
     private static extern bool SystemParametersInfo(uint uiAction, uint uiParam, out NativeRect pvParam, uint fWinIni);
