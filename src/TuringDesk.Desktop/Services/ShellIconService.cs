@@ -26,6 +26,21 @@ public enum ShellStockIconId
     Recycler = 31,
     RecyclerFull = 32,
     Lock = 47,
+    AudioFiles = 71,
+    ImageFiles = 72,
+    VideoFiles = 73,
+    Shield = 77,
+    Warning = 78,
+    Info = 79,
+    Error = 80,
+    Software = 82,
+    Rename = 83,
+    Delete = 84,
+    DesktopPc = 94,
+    Users = 96,
+    NetworkConnect = 103,
+    Internet = 104,
+    ZipFile = 105,
     Settings = 106
 }
 
