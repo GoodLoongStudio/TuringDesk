@@ -5,7 +5,8 @@
            Manufacturer="GoodLoong Studio"
            Version="$(ProductVersion)"
            UpgradeCode="{2E740F15-37FC-4DCB-973D-8F4AC5E03A2A}"
-           Scope="perMachine">
+           Scope="perMachine"
+           Codepage="65001">
 
     <MajorUpgrade DowngradeErrorMessage="A newer version of TuringDesk is already installed." />
     <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
