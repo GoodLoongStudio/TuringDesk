@@ -18,10 +18,31 @@ public static class WallpaperService
             : null;
     }
 
-    public static Brush? CreateCurrentWallpaperBrush()
+    public static string? ResolveWallpaperPath(ShellAppearanceSettings? appearance)
     {
-        var path = GetCurrentWallpaperPath();
-        if (string.IsNullOrWhiteSpace(path)) return null;
+        if (appearance?.WallpaperMode == "custom" && !string.IsNullOrWhiteSpace(appearance.WallpaperPath) && File.Exists(appearance.WallpaperPath))
+        {
+            return appearance.WallpaperPath;
+        }
+
+        return appearance?.WallpaperMode == "solid" ? null : GetCurrentWallpaperPath();
+    }
+
+    public static Brush? CreateCurrentWallpaperBrush() => CreateWallpaperBrush(GetCurrentWallpaperPath(), "cover");
+
+    public static Brush? CreateWallpaperBrush(ShellAppearanceSettings? appearance)
+    {
+        if (appearance?.WallpaperMode == "solid")
+        {
+            return new SolidColorBrush(Color.FromRgb(12, 15, 22));
+        }
+
+        return CreateWallpaperBrush(ResolveWallpaperPath(appearance), appearance?.WallpaperFit ?? "cover");
+    }
+
+    public static Brush? CreateWallpaperBrush(string? path, string fit)
+    {
+        if (string.IsNullOrWhiteSpace(path) || !File.Exists(path)) return null;
 
         try
         {
@@ -32,9 +53,16 @@ public static class WallpaperService
             bitmap.EndInit();
             bitmap.Freeze();
 
+            var stretch = fit switch
+            {
+                "contain" => Stretch.Uniform,
+                "stretch" => Stretch.Fill,
+                _ => Stretch.UniformToFill
+            };
+
             var brush = new ImageBrush(bitmap)
             {
-                Stretch = Stretch.UniformToFill,
+                Stretch = stretch,
                 AlignmentX = AlignmentX.Center,
                 AlignmentY = AlignmentY.Center
             };
