@@ -39,9 +39,9 @@
                     WorkingDirectory="INSTALLFOLDER"
                     Icon="TuringDesk.ico" />
           <RemoveFolder Id="RemoveTuringDeskProgramMenu" On="uninstall" />
-          <RegistryValue Root="HKLM"
+          <RegistryValue Root="HKCU"
                          Key="Software\GoodLoongStudio\TuringDesk"
-                         Name="Installed"
+                         Name="StartMenuShortcutsInstalled"
                          Type="integer"
                          Value="1"
                          KeyPath="yes" />
