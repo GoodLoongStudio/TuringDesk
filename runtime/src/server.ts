@@ -1,4 +1,5 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
+import { AgentActivityTracker } from './agent-activity.js'
 import { DesktopIntentAgent } from './mock-agent.js'
 import { ModelGatewayManager } from './model-gateway.js'
 import type { RuntimeModelConfig } from './model-config.js'
@@ -7,6 +8,7 @@ const host = '127.0.0.1'
 const port = Number(process.env.TURINGDESK_RUNTIME_PORT ?? '4317')
 const desktopAgent = new DesktopIntentAgent()
 const models = new ModelGatewayManager()
+const activity = new AgentActivityTracker()
 
 function json(res: ServerResponse, status: number, body: unknown): void {
   res.writeHead(status, {
@@ -31,7 +33,12 @@ async function readJson(req: IncomingMessage): Promise<any> {
 const server = createServer(async (req, res) => {
   try {
     if (req.method === 'GET' && req.url === '/health') {
-      json(res, 200, { ok: true, mode: models.mode, version: '0.2.0', model: models.current })
+      json(res, 200, { ok: true, mode: models.mode, version: '0.3.0', model: models.current })
+      return
+    }
+
+    if (req.method === 'GET' && req.url === '/v1/agent/state') {
+      json(res, 200, { ...activity.snapshot(), mode: models.mode })
       return
     }
 
@@ -61,17 +68,25 @@ const server = createServer(async (req, res) => {
       }
 
       const message = body.message.trim()
-      if (models.mode !== 'harness') {
-        const nativeReply = await desktopAgent.tryRun(message)
-        if (nativeReply) {
-          json(res, 200, { reply: nativeReply })
-          return
+      const runId = activity.begin(message)
+      try {
+        if (models.mode !== 'harness') {
+          const nativeReply = await desktopAgent.tryRun(message)
+          if (nativeReply) {
+            activity.complete(runId, nativeReply)
+            json(res, 200, { reply: nativeReply, runId })
+            return
+          }
         }
-      }
 
-      const reply = await models.run(message)
-      json(res, 200, { reply })
-      return
+        const reply = await models.run(message)
+        activity.complete(runId, reply)
+        json(res, 200, { reply, runId })
+        return
+      } catch (error) {
+        activity.fail(runId, error)
+        throw error
+      }
     }
 
     json(res, 404, { error: 'not found' })
