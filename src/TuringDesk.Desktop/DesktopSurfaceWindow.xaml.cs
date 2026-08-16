@@ -18,6 +18,8 @@ public partial class DesktopSurfaceWindow : Window
     private readonly Brush _fallbackBackground;
     private bool _refreshing;
     private string? _wallpaperPath;
+    private Point _dragStart;
+    private string? _dragPath;
 
     public ObservableCollection<DesktopSurfaceItem> DesktopItems { get; } = new();
 
@@ -126,6 +128,52 @@ public partial class DesktopSurfaceWindow : Window
         }
     }
 
+    private void DesktopItemsList_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        _dragStart = e.GetPosition(DesktopItemsList);
+        _dragPath = (DesktopItemsList.SelectedItem as DesktopSurfaceItem)?.Path;
+    }
+
+    private void DesktopItemsList_PreviewMouseMove(object sender, MouseEventArgs e)
+    {
+        if (e.LeftButton != MouseButtonState.Pressed || string.IsNullOrWhiteSpace(_dragPath)) return;
+        var current = e.GetPosition(DesktopItemsList);
+        if (Math.Abs(current.X - _dragStart.X) < SystemParameters.MinimumHorizontalDragDistance &&
+            Math.Abs(current.Y - _dragStart.Y) < SystemParameters.MinimumVerticalDragDistance)
+        {
+            return;
+        }
+
+        var path = _dragPath;
+        _dragPath = null;
+        if (!File.Exists(path) && !Directory.Exists(path)) return;
+
+        var data = new DataObject(DataFormats.FileDrop, new[] { path });
+        _ = DragDrop.DoDragDrop(DesktopItemsList, data, DragDropEffects.Copy);
+    }
+
+    private void Desktop_DragOver(object sender, DragEventArgs e)
+    {
+        e.Effects = _showDesktopItems && e.Data.GetDataPresent(DataFormats.FileDrop)
+            ? DragDropEffects.Copy
+            : DragDropEffects.None;
+        e.Handled = true;
+    }
+
+    private async void Desktop_Drop(object sender, DragEventArgs e)
+    {
+        if (!_showDesktopItems || !e.Data.GetDataPresent(DataFormats.FileDrop)) return;
+        if (e.Data.GetData(DataFormats.FileDrop) is not string[] paths || paths.Length == 0) return;
+
+        var result = await ShellFileTransferService.CopyToDesktopAsync(paths);
+        await RefreshSurfaceAsync();
+
+        var summary = $"复制 {result.Copied} 项";
+        if (result.Skipped > 0) summary += $"，跳过 {result.Skipped} 项";
+        if (result.Failed > 0) summary += $"，失败 {result.Failed} 项";
+        ShellNotificationService.Publish("桌面文件投放完成", summary, result.Failed > 0 ? "warning" : "shell");
+    }
+
     private void ControlCenter_Click(object sender, RoutedEventArgs e) => _controlCenter.ShowControlCenter();
 
     private async void Refresh_Click(object sender, RoutedEventArgs e) => await RefreshSurfaceAsync();
@@ -144,6 +192,7 @@ public partial class DesktopSurfaceWindow : Window
         {
             Directory.CreateDirectory(candidate);
             await RefreshSurfaceAsync();
+            ShellNotificationService.Publish("已创建桌面文件夹", Path.GetFileName(candidate), "shell");
         }
         catch
         {
