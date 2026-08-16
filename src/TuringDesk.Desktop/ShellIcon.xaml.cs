@@ -75,5 +75,24 @@ public partial class ShellIcon : UserControl
     public ShellIcon() { InitializeComponent(); ApplyKind(Kind); }
     public string Kind { get => (string)GetValue(KindProperty); set => SetValue(KindProperty, value); }
     private static void OnKindChanged(DependencyObject d, DependencyPropertyChangedEventArgs e) { if (d is ShellIcon icon) icon.ApplyKind(e.NewValue as string ?? "Agent"); }
-    private void ApplyKind(string kind) { if (!Paths.TryGetValue(kind, out var data)) data = Paths["App"]; var geometry = Geometry.Parse(data); if (geometry.CanFreeze) geometry.Freeze(); IconPath.Data = geometry; }
+
+    private static string ResolveKind(string kind)
+    {
+        if (Paths.ContainsKey(kind)) return kind;
+        var normalized = kind.Trim().ToLowerInvariant();
+        if (normalized.Contains("chrome") || normalized.Contains("edge") || normalized.Contains("firefox") || normalized.Contains("browser")) return "Browser";
+        if (normalized is "code" or "devenv" || normalized.Contains("vscode") || normalized.Contains("visualstudio")) return "Code";
+        if (normalized.Contains("terminal") || normalized.Contains("powershell") || normalized is "pwsh" or "cmd" or "wt") return "Terminal";
+        if (normalized.Contains("explorer") || normalized.Contains("folder")) return "Folder";
+        if (normalized.Contains("notepad") || normalized.Contains("text")) return "TextFile";
+        return "App";
+    }
+
+    private void ApplyKind(string kind)
+    {
+        var data = Paths[ResolveKind(kind)];
+        var geometry = Geometry.Parse(data);
+        if (geometry.CanFreeze) geometry.Freeze();
+        IconPath.Data = geometry;
+    }
 }

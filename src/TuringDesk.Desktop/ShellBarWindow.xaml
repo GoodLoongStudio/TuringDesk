@@ -14,18 +14,9 @@
     <Border x:Name="ShellBarRoot" Background="#101319" BorderBrush="#30394F" BorderThickness="0,1,0,0">
         <Grid Margin="8,7">
             <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="48"/>
-                <ColumnDefinition Width="46"/>
-                <ColumnDefinition Width="46"/>
-                <ColumnDefinition Width="46"/>
-                <ColumnDefinition Width="Auto"/>
-                <ColumnDefinition Width="*"/>
-                <ColumnDefinition Width="310"/>
-                <ColumnDefinition Width="126"/>
-                <ColumnDefinition Width="42"/>
-                <ColumnDefinition Width="42"/>
-                <ColumnDefinition Width="82"/>
-                <ColumnDefinition Width="46"/>
+                <ColumnDefinition Width="48"/><ColumnDefinition Width="46"/><ColumnDefinition Width="46"/><ColumnDefinition Width="46"/>
+                <ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="310"/><ColumnDefinition Width="126"/>
+                <ColumnDefinition Width="42"/><ColumnDefinition Width="42"/><ColumnDefinition Width="82"/><ColumnDefinition Width="46"/>
             </Grid.ColumnDefinitions>
 
             <Button Grid.Column="0" Width="42" Height="42" Padding="0" Click="Start_Click" ToolTip="开始 · Ctrl+Esc"><local:ShellIcon Kind="Start" Width="19" Height="19" Foreground="#A5B0FF"/></Button>
@@ -41,9 +32,7 @@
                             <Grid>
                                 <Image Source="{Binding Icon}" Width="22" Height="22" Stretch="Uniform" RenderOptions.BitmapScalingMode="HighQuality"/>
                                 <local:ShellIcon Kind="{Binding Glyph}" Width="19" Height="19" Foreground="#AAB4C8" HorizontalAlignment="Center" VerticalAlignment="Center">
-                                    <local:ShellIcon.Style>
-                                        <Style TargetType="local:ShellIcon"><Setter Property="Visibility" Value="Collapsed"/><Style.Triggers><DataTrigger Binding="{Binding Icon}" Value="{x:Null}"><Setter Property="Visibility" Value="Visible"/></DataTrigger></Style.Triggers></Style>
-                                    </local:ShellIcon.Style>
+                                    <local:ShellIcon.Style><Style TargetType="local:ShellIcon"><Setter Property="Visibility" Value="Collapsed"/><Style.Triggers><DataTrigger Binding="{Binding Icon}" Value="{x:Null}"><Setter Property="Visibility" Value="Visible"/></DataTrigger></Style.Triggers></Style></local:ShellIcon.Style>
                                 </local:ShellIcon>
                             </Grid>
                         </Button>
@@ -62,10 +51,8 @@
                                     <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                                         <Grid Width="22" Height="22" Margin="0,0,7,0">
                                             <Image Source="{Binding Icon}" Width="20" Height="20" Stretch="Uniform" RenderOptions.BitmapScalingMode="HighQuality"/>
-                                            <local:ShellIcon Kind="App" Width="18" Height="18" Foreground="#AAB4C8" HorizontalAlignment="Center" VerticalAlignment="Center">
-                                                <local:ShellIcon.Style>
-                                                    <Style TargetType="local:ShellIcon"><Setter Property="Visibility" Value="Collapsed"/><Style.Triggers><DataTrigger Binding="{Binding Icon}" Value="{x:Null}"><Setter Property="Visibility" Value="Visible"/></DataTrigger></Style.Triggers></Style>
-                                                </local:ShellIcon.Style>
+                                            <local:ShellIcon Kind="{Binding ProcessName}" Width="18" Height="18" Foreground="#AAB4C8" HorizontalAlignment="Center" VerticalAlignment="Center">
+                                                <local:ShellIcon.Style><Style TargetType="local:ShellIcon"><Setter Property="Visibility" Value="Collapsed"/><Style.Triggers><DataTrigger Binding="{Binding Icon}" Value="{x:Null}"><Setter Property="Visibility" Value="Visible"/></DataTrigger></Style.Triggers></Style></local:ShellIcon.Style>
                                             </local:ShellIcon>
                                         </Grid>
                                         <TextBlock Text="{Binding ShortTitle}" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" FontSize="11.5"/>
@@ -99,14 +86,7 @@
                 <Button x:Name="PowerButton" Width="52" Height="38" Padding="0" Click="Power_Click" ToolTip="电源">
                     <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
                         <local:ShellIcon Width="16" Height="16" Foreground="#AAB4C8" Margin="0,0,4,0">
-                            <local:ShellIcon.Style>
-                                <Style TargetType="local:ShellIcon">
-                                    <Setter Property="Kind" Value="Battery"/>
-                                    <Style.Triggers>
-                                        <DataTrigger Binding="{Binding Text, ElementName=PowerText}" Value="AC"><Setter Property="Kind" Value="Plug"/></DataTrigger>
-                                    </Style.Triggers>
-                                </Style>
-                            </local:ShellIcon.Style>
+                            <local:ShellIcon.Style><Style TargetType="local:ShellIcon"><Setter Property="Kind" Value="Battery"/><Style.Triggers><DataTrigger Binding="{Binding Text, ElementName=PowerText}" Value="AC"><Setter Property="Kind" Value="Plug"/></DataTrigger></Style.Triggers></Style></local:ShellIcon.Style>
                         </local:ShellIcon>
                         <TextBlock x:Name="PowerText" Text="AC" FontSize="9.5" VerticalAlignment="Center"/>
                     </StackPanel>
