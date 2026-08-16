@@ -1,4 +1,4 @@
-import { createAgentGateway, type AgentGateway } from './harness-gateway.js'
+import { createAgentGateway, type AgentGateway, type AgentTraceSink } from './harness-gateway.js'
 import { publicModelConfig, type PublicModelConfig, type RuntimeModelConfig, validateModelConfig } from './model-config.js'
 
 const COMPATIBLE_ROUTE = 'turingdesk-compatible'
@@ -73,8 +73,8 @@ export class ModelGatewayManager {
     return this.current
   }
 
-  run(message: string): Promise<string> {
-    return this.gateway.run(message)
+  run(message: string, onTrace?: AgentTraceSink): Promise<string> {
+    return this.gateway.run(message, onTrace)
   }
 
   test(): Promise<string> {
