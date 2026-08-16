@@ -24,13 +24,13 @@ public partial class AgentActivityWindow : Window
     public AgentActivityWindow(DisplayMonitor monitor)
     {
         _monitor = monitor;
+        _timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(900) };
+        _timer.Tick += async (_, _) => await RefreshAsync();
+
         InitializeComponent();
         DataContext = this;
         Deactivated += (_, _) => Hide();
         Closed += (_, _) => _timer.Stop();
-
-        _timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(900) };
-        _timer.Tick += async (_, _) => await RefreshAsync();
     }
 
     internal void Toggle()
