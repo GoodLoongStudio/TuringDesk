@@ -28,16 +28,16 @@
             </Grid.ColumnDefinitions>
 
             <Button Grid.Column="0" Width="42" Height="42" Padding="0" Click="Start_Click" ToolTip="开始 · Ctrl+Esc">
-                <TextBlock Text="▦" FontSize="19" Foreground="#A5B0FF"/>
+                <local:ShellIcon Kind="Start" Width="19" Height="19" Foreground="#A5B0FF"/>
             </Button>
             <Button Grid.Column="1" Width="40" Height="42" Padding="0" Click="Desktop_Click" ToolTip="显示桌面 · Win+D">
-                <TextBlock Text="▱" FontSize="18" Foreground="#AAB4C8"/>
+                <local:ShellIcon Kind="Desktop" Width="19" Height="19" Foreground="#AAB4C8"/>
             </Button>
             <Button Grid.Column="2" Width="40" Height="42" Padding="0" Click="Home_Click" ToolTip="TuringDesk 控制中心">
-                <TextBlock Text="✦" FontSize="18" Foreground="#9DAAFF"/>
+                <local:ShellIcon Kind="Agent" Width="19" Height="19" Foreground="#9DAAFF"/>
             </Button>
             <Button Grid.Column="3" Width="40" Height="42" Padding="0" Click="TaskSwitcher_Click" ToolTip="任务切换 · Ctrl+Alt+Space">
-                <TextBlock Text="▧" FontSize="18" Foreground="#AAB4C8"/>
+                <local:ShellIcon Kind="Tasks" Width="19" Height="19" Foreground="#AAB4C8"/>
             </Button>
 
             <ItemsControl Grid.Column="4" ItemsSource="{Binding PinnedApps}" Margin="3,0,6,0" VerticalAlignment="Center">
@@ -95,15 +95,27 @@
             </Border>
 
             <StackPanel Grid.Column="7" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
-                <Button x:Name="NetworkButton" Width="38" Height="38" Padding="0" Click="Network_Click" ToolTip="网络"><TextBlock x:Name="NetworkGlyph" Text="●" FontSize="13"/></Button>
-                <Button Width="38" Height="38" Padding="0" Click="Volume_Click" ToolTip="声音设置"><TextBlock Text="◖))" FontSize="11"/></Button>
-                <Button x:Name="PowerButton" Width="46" Height="38" Padding="0" Click="Power_Click" ToolTip="电源"><TextBlock x:Name="PowerText" Text="AC" FontSize="10.5"/></Button>
+                <Button x:Name="NetworkButton" Width="38" Height="38" Padding="0" Click="Network_Click" ToolTip="网络">
+                    <Grid Width="20" Height="20">
+                        <local:ShellIcon Kind="Network" Width="18" Height="18" Foreground="#AAB4C8" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        <Border x:Name="NetworkStateDot" Width="6" Height="6" CornerRadius="3" Background="#54D68A" HorizontalAlignment="Right" VerticalAlignment="Bottom" BorderBrush="#101319" BorderThickness="1"/>
+                    </Grid>
+                </Button>
+                <Button Width="38" Height="38" Padding="0" Click="Volume_Click" ToolTip="声音设置">
+                    <local:ShellIcon Kind="Volume" Width="18" Height="18" Foreground="#AAB4C8"/>
+                </Button>
+                <Button x:Name="PowerButton" Width="46" Height="38" Padding="0" Click="Power_Click" ToolTip="电源">
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                        <local:ShellIcon Kind="Power" Width="15" Height="15" Foreground="#AAB4C8" Margin="0,0,3,0"/>
+                        <TextBlock x:Name="PowerText" Text="AC" FontSize="9.5" VerticalAlignment="Center"/>
+                    </StackPanel>
+                </Button>
             </StackPanel>
 
             <Button Grid.Column="8" Width="38" Height="38" Padding="0" Click="Notifications_Click" ToolTip="TuringDesk 通知中心">
-                <Grid>
-                    <TextBlock Text="♢" FontSize="17" Foreground="#AAB4C8" HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                    <Border x:Name="NotificationDot" Width="7" Height="7" CornerRadius="4" Background="#8E9CFF" HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,5,5,0" Visibility="Collapsed"/>
+                <Grid Width="20" Height="20">
+                    <local:ShellIcon Kind="Notification" Width="18" Height="18" Foreground="#AAB4C8" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                    <Border x:Name="NotificationDot" Width="7" Height="7" CornerRadius="4" Background="#8E9CFF" HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,-1,-1,0" Visibility="Collapsed" BorderBrush="#101319" BorderThickness="1"/>
                 </Grid>
             </Button>
 
@@ -113,7 +125,7 @@
             </StackPanel>
 
             <Button Grid.Column="10" Width="40" Height="42" Padding="0" Click="Session_Click" ToolTip="会话与电源">
-                <TextBlock Text="⏻" FontSize="16" Foreground="#D6A76F"/>
+                <local:ShellIcon Kind="Power" Width="18" Height="18" Foreground="#D6A76F"/>
             </Button>
         </Grid>
     </Border>
