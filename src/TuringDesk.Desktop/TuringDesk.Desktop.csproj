@@ -7,10 +7,19 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>TuringDesk.Desktop</AssemblyName>
     <RootNamespace>TuringDesk.Desktop</RootNamespace>
+    <TuringDeskApplicationIcon>$(MSBuildProjectDirectory)\$(IntermediateOutputPath)TuringDesk.ico</TuringDeskApplicationIcon>
+    <ApplicationIcon>$(TuringDeskApplicationIcon)</ApplicationIcon>
   </PropertyGroup>
 
   <ItemGroup>
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
     <PackageReference Include="System.Speech" Version="8.0.0" />
   </ItemGroup>
+
+  <Target Name="GenerateTuringDeskApplicationIcon"
+          BeforeTargets="CoreCompile"
+          Inputs="$(MSBuildProjectDirectory)\..\..\scripts\generate-brand-icon.ps1"
+          Outputs="$(TuringDeskApplicationIcon)">
+    <Exec Command="powershell.exe -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildProjectDirectory)\..\..\scripts\generate-brand-icon.ps1&quot; -OutputPath &quot;$(TuringDeskApplicationIcon)&quot;" />
+  </Target>
 </Project>
