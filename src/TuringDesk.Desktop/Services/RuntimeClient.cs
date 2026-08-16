@@ -23,6 +23,18 @@ public sealed class RuntimeClient
         }
     }
 
+    public async Task<AgentActivityState?> GetAgentStateAsync()
+    {
+        try
+        {
+            return await _http.GetFromJsonAsync<AgentActivityState>("v1/agent/state");
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
     public async Task<string?> ChatAsync(string message)
     {
         try
@@ -76,6 +88,27 @@ public sealed class RuntimeClient
 
 public sealed record RuntimeHealth(bool Ok, string Mode, string Version, RuntimeModelSettings? Model);
 public sealed record ChatRequest(string Message);
-public sealed record ChatResponse(string Reply);
+public sealed record ChatResponse(string Reply, int? RunId = null);
 public sealed record ModelTestResponse(bool Ok, string Reply);
 public sealed record RuntimeModelSettings(string ProviderId, string Mode, string BaseUrl, string Model, string? Credential = null);
+
+public sealed record AgentRunHistory(
+    int Id,
+    string Prompt,
+    string Phase,
+    DateTimeOffset StartedAt,
+    DateTimeOffset? FinishedAt,
+    string? ReplyPreview,
+    string? Error);
+
+public sealed record AgentActivityState(
+    string Phase,
+    bool Busy,
+    int RunId,
+    string? CurrentPrompt,
+    DateTimeOffset? StartedAt,
+    DateTimeOffset? FinishedAt,
+    string? ReplyPreview,
+    string? Error,
+    IReadOnlyList<AgentRunHistory> History,
+    string Mode);
