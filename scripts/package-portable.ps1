@@ -77,10 +77,13 @@ Copy-Item (Join-Path $Root "runtime\dist\*") $RuntimeAppDir -Recurse -Force
 Copy-Item (Join-Path $Root "runtime\package.json") $RuntimeAppDir -Force
 Copy-Item (Join-Path $Root "runtime\harness") (Join-Path $RuntimeAppDir "harness") -Recurse -Force
 
-Write-Host "Installing portable Runtime + pinned DeepSeek Harness production dependencies..." -ForegroundColor Cyan
+Write-Host "Installing portable Runtime + official DeepSeek Harness production dependencies..." -ForegroundColor Cyan
 Push-Location $RuntimeAppDir
 try {
-    npm install --omit=dev --ignore-scripts --package-lock=false
+    # Do not suppress lifecycle scripts here. The official Harness web surface
+    # includes reviewed native dependencies such as node-pty; the final installed
+    # tree must contain the same usable native runtime that CI validated.
+    npm install --omit=dev --package-lock=false
 }
 finally {
     Pop-Location
@@ -100,10 +103,16 @@ if (Test-Path (Join-Path $NodeSource "LICENSE")) {
     Copy-Item (Join-Path $NodeSource "LICENSE") (Join-Path $RuntimeNodeDir "NODE-LICENSE.txt") -Force
 }
 
-Write-Host "Verifying Harness from the final installed layout..." -ForegroundColor Cyan
+Write-Host "Verifying Harness Agent kernel from the final installed layout..." -ForegroundColor Cyan
 & $EmbeddedNode (Join-Path $RuntimeAppDir "harness-integration-smoke.js")
 if ($LASTEXITCODE -ne 0) {
     throw "Packaged DeepSeek Harness integration smoke failed with exit code $LASTEXITCODE"
+}
+
+Write-Host "Verifying official Harness WebUI from the final installed layout..." -ForegroundColor Cyan
+& $EmbeddedNode (Join-Path $RuntimeAppDir "harness-web-smoke.js")
+if ($LASTEXITCODE -ne 0) {
+    throw "Packaged DeepSeek Harness WebUI smoke failed with exit code $LASTEXITCODE"
 }
 
 # These are application lifecycle actions used by the MSI Start menu shortcuts.
@@ -123,6 +132,9 @@ foreach ($Required in @(
     (Join-Path $ShellHostDir "TuringDesk.ShellHost.exe"),
     $BrandIcon,
     $EmbeddedNode,
+    (Join-Path $RuntimeAppDir "harness-integration-smoke.js"),
+    (Join-Path $RuntimeAppDir "harness-web-smoke.js"),
+    (Join-Path $RuntimeAppDir "node_modules\@deepseek-ai\dsh\lib\bin.js"),
     (Join-Path $RuntimeAppDir "harness\turingdesk.cordis.yml"),
     (Join-Path $PackageRoot "Enable-TuringDeskShell.cmd"),
     (Join-Path $PackageRoot "Enable-TuringDeskShell.ps1"),
@@ -176,6 +188,8 @@ Runtime: $RuntimeIdentifier
 Architecture: $NodeArchitecture
 Node: $NodeVersion ($DetectedNodeArch)
 DeepSeek Harness: 0.1.0-rc.6
+Harness UI: official DeepSeek Harness WebUI wrapped by TuringDesk WebView2
+Harness WebUI: packaged and boot-smoke verified
 Install flow: standard Windows Installer (MSI)
 Install ownership: Windows Installer / Program Files
 Shell activation: explicit current-user action after installation
