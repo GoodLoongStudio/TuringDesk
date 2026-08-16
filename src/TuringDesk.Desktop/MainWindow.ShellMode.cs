@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Windows;
+using System.Windows.Media.Animation;
 using System.Windows.Threading;
 using TuringDesk.Desktop.Services;
 
@@ -7,10 +8,21 @@ namespace TuringDesk.Desktop;
 
 public partial class MainWindow
 {
+    private enum ShellViewState
+    {
+        Desktop,
+        ControlCenter
+    }
+
+    private static readonly TimeSpan ShellFadeIn = TimeSpan.FromMilliseconds(155);
+    private static readonly TimeSpan ShellFadeOut = TimeSpan.FromMilliseconds(95);
+
     private readonly List<ShellBarWindow> _shellBars = [];
     private readonly List<DesktopSurfaceWindow> _desktopSurfaces = [];
     private DispatcherTimer? _displayRefreshTimer;
     private string _displaySignature = string.Empty;
+    private ShellViewState _shellViewState = ShellViewState.Desktop;
+    private int _shellTransitionVersion;
 
     internal void EnableShellMode()
     {
@@ -37,28 +49,82 @@ public partial class MainWindow
             return;
         }
 
+        _shellViewState = ShellViewState.ControlCenter;
+        var transition = ++_shellTransitionVersion;
+
         foreach (var surface in _desktopSurfaces)
         {
-            surface.Hide();
+            surface.HideFromDesktop(animate: true);
         }
 
-        if (!IsVisible) Show();
+        BeginAnimation(OpacityProperty, null);
+        if (!IsVisible)
+        {
+            Opacity = 0;
+            Show();
+        }
+
         WindowState = WindowState.Maximized;
         Activate();
         Focus();
+
+        var fade = new DoubleAnimation
+        {
+            From = Math.Clamp(Opacity, 0, 1),
+            To = 1,
+            Duration = new Duration(ShellFadeIn),
+            EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseOut }
+        };
+        fade.Completed += (_, _) =>
+        {
+            if (transition != _shellTransitionVersion || _shellViewState != ShellViewState.ControlCenter) return;
+            BeginAnimation(OpacityProperty, null);
+            Opacity = 1;
+        };
+        BeginAnimation(OpacityProperty, fade, HandoffBehavior.SnapshotAndReplace);
     }
 
     internal void ShowDesktop(bool minimizeWindows)
     {
         if (!ShellSession.IsShellMode) return;
 
-        Hide();
+        _shellViewState = ShellViewState.Desktop;
+        var transition = ++_shellTransitionVersion;
+        var primary = _desktopSurfaces.FirstOrDefault(surface => surface.IsPrimary) ?? _desktopSurfaces.FirstOrDefault();
+
         var first = true;
         foreach (var surface in _desktopSurfaces)
         {
-            surface.ShowAsDesktop(minimizeWindows && first);
+            surface.ShowAsDesktop(minimizeWindows && first, activate: false, animate: true);
             first = false;
         }
+
+        void FinishDesktopTransition()
+        {
+            if (transition != _shellTransitionVersion || _shellViewState != ShellViewState.Desktop) return;
+            BeginAnimation(OpacityProperty, null);
+            Opacity = 1;
+            if (IsVisible) Hide();
+            primary?.Activate();
+            primary?.Focus();
+        }
+
+        if (!IsVisible)
+        {
+            FinishDesktopTransition();
+            return;
+        }
+
+        BeginAnimation(OpacityProperty, null);
+        var fade = new DoubleAnimation
+        {
+            From = Math.Clamp(Opacity, 0, 1),
+            To = 0,
+            Duration = new Duration(ShellFadeOut),
+            EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseIn }
+        };
+        fade.Completed += (_, _) => FinishDesktopTransition();
+        BeginAnimation(OpacityProperty, fade, HandoffBehavior.SnapshotAndReplace);
     }
 
     internal void ToggleStartMenu()
@@ -101,7 +167,10 @@ public partial class MainWindow
         {
             var surface = new DesktopSurfaceWindow(this, monitor, showDesktopItems: monitor.IsPrimary);
             _desktopSurfaces.Add(surface);
-            surface.ShowAsDesktop(false);
+            if (_shellViewState == ShellViewState.Desktop)
+            {
+                surface.ShowAsDesktop(minimizeWindows: false, activate: false, animate: false);
+            }
         }
 
         foreach (var monitor in monitors)
@@ -109,6 +178,16 @@ public partial class MainWindow
             var bar = new ShellBarWindow(this, monitor) { Tag = monitor.IsPrimary };
             _shellBars.Add(bar);
             bar.Show();
+        }
+
+        // Display topology changes must preserve the user's current shell view.
+        if (_shellViewState == ShellViewState.ControlCenter)
+        {
+            BeginAnimation(OpacityProperty, null);
+            Opacity = 1;
+            if (!IsVisible) Show();
+            WindowState = WindowState.Maximized;
+            Activate();
         }
     }
 
