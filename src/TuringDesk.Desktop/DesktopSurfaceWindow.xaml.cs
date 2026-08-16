@@ -17,12 +17,14 @@ public partial class DesktopSurfaceWindow : Window
 
     private readonly MainWindow _controlCenter;
     private readonly WindowManager _windows = new();
+    private readonly ShellSettingsStore _settingsStore = new();
     private readonly DispatcherTimer _refreshTimer;
     private readonly DisplayMonitor _monitor;
     private readonly bool _showDesktopItems;
     private readonly Brush _fallbackBackground;
+    private ShellSettings _settings;
     private bool _refreshing;
-    private string? _wallpaperPath;
+    private string? _wallpaperSignature;
     private Point _dragStart;
     private string? _dragPath;
     private DateTimeOffset _lastSurfaceRefresh = DateTimeOffset.MinValue;
@@ -35,6 +37,7 @@ public partial class DesktopSurfaceWindow : Window
         _controlCenter = controlCenter;
         _monitor = monitor;
         _showDesktopItems = showDesktopItems;
+        _settings = _settingsStore.Load();
 
         InitializeComponent();
         DataContext = this;
@@ -138,12 +141,29 @@ public partial class DesktopSurfaceWindow : Window
 
     private async void OnLoaded(object sender, RoutedEventArgs e)
     {
+        ShellSettingsStore.SettingsChanged += OnShellSettingsChanged;
+        ShellThemeService.Apply(_settings.Appearance);
         PositionOnMonitor();
         await RefreshSurfaceAsync();
         _refreshTimer.Start();
     }
 
-    private void OnClosed(object? sender, EventArgs e) => _refreshTimer.Stop();
+    private void OnClosed(object? sender, EventArgs e)
+    {
+        _refreshTimer.Stop();
+        ShellSettingsStore.SettingsChanged -= OnShellSettingsChanged;
+    }
+
+    private void OnShellSettingsChanged()
+    {
+        Dispatcher.BeginInvoke(new Action(() =>
+        {
+            _settings = _settingsStore.Load();
+            ShellThemeService.Apply(_settings.Appearance);
+            _wallpaperSignature = null;
+            RefreshWallpaper();
+        }), DispatcherPriority.Background);
+    }
 
     private void PositionOnMonitor() => DisplayManager.PositionWindow(this, _monitor);
 
@@ -191,11 +211,13 @@ public partial class DesktopSurfaceWindow : Window
 
     private void RefreshWallpaper()
     {
-        var path = WallpaperService.GetCurrentWallpaperPath();
-        if (string.Equals(path, _wallpaperPath, StringComparison.OrdinalIgnoreCase)) return;
+        var appearance = _settings.Appearance;
+        var resolvedPath = WallpaperService.ResolveWallpaperPath(appearance) ?? string.Empty;
+        var signature = $"{appearance.WallpaperMode}|{appearance.WallpaperFit}|{resolvedPath}";
+        if (string.Equals(signature, _wallpaperSignature, StringComparison.OrdinalIgnoreCase)) return;
 
-        _wallpaperPath = path;
-        DesktopRoot.Background = WallpaperService.CreateCurrentWallpaperBrush() ?? _fallbackBackground;
+        _wallpaperSignature = signature;
+        DesktopRoot.Background = WallpaperService.CreateWallpaperBrush(appearance) ?? _fallbackBackground;
     }
 
     private void DesktopItemsList_MouseDoubleClick(object sender, MouseButtonEventArgs e)
