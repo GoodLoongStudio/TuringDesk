@@ -1,16 +1,16 @@
-TuringDesk v0.5 Replacement Shell Developer Preview
+TuringDesk v0.6 Replacement Shell Developer Preview
 ===================================================
 
 Target: Windows 11 x64
 
 IMPORTANT
-v0.5 can REALLY replace Explorer for the current Windows user. Test inside a VM first. Do not enable login shell mode until normal mode and shell preview both work on that machine.
+v0.6 can REALLY replace Explorer for the current Windows user. Test inside a VM first. Do not enable login shell mode until normal mode and shell preview both work on that machine.
 
 SAFE ORDER
 1. Extract the whole archive to a normal folder.
 2. Double-click Start-TuringDesk.cmd and verify normal mode.
 3. Run Preview-TuringDeskShell.ps1 and verify shell mode without changing login settings.
-4. Verify desktop icons, Start search, taskbar, Agent input and Explorer recovery.
+4. Verify desktop icons, wallpaper, Start search, taskbar, persistent pins, task switcher, Agent input and Explorer recovery.
 5. Only then double-click Enable-TuringDeskShell.cmd.
 6. Sign out and sign in again. TuringDesk ShellHost will start instead of Explorer for this user.
 
@@ -21,47 +21,56 @@ WHAT "REAL SHELL" MEANS
 - TuringDesk does not embed Chrome, VS Code or other desktop apps into its own window.
 - Agent text entry remains available from each TuringDesk Shell Bar.
 
-NEW IN v0.5
-- Native Windows Shell icons are extracted for desktop items, Start Menu shortcuts and running task buttons when available.
-- One desktop surface is created for every detected display.
-- One Windows AppBar taskbar is created for every detected display.
-- Desktop files/folders remain on the primary display; secondary displays use a clean TuringDesk desktop surface.
-- Running task buttons are filtered to the display containing each window.
-- Display topology is checked while the shell is running and surfaces rebuild when monitors are added, removed or rearranged.
-- The taskbar now has a TuringDesk-owned status area for network availability, sound settings and battery/AC status.
-- Ctrl+Esc is registered as a Start shortcut when Windows allows it.
-- TuringDesk attempts to register Win+D for Show Desktop. Windows reserves Win-key hotkeys, so registration can legitimately fail without breaking the shell.
+NEW IN v0.6
+- Desktop surfaces follow the current Windows wallpaper when a readable wallpaper file is available.
+- Desktop right-click menu now exposes Refresh, New Folder, Desktop Folder, Display Settings, Personalization and TuringDesk control center.
+- Taskbar pins are no longer hard-coded: they persist in %LOCALAPPDATA%\TuringDesk\shell-settings.json.
+- Right-click a running task with an accessible executable path to pin it to the TuringDesk taskbar.
+- Right-click a pinned taskbar item to unpin it.
+- A TuringDesk Task Switcher can be opened from the taskbar or Ctrl+Alt+Space.
+- Windows native Alt+Tab behavior remains untouched.
+- A Session / Power menu now provides Lock, Sign out, Restart, Shut down and Restore Explorer actions.
+- Restart, Shut down, Sign out and Explorer recovery require an explicit user confirmation and are not exposed as Agent tools.
 
 DESKTOP
 - Reads the current user's Desktop plus Public Desktop.
 - Displays real Windows file/folder/shortcut icons when the Shell API can provide them.
 - Double-click opens the target through normal Windows ShellExecute behavior.
+- Right-click the desktop for familiar shell actions.
 - Hidden/system desktop entries are not shown.
-- Desktop contents refresh automatically.
+- Desktop contents and current wallpaper refresh automatically.
 
 START MENU
 - Indexes current-user and all-user Windows Start Menu shortcut trees.
 - Search filters app names and categories locally.
 - Indexed shortcuts use native Windows Shell icons when available.
-- Pinned Chrome, VS Code, Terminal, Files and TuringDesk entries remain available.
 
 TASKBAR / APPBAR
 - Start button.
 - Show Desktop button.
 - TuringDesk control-center button.
-- Pinned Chrome / VS Code / Terminal launchers.
+- TuringDesk Task Switcher button.
+- Persistent pinned app area.
 - Native application task buttons with process icons when accessible.
 - Clicking the active task minimizes it; clicking an inactive task restores/focuses it.
+- Right-click running tasks to pin when their process path is accessible.
+- Right-click pinned apps to unpin.
 - Network / sound / power status area.
 - Clock/date.
-- Explorer recovery button.
+- Session / Power menu.
+
+TASK SWITCHING
+- Windows native Alt+Tab is intentionally not replaced in v0.6.
+- Ctrl+Alt+Space opens the TuringDesk Task Switcher when the hotkey can be registered.
+- The Task Switcher lists windows across monitors and focuses the selected native window.
 
 STATUS AREA NOTE
-v0.5 does NOT pretend to be fully compatible with Explorer's third-party notification area. Windows documents Shell_NotifyIcon for applications sending icons to the taskbar status area, but the complete third-party-shell receiving/hosting behavior is not a stable public compatibility contract. v0.5 therefore implements TuringDesk-owned system status indicators first instead of relying on undocumented Explorer internals.
+v0.6 does NOT pretend to be fully compatible with Explorer's third-party notification area. TuringDesk implements its own network/sound/power status first instead of depending on undocumented Explorer internals.
 
 RECOVERY
 Normal recovery:
-- Click the right-most recovery arrow on any TuringDesk Shell Bar.
+- Open the Session / Power menu on any TuringDesk Shell Bar.
+- Choose Restore Explorer and confirm.
 - ShellHost restores the previous/current-user shell policy and starts explorer.exe.
 
 Emergency recovery:
@@ -75,7 +84,7 @@ AUTOMATIC FAIL-SAFE
 - ShellHost supervises TuringDesk Desktop.
 - If the desktop shell repeatedly exits shortly after startup, ShellHost automatically removes the TuringDesk CustomShell policy and launches explorer.exe.
 - Recovery state is stored under HKCU\Software\TuringDesk\Shell.
-- The shell policy is current-user only; v0.5 does not overwrite the machine-wide Winlogon Shell value.
+- The shell policy is current-user only; v0.6 does not overwrite the machine-wide Winlogon Shell value.
 
 WINDOWS INTEGRATION
 TuringDesk uses the Windows Custom User Interface / CustomShell current-user policy:
@@ -105,13 +114,15 @@ SAFETY BOUNDARY
 - No service installation.
 - No unrestricted PowerShell/Bash capability is exposed to the Agent.
 - Destructive Agent capabilities such as file.delete, install and power actions are still not exposed.
+- Power/session actions are explicit user UI actions with confirmation.
 - Start Menu and desktop launches happen only from explicit user clicks/double-clicks.
 
 KNOWN LIMITATIONS
-- Multi-monitor support is a foundation: independent bars/surfaces exist, but advanced per-monitor pinning and workspace persistence are not complete.
+- Multi-monitor support is still evolving; pinned apps are shared across displays rather than independently configured per monitor.
 - Third-party Explorer notification-area/tray icons are not hosted yet.
-- Jump lists, taskbar pin persistence and drag-reorder are not complete.
+- Jump lists and drag-reorder of taskbar pins are not complete.
 - Win+D registration depends on Windows allowing that reserved hotkey in the active shell session.
-- Native icon extraction can be denied for protected/elevated processes; those task buttons may have no icon.
+- Native icon extraction can be denied for protected/elevated processes; those task buttons may have no icon and cannot always be pinned.
+- Wallpaper synchronization currently follows the classic Windows desktop wallpaper path and is not yet per-monitor slideshow aware.
 - Full-screen games and unusual exclusive-mode applications still need VM/real-device testing.
 - This is unsigned developer software, so SmartScreen may warn.
