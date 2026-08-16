@@ -51,7 +51,8 @@ public static class ShellSurfaceCatalog
                         "folder",
                         "文件夹",
                         true,
-                        ShellIconService.GetIcon(directory, large: true),
+                        ShellIconService.GetIcon(directory, large: true)
+                            ?? ShellIconService.GetStockIcon(ShellStockIconId.Folder, large: true),
                         "Folder"));
                 }
 
@@ -67,7 +68,7 @@ public static class ShellSurfaceCatalog
                         extension.TrimStart('.'),
                         SubtitleForExtension(extension),
                         false,
-                        ShellIconService.GetIcon(file, large: true),
+                        ShellIconService.GetIcon(file, large: true) ?? NativeFallbackForExtension(extension, large: true),
                         IconKindForExtension(extension)));
                 }
             }
@@ -92,10 +93,38 @@ public static class ShellSurfaceCatalog
 
         var items = new Dictionary<string, StartAppItem>(StringComparer.CurrentCultureIgnoreCase)
         {
-            ["设置"] = new("设置", "ms-settings:", "⚙", "系统", null, "Settings"),
-            ["文件"] = new("文件", userProfile, "▣", "系统", ShellIconService.GetIcon(userProfile, large: false), "Folder"),
-            ["文档"] = new("文档", documents, "≡", "文件夹", ShellIconService.GetIcon(documents, large: false), "Folder"),
-            ["下载"] = new("下载", downloads, "↓", "文件夹", ShellIconService.GetIcon(downloads, large: false), "Folder")
+            ["设置"] = new(
+                "设置",
+                "ms-settings:",
+                "⚙",
+                "系统",
+                ShellIconService.GetStockIcon(ShellStockIconId.Settings, large: false)
+                    ?? ShellIconService.GetSystemExecutableIcon("SystemSettings.exe", large: false),
+                "Settings"),
+            ["文件"] = new(
+                "文件",
+                userProfile,
+                "▣",
+                "系统",
+                ShellIconService.GetIcon(userProfile, large: false)
+                    ?? ShellIconService.GetStockIcon(ShellStockIconId.Folder, large: false),
+                "Folder"),
+            ["文档"] = new(
+                "文档",
+                documents,
+                "≡",
+                "文件夹",
+                ShellIconService.GetIcon(documents, large: false)
+                    ?? ShellIconService.GetStockIcon(ShellStockIconId.Folder, large: false),
+                "Folder"),
+            ["下载"] = new(
+                "下载",
+                downloads,
+                "↓",
+                "文件夹",
+                ShellIconService.GetIcon(downloads, large: false)
+                    ?? ShellIconService.GetStockIcon(ShellStockIconId.Folder, large: false),
+                "Folder")
         };
 
         var roots = new[]
@@ -126,7 +155,8 @@ public static class ShellSurfaceCatalog
                         file,
                         "◆",
                         category,
-                        ShellIconService.GetIcon(file, large: false),
+                        ShellIconService.GetIcon(file, large: false)
+                            ?? ShellIconService.GetStockIcon(ShellStockIconId.Application, large: false),
                         "App"));
                 }
             }
@@ -205,6 +235,14 @@ public static class ShellSurfaceCatalog
             return false;
         }
     }
+
+    private static ImageSource? NativeFallbackForExtension(string extension, bool large) => extension switch
+    {
+        ".lnk" or ".url" or ".appref-ms" => ShellIconService.GetStockIcon(ShellStockIconId.Link, large),
+        ".exe" or ".msi" => ShellIconService.GetStockIcon(ShellStockIconId.Application, large),
+        ".txt" or ".md" or ".doc" or ".docx" or ".pdf" => ShellIconService.GetStockIcon(ShellStockIconId.DocumentAssociation, large),
+        _ => ShellIconService.GetStockIcon(ShellStockIconId.DocumentNoAssociation, large)
+    };
 
     private static bool ShouldHide(string path)
     {
