@@ -1,7 +1,7 @@
 param(
     [string]$Configuration = "Release",
     [string]$RuntimeIdentifier = "win-arm64",
-    [string]$Version = "v0.10",
+    [string]$Version = "v0.11",
     [string]$NodeVersion = "22.19.0"
 )
 
@@ -14,6 +14,7 @@ $DesktopDir = Join-Path $PackageRoot "desktop"
 $ShellHostDir = Join-Path $PackageRoot "shellhost"
 $RuntimeAppDir = Join-Path $PackageRoot "runtime\app"
 $RuntimeNodeDir = Join-Path $PackageRoot "runtime\node"
+$BrandIcon = Join-Path $PackageRoot "TuringDesk.ico"
 
 $NodeArchitecture = switch ($RuntimeIdentifier) {
     "win-arm64" { "arm64" }
@@ -21,7 +22,7 @@ $NodeArchitecture = switch ($RuntimeIdentifier) {
     default { throw "Unsupported Windows runtime identifier: $RuntimeIdentifier" }
 }
 
-Write-Host "Building $PackageName" -ForegroundColor Cyan
+Write-Host "Staging $PackageName" -ForegroundColor Cyan
 Write-Host "Runtime architecture: $RuntimeIdentifier / Node $NodeArchitecture" -ForegroundColor Cyan
 
 if (Test-Path $PackageRoot) {
@@ -51,6 +52,7 @@ dotnet publish $DesktopProject `
     -p:DebugType=None `
     -p:DebugSymbols=false `
     --output $DesktopDir
+if ($LASTEXITCODE -ne 0) { throw "TuringDesk.Desktop publish failed with exit code $LASTEXITCODE" }
 
 Write-Host "Publishing resilient replacement ShellHost for $RuntimeIdentifier..." -ForegroundColor Cyan
 $ShellHostProject = Join-Path $Root "src\TuringDesk.ShellHost\TuringDesk.ShellHost.csproj"
@@ -62,6 +64,13 @@ dotnet publish $ShellHostProject `
     -p:DebugType=None `
     -p:DebugSymbols=false `
     --output $ShellHostDir
+if ($LASTEXITCODE -ne 0) { throw "TuringDesk.ShellHost publish failed with exit code $LASTEXITCODE" }
+
+Write-Host "Generating installer/shortcut application icon..." -ForegroundColor Cyan
+& (Join-Path $Root "scripts\generate-brand-icon.ps1") -OutputPath $BrandIcon
+if ($LASTEXITCODE -ne 0 -or -not (Test-Path $BrandIcon)) {
+    throw "Failed to generate TuringDesk.ico"
+}
 
 Write-Host "Copying runtime and Harness profile..." -ForegroundColor Cyan
 Copy-Item (Join-Path $Root "runtime\dist\*") $RuntimeAppDir -Recurse -Force
@@ -91,15 +100,16 @@ if (Test-Path (Join-Path $NodeSource "LICENSE")) {
     Copy-Item (Join-Path $NodeSource "LICENSE") (Join-Path $RuntimeNodeDir "NODE-LICENSE.txt") -Force
 }
 
-Write-Host "Verifying Harness from the final replacement-shell layout..." -ForegroundColor Cyan
+Write-Host "Verifying Harness from the final installed layout..." -ForegroundColor Cyan
 & $EmbeddedNode (Join-Path $RuntimeAppDir "harness-integration-smoke.js")
 if ($LASTEXITCODE -ne 0) {
     throw "Packaged DeepSeek Harness integration smoke failed with exit code $LASTEXITCODE"
 }
 
-# v0.10 remains a direct replacement-shell package. The normal-app/Preview entry
-# points are deliberately not shipped in the user-facing archive.
-Copy-Item (Join-Path $Root "packaging\shell\Install-TuringDesk.cmd") $PackageRoot -Force
+# These are application lifecycle actions used by the MSI Start menu shortcuts.
+# The MSI owns application files; enabling the replacement shell is deliberately
+# a separate current-user opt-in action.
+Copy-Item (Join-Path $Root "packaging\shell\Enable-TuringDeskShell.cmd") $PackageRoot -Force
 Copy-Item (Join-Path $Root "packaging\shell\Enable-TuringDeskShell.ps1") $PackageRoot -Force
 Copy-Item (Join-Path $Root "packaging\shell\Restore-Explorer.ps1") $PackageRoot -Force
 Copy-Item (Join-Path $Root "packaging\shell\Restore-Explorer.cmd") $PackageRoot -Force
@@ -111,14 +121,15 @@ if (Test-Path (Join-Path $Root "packaging\THIRD-PARTY-NOTICES.txt")) {
 foreach ($Required in @(
     (Join-Path $DesktopDir "TuringDesk.Desktop.exe"),
     (Join-Path $ShellHostDir "TuringDesk.ShellHost.exe"),
+    $BrandIcon,
     $EmbeddedNode,
     (Join-Path $RuntimeAppDir "harness\turingdesk.cordis.yml"),
-    (Join-Path $PackageRoot "Install-TuringDesk.cmd"),
+    (Join-Path $PackageRoot "Enable-TuringDeskShell.cmd"),
     (Join-Path $PackageRoot "Enable-TuringDeskShell.ps1"),
     (Join-Path $PackageRoot "Restore-Explorer.ps1")
 )) {
     if (-not (Test-Path $Required)) {
-        throw "Shell replacement package is incomplete: $Required"
+        throw "Installer payload is incomplete: $Required"
     }
 }
 
@@ -128,7 +139,7 @@ foreach ($Forbidden in @(
     (Join-Path $PackageRoot "Start-TuringDesk.ps1")
 )) {
     if (Test-Path $Forbidden) {
-        throw "Direct Shell package must not contain Preview/normal-mode entry points: $Forbidden"
+        throw "Installer payload must not contain legacy Preview/normal-mode entry points: $Forbidden"
     }
 }
 
@@ -137,22 +148,45 @@ if ($DetectedNodeArch -ne $NodeArchitecture) {
     throw "Embedded Node architecture mismatch. Expected $NodeArchitecture, got $DetectedNodeArch"
 }
 
+# Fail the build if Windows cannot extract an associated icon from either EXE.
+# This catches the previous regression where UI glyphs changed but the executable
+# still shipped without an application icon resource.
+Add-Type -AssemblyName System.Drawing
+foreach ($Exe in @(
+    (Join-Path $DesktopDir "TuringDesk.Desktop.exe"),
+    (Join-Path $ShellHostDir "TuringDesk.ShellHost.exe")
+)) {
+    $icon = [System.Drawing.Icon]::ExtractAssociatedIcon($Exe)
+    if ($null -eq $icon) {
+        throw "Executable has no extractable application icon: $Exe"
+    }
+    try {
+        if ($icon.Width -lt 16 -or $icon.Height -lt 16) {
+            throw "Executable application icon is invalid: $Exe"
+        }
+    }
+    finally {
+        $icon.Dispose()
+    }
+}
+
 $BuildInfo = @"
 TuringDesk $Version
 Runtime: $RuntimeIdentifier
 Architecture: $NodeArchitecture
 Node: $NodeVersion ($DetectedNodeArch)
 DeepSeek Harness: 0.1.0-rc.6
-Install flow: direct current-user replacement Shell
-Installer: Install-TuringDesk.cmd
+Install flow: standard Windows Installer (MSI)
+Install ownership: Windows Installer / Program Files
+Shell activation: explicit current-user action after installation
 Shell mode: Windows Custom User Interface (current-user policy)
 Shell host: shellhost/TuringDesk.ShellHost.exe
 Recovery: Restore-Explorer.ps1
-Preview mode: not shipped
+Application icon: embedded multi-size TuringDesk.ico
 Harness profile: runtime/app/harness/turingdesk.cordis.yml
 Build commit: $env:GITHUB_SHA
 Build time (UTC): $([DateTime]::UtcNow.ToString("o"))
 "@
 Set-Content -Path (Join-Path $PackageRoot "BUILD-INFO.txt") -Value $BuildInfo -Encoding UTF8
 
-Write-Host "Direct replacement-shell package ready: $PackageRoot" -ForegroundColor Green
+Write-Host "Windows Installer payload ready: $PackageRoot" -ForegroundColor Green
