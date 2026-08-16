@@ -1,8 +1,8 @@
 <Project Sdk="WixToolset.Sdk/6.0.2">
   <PropertyGroup>
     <InstallerPlatform Condition="'$(InstallerPlatform)' == ''">arm64</InstallerPlatform>
-    <ProductVersion Condition="'$(ProductVersion)' == ''">0.11.0</ProductVersion>
-    <PayloadRoot Condition="'$(PayloadRoot)' == ''">$(MSBuildProjectDirectory)\..\artifacts\TuringDesk-v0.11-win-arm64</PayloadRoot>
+    <ProductVersion Condition="'$(ProductVersion)' == ''">0.11.1</ProductVersion>
+    <PayloadRoot Condition="'$(PayloadRoot)' == ''">$(MSBuildProjectDirectory)\..\artifacts\TuringDesk-v0.11.1-win-arm64</PayloadRoot>
     <DefineConstants>ProductVersion=$(ProductVersion);PayloadRoot=$(PayloadRoot)</DefineConstants>
     <OutputPath>$(MSBuildProjectDirectory)\..\artifacts\installer\</OutputPath>
     <SuppressValidation>true</SuppressValidation>
