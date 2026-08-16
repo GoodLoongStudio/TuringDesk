@@ -1,7 +1,7 @@
 param(
     [string]$Configuration = "Release",
-    [string]$RuntimeIdentifier = "win-x64",
-    [string]$Version = "v0.3",
+    [string]$RuntimeIdentifier = "win-arm64",
+    [string]$Version = "v0.9",
     [string]$NodeVersion = "22.19.0"
 )
 
@@ -16,8 +16,8 @@ $RuntimeAppDir = Join-Path $PackageRoot "runtime\app"
 $RuntimeNodeDir = Join-Path $PackageRoot "runtime\node"
 
 $NodeArchitecture = switch ($RuntimeIdentifier) {
-    "win-x64" { "x64" }
     "win-arm64" { "arm64" }
+    "win-x64" { "x64" }
     default { throw "Unsupported Windows runtime identifier: $RuntimeIdentifier" }
 }
 
@@ -91,16 +91,18 @@ if (Test-Path (Join-Path $NodeSource "LICENSE")) {
     Copy-Item (Join-Path $NodeSource "LICENSE") (Join-Path $RuntimeNodeDir "NODE-LICENSE.txt") -Force
 }
 
-Write-Host "Verifying Harness from the final portable layout..." -ForegroundColor Cyan
+Write-Host "Verifying Harness from the final replacement-shell layout..." -ForegroundColor Cyan
 & $EmbeddedNode (Join-Path $RuntimeAppDir "harness-integration-smoke.js")
 if ($LASTEXITCODE -ne 0) {
-    throw "Portable DeepSeek Harness integration smoke failed with exit code $LASTEXITCODE"
+    throw "Packaged DeepSeek Harness integration smoke failed with exit code $LASTEXITCODE"
 }
 
-Copy-Item (Join-Path $PSScriptRoot "Start-TuringDesk.cmd") $PackageRoot -Force
-Copy-Item (Join-Path $PSScriptRoot "Start-TuringDesk.ps1") $PackageRoot -Force
-Copy-Item (Join-Path $Root "packaging\shell\*.ps1") $PackageRoot -Force
-Copy-Item (Join-Path $Root "packaging\shell\*.cmd") $PackageRoot -Force
+# v0.9 is a direct replacement-shell package. The normal-app/Preview entry points
+# are deliberately not shipped in the user-facing archive.
+Copy-Item (Join-Path $Root "packaging\shell\Install-TuringDesk.cmd") $PackageRoot -Force
+Copy-Item (Join-Path $Root "packaging\shell\Enable-TuringDeskShell.ps1") $PackageRoot -Force
+Copy-Item (Join-Path $Root "packaging\shell\Restore-Explorer.ps1") $PackageRoot -Force
+Copy-Item (Join-Path $Root "packaging\shell\Restore-Explorer.cmd") $PackageRoot -Force
 Copy-Item (Join-Path $Root "packaging\PORTABLE-README.txt") (Join-Path $PackageRoot "README.txt") -Force
 if (Test-Path (Join-Path $Root "packaging\THIRD-PARTY-NOTICES.txt")) {
     Copy-Item (Join-Path $Root "packaging\THIRD-PARTY-NOTICES.txt") (Join-Path $PackageRoot "THIRD-PARTY-NOTICES.txt") -Force
@@ -111,11 +113,22 @@ foreach ($Required in @(
     (Join-Path $ShellHostDir "TuringDesk.ShellHost.exe"),
     $EmbeddedNode,
     (Join-Path $RuntimeAppDir "harness\turingdesk.cordis.yml"),
+    (Join-Path $PackageRoot "Install-TuringDesk.cmd"),
     (Join-Path $PackageRoot "Enable-TuringDeskShell.ps1"),
     (Join-Path $PackageRoot "Restore-Explorer.ps1")
 )) {
     if (-not (Test-Path $Required)) {
         throw "Shell replacement package is incomplete: $Required"
+    }
+}
+
+foreach ($Forbidden in @(
+    (Join-Path $PackageRoot "Preview-TuringDeskShell.ps1"),
+    (Join-Path $PackageRoot "Start-TuringDesk.cmd"),
+    (Join-Path $PackageRoot "Start-TuringDesk.ps1")
+)) {
+    if (Test-Path $Forbidden) {
+        throw "v0.9 direct Shell package must not contain Preview/normal-mode entry points: $Forbidden"
     }
 }
 
@@ -130,13 +143,16 @@ Runtime: $RuntimeIdentifier
 Architecture: $NodeArchitecture
 Node: $NodeVersion ($DetectedNodeArch)
 DeepSeek Harness: 0.1.0-rc.6
+Install flow: direct current-user replacement Shell
+Installer: Install-TuringDesk.cmd
 Shell mode: Windows Custom User Interface (current-user policy)
 Shell host: shellhost/TuringDesk.ShellHost.exe
 Recovery: Restore-Explorer.ps1
+Preview mode: not shipped
 Harness profile: runtime/app/harness/turingdesk.cordis.yml
 Build commit: $env:GITHUB_SHA
 Build time (UTC): $([DateTime]::UtcNow.ToString("o"))
 "@
 Set-Content -Path (Join-Path $PackageRoot "BUILD-INFO.txt") -Value $BuildInfo -Encoding UTF8
 
-Write-Host "Portable package ready: $PackageRoot" -ForegroundColor Green
+Write-Host "Direct replacement-shell package ready: $PackageRoot" -ForegroundColor Green
