@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.IO;
+using System.Windows.Media;
 
 namespace TuringDesk.Desktop.Services;
 
@@ -9,13 +10,15 @@ public sealed record DesktopSurfaceItem(
     string Glyph,
     string Kind,
     string Subtitle,
-    bool IsDirectory);
+    bool IsDirectory,
+    ImageSource? Icon);
 
 public sealed record StartAppItem(
     string Name,
     string Target,
     string Glyph,
-    string Category);
+    string Category,
+    ImageSource? Icon);
 
 public static class ShellSurfaceCatalog
 {
@@ -38,22 +41,30 @@ public static class ShellSurfaceCatalog
                 foreach (var directory in Directory.EnumerateDirectories(root))
                 {
                     if (ShouldHide(directory)) continue;
-                    var name = System.IO.Path.GetFileName(directory);
-                    items.TryAdd(directory, new DesktopSurfaceItem(name, directory, "▣", "folder", "文件夹", true));
+                    var name = Path.GetFileName(directory);
+                    items.TryAdd(directory, new DesktopSurfaceItem(
+                        name,
+                        directory,
+                        "▣",
+                        "folder",
+                        "文件夹",
+                        true,
+                        ShellIconService.GetIcon(directory, large: true)));
                 }
 
                 foreach (var file in Directory.EnumerateFiles(root))
                 {
                     if (ShouldHide(file)) continue;
-                    var name = System.IO.Path.GetFileNameWithoutExtension(file);
-                    var extension = System.IO.Path.GetExtension(file).ToLowerInvariant();
+                    var name = Path.GetFileNameWithoutExtension(file);
+                    var extension = Path.GetExtension(file).ToLowerInvariant();
                     items.TryAdd(file, new DesktopSurfaceItem(
                         name,
                         file,
                         GlyphForExtension(extension),
                         extension.TrimStart('.'),
                         SubtitleForExtension(extension),
-                        false));
+                        false,
+                        ShellIconService.GetIcon(file, large: true)));
                 }
             }
             catch
@@ -71,12 +82,16 @@ public static class ShellSurfaceCatalog
 
     public static IReadOnlyList<StartAppItem> LoadStartApps()
     {
+        var userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        var documents = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
+        var downloads = Path.Combine(userProfile, "Downloads");
+
         var items = new Dictionary<string, StartAppItem>(StringComparer.CurrentCultureIgnoreCase)
         {
-            ["设置"] = new("设置", "ms-settings:", "⚙", "系统"),
-            ["文件"] = new("文件", Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "▣", "系统"),
-            ["文档"] = new("文档", Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "≡", "文件夹"),
-            ["下载"] = new("下载", System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads"), "↓", "文件夹")
+            ["设置"] = new("设置", "ms-settings:", "⚙", "系统", null),
+            ["文件"] = new("文件", userProfile, "▣", "系统", ShellIconService.GetIcon(userProfile, large: false)),
+            ["文档"] = new("文档", documents, "≡", "文件夹", ShellIconService.GetIcon(documents, large: false)),
+            ["下载"] = new("下载", downloads, "↓", "文件夹", ShellIconService.GetIcon(downloads, large: false))
         };
 
         var roots = new[]
@@ -91,18 +106,23 @@ public static class ShellSurfaceCatalog
             {
                 foreach (var file in Directory.EnumerateFiles(root, "*.*", SearchOption.AllDirectories))
                 {
-                    var extension = System.IO.Path.GetExtension(file);
+                    var extension = Path.GetExtension(file);
                     if (!StartMenuExtensions.Contains(extension, StringComparer.OrdinalIgnoreCase)) continue;
 
-                    var name = System.IO.Path.GetFileNameWithoutExtension(file).Trim();
+                    var name = Path.GetFileNameWithoutExtension(file).Trim();
                     if (string.IsNullOrWhiteSpace(name)) continue;
 
-                    var relativeDirectory = System.IO.Path.GetDirectoryName(System.IO.Path.GetRelativePath(root, file)) ?? string.Empty;
+                    var relativeDirectory = Path.GetDirectoryName(Path.GetRelativePath(root, file)) ?? string.Empty;
                     var category = string.IsNullOrWhiteSpace(relativeDirectory) || relativeDirectory == "."
                         ? "应用"
-                        : relativeDirectory.Split(System.IO.Path.DirectorySeparatorChar)[0];
+                        : relativeDirectory.Split(Path.DirectorySeparatorChar)[0];
 
-                    items.TryAdd(name, new StartAppItem(name, file, "◆", category));
+                    items.TryAdd(name, new StartAppItem(
+                        name,
+                        file,
+                        "◆",
+                        category,
+                        ShellIconService.GetIcon(file, large: false)));
                 }
             }
             catch
