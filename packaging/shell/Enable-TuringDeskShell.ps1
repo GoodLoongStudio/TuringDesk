@@ -36,11 +36,15 @@ function Confirm-TuringDeskLogoff {
     if ($Logoff) { return $true }
     if ($NoLogoff) { return $false }
 
+    # Keep this script ASCII-only because the MSI launches it with the built-in
+    # Windows PowerShell 5.1. PowerShell 5.1 may decode UTF-8-without-BOM source
+    # using the active ANSI code page, which can corrupt non-ASCII string literals
+    # and turn otherwise valid source into a parser error.
     try {
         $popup = New-Object -ComObject WScript.Shell
-        $message = "TuringDesk 桌面已启用或更新，需要注销当前 Windows 用户后才能切换到新版本。`r`n`r`n现在注销吗？`r`n`r`n选择 No 可以稍后手动注销。"
+        $message = "TuringDesk desktop has been enabled or updated. Sign out of the current Windows user to switch to the new desktop.`r`n`r`nSign out now?`r`n`r`nChoose No to sign out later."
         # 4 = Yes/No, 64 = information icon. Popup returns 6 for Yes and 7 for No.
-        $result = $popup.Popup($message, 0, "TuringDesk - 需要重新登录", 68)
+        $result = $popup.Popup($message, 0, "TuringDesk - Sign out required", 68)
         return $result -eq 6
     }
     catch {
