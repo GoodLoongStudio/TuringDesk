@@ -84,17 +84,18 @@ public partial class StartMenuWindow : Window
 
         var visible = result.Take(180).ToArray();
         VisibleApps.Clear();
-        foreach (var item in visible)
-        {
-            VisibleApps.Add(item);
-        }
+        foreach (var item in visible) VisibleApps.Add(item);
 
         AppCountText.Text = string.IsNullOrWhiteSpace(query)
             ? $"{_allApps.Count} 个入口"
             : $"{visible.Length} 个结果";
     }
 
-    private void PositionWindow() => DisplayManager.PositionPopupBottomCenter(this, _monitor);
+    private void PositionWindow()
+    {
+        var current = DisplayManager.GetMonitors().FirstOrDefault(monitor => monitor.Id == _monitor.Id) ?? _monitor;
+        DisplayManager.PositionPopupBottomCenter(this, current);
+    }
 
     private async Task LaunchPinnedAsync(string app)
     {
@@ -106,29 +107,10 @@ public partial class StartMenuWindow : Window
     private async void VSCode_Click(object sender, RoutedEventArgs e) => await LaunchPinnedAsync("code");
     private async void Terminal_Click(object sender, RoutedEventArgs e) => await LaunchPinnedAsync("terminal");
 
-    private void Files_Click(object sender, RoutedEventArgs e)
-    {
-        Hide();
-        _ = ShellSurfaceCatalog.OpenTarget(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile));
-    }
-
-    private void Settings_Click(object sender, RoutedEventArgs e)
-    {
-        Hide();
-        _ = ShellSurfaceCatalog.OpenTarget("ms-settings:");
-    }
-
-    private void Turing_Click(object sender, RoutedEventArgs e)
-    {
-        Hide();
-        _controlCenter.ShowControlCenter();
-    }
-
-    private void Desktop_Click(object sender, RoutedEventArgs e)
-    {
-        Hide();
-        _controlCenter.ShowDesktop(true);
-    }
+    private void Files_Click(object sender, RoutedEventArgs e) { Hide(); _ = ShellSurfaceCatalog.OpenTarget(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile)); }
+    private void Settings_Click(object sender, RoutedEventArgs e) { Hide(); _ = ShellSurfaceCatalog.OpenTarget("ms-settings:"); }
+    private void Turing_Click(object sender, RoutedEventArgs e) { Hide(); _controlCenter.ShowControlCenter(); }
+    private void Desktop_Click(object sender, RoutedEventArgs e) { Hide(); _controlCenter.ShowDesktop(true); }
 
     private void App_Click(object sender, RoutedEventArgs e)
     {
@@ -148,11 +130,7 @@ public partial class StartMenuWindow : Window
         }
     }
 
-    private void SearchBox_TextChanged(object sender, TextChangedEventArgs e)
-    {
-        if (_catalogLoaded) ApplyFilter();
-    }
-
+    private void SearchBox_TextChanged(object sender, TextChangedEventArgs e) { if (_catalogLoaded) ApplyFilter(); }
     private void Close_Click(object sender, RoutedEventArgs e) => Hide();
 
     private void Window_KeyDown(object sender, KeyEventArgs e)
