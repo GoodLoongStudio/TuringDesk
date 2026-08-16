@@ -1,7 +1,7 @@
 param(
     [string]$Configuration = "Release",
     [string]$RuntimeIdentifier = "win-arm64",
-    [string]$Version = "v0.9",
+    [string]$Version = "v0.10",
     [string]$NodeVersion = "22.19.0"
 )
 
@@ -97,8 +97,8 @@ if ($LASTEXITCODE -ne 0) {
     throw "Packaged DeepSeek Harness integration smoke failed with exit code $LASTEXITCODE"
 }
 
-# v0.9 is a direct replacement-shell package. The normal-app/Preview entry points
-# are deliberately not shipped in the user-facing archive.
+# v0.10 remains a direct replacement-shell package. The normal-app/Preview entry
+# points are deliberately not shipped in the user-facing archive.
 Copy-Item (Join-Path $Root "packaging\shell\Install-TuringDesk.cmd") $PackageRoot -Force
 Copy-Item (Join-Path $Root "packaging\shell\Enable-TuringDeskShell.ps1") $PackageRoot -Force
 Copy-Item (Join-Path $Root "packaging\shell\Restore-Explorer.ps1") $PackageRoot -Force
@@ -128,7 +128,7 @@ foreach ($Forbidden in @(
     (Join-Path $PackageRoot "Start-TuringDesk.ps1")
 )) {
     if (Test-Path $Forbidden) {
-        throw "v0.9 direct Shell package must not contain Preview/normal-mode entry points: $Forbidden"
+        throw "Direct Shell package must not contain Preview/normal-mode entry points: $Forbidden"
     }
 }
 
