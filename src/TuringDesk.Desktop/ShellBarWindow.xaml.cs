@@ -27,6 +27,7 @@ public sealed record PinnedShellAppView(
 
 public partial class ShellBarWindow : Window
 {
+    private const string PinnedDragFormat = "TuringDesk.PinnedTarget";
     private const uint AbmNew = 0x00000000;
     private const uint AbmRemove = 0x00000001;
     private const uint AbmQueryPos = 0x00000002;
@@ -58,8 +59,9 @@ public partial class ShellBarWindow : Window
     private readonly StartMenuWindow _startMenu;
     private readonly TaskSwitcherWindow _taskSwitcher;
     private readonly SessionMenuWindow _sessionMenu;
+    private readonly NotificationCenterWindow _notificationCenter;
     private readonly ShellSettingsStore _settingsStore = new();
-    private readonly ShellSettings _settings;
+    private ShellSettings _settings;
     private readonly DispatcherTimer _refreshTimer;
     private IntPtr _handle;
     private uint _callbackMessage;
@@ -68,6 +70,8 @@ public partial class ShellBarWindow : Window
     private bool _desktopHotkeyRegistered;
     private bool _switcherHotkeyRegistered;
     private HwndSource? _source;
+    private Point _pinDragStart;
+    private string? _pinDragTarget;
 
     public ObservableCollection<PinnedShellAppView> PinnedApps { get; } = new();
     public ObservableCollection<ShellTaskItem> Tasks { get; } = new();
@@ -80,6 +84,7 @@ public partial class ShellBarWindow : Window
         _startMenu = new StartMenuWindow(controlCenter, monitor);
         _taskSwitcher = new TaskSwitcherWindow(monitor);
         _sessionMenu = new SessionMenuWindow(monitor);
+        _notificationCenter = new NotificationCenterWindow(monitor);
 
         InitializeComponent();
         DataContext = this;
@@ -102,17 +107,27 @@ public partial class ShellBarWindow : Window
 
     private void OnLoaded(object sender, RoutedEventArgs e)
     {
+        ShellSettingsStore.SettingsChanged += OnShellSettingsChanged;
+        ShellNotificationService.Changed += OnNotificationsChanged;
         RefreshPinnedApps();
         Refresh();
         _refreshTimer.Start();
+
+        if (_monitor.IsPrimary)
+        {
+            ShellNotificationService.Publish("TuringDesk Shell 已就绪", "桌面、任务栏、Agent Kernel 与窗口管理已启动。", "shell");
+        }
     }
 
     private void OnClosed(object? sender, EventArgs e)
     {
         _refreshTimer.Stop();
+        ShellSettingsStore.SettingsChanged -= OnShellSettingsChanged;
+        ShellNotificationService.Changed -= OnNotificationsChanged;
         CloseOwnedPopup(_startMenu);
         CloseOwnedPopup(_taskSwitcher);
         CloseOwnedPopup(_sessionMenu);
+        CloseOwnedPopup(_notificationCenter);
         UnregisterShellHotkeys();
         UnregisterAppBar();
         _source?.RemoveHook(WndProc);
@@ -132,10 +147,22 @@ public partial class ShellBarWindow : Window
         }
     }
 
+    private void OnShellSettingsChanged()
+    {
+        Dispatcher.BeginInvoke(new Action(() =>
+        {
+            _settings = _settingsStore.Load();
+            RefreshPinnedApps();
+        }), DispatcherPriority.Background);
+    }
+
+    private void OnNotificationsChanged() => Dispatcher.BeginInvoke(new Action(RefreshNotificationIndicator), DispatcherPriority.Background);
+
     private void Refresh()
     {
         ClockText.Text = DateTime.Now.ToString("HH:mm");
         DateText.Text = DateTime.Now.ToString("yyyy/MM/dd");
+        RefreshNotificationIndicator();
 
         var status = SystemStatusService.Read();
         NetworkGlyph.Text = status.NetworkAvailable ? "●" : "○";
@@ -167,6 +194,9 @@ public partial class ShellBarWindow : Window
         }
     }
 
+    private void RefreshNotificationIndicator() =>
+        NotificationDot.Visibility = ShellNotificationService.Snapshot().Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+
     private void RefreshPinnedApps()
     {
         PinnedApps.Clear();
@@ -179,11 +209,7 @@ public partial class ShellBarWindow : Window
         }
     }
 
-    private void SavePins()
-    {
-        _settingsStore.Save(_settings);
-        RefreshPinnedApps();
-    }
+    private void SavePins() => _settingsStore.Save(_settings);
 
     private bool IsPinned(string target) => _settings.PinnedApps.Any(app =>
         string.Equals(app.Target, target, StringComparison.OrdinalIgnoreCase));
@@ -214,6 +240,7 @@ public partial class ShellBarWindow : Window
     {
         if (_startMenu.IsVisible) _startMenu.Hide();
         if (_sessionMenu.IsVisible) _sessionMenu.Hide();
+        if (_notificationCenter.IsVisible) _notificationCenter.Hide();
         _taskSwitcher.Toggle();
     }
 
@@ -221,7 +248,16 @@ public partial class ShellBarWindow : Window
     {
         if (_startMenu.IsVisible) _startMenu.Hide();
         if (_taskSwitcher.IsVisible) _taskSwitcher.Hide();
+        if (_notificationCenter.IsVisible) _notificationCenter.Hide();
         _sessionMenu.Toggle();
+    }
+
+    private void Notifications_Click(object sender, RoutedEventArgs e)
+    {
+        if (_startMenu.IsVisible) _startMenu.Hide();
+        if (_taskSwitcher.IsVisible) _taskSwitcher.Hide();
+        if (_sessionMenu.IsVisible) _sessionMenu.Hide();
+        _notificationCenter.Toggle();
     }
 
     private void HidePopups()
@@ -229,6 +265,7 @@ public partial class ShellBarWindow : Window
         if (_startMenu.IsVisible) _startMenu.Hide();
         if (_taskSwitcher.IsVisible) _taskSwitcher.Hide();
         if (_sessionMenu.IsVisible) _sessionMenu.Hide();
+        if (_notificationCenter.IsVisible) _notificationCenter.Hide();
     }
 
     private async void Pinned_Click(object sender, RoutedEventArgs e)
@@ -259,9 +296,54 @@ public partial class ShellBarWindow : Window
             _settings.PinnedApps.RemoveAll(candidate =>
                 string.Equals(candidate.Target, app.Target, StringComparison.OrdinalIgnoreCase));
             SavePins();
+            ShellNotificationService.Publish("已取消固定", app.Name, "shell");
         };
         menu.Items.Add(unpin);
         menu.IsOpen = true;
+        e.Handled = true;
+    }
+
+    private void Pinned_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        if (sender is not Button { Tag: string target }) return;
+        _pinDragTarget = target;
+        _pinDragStart = e.GetPosition(this);
+    }
+
+    private void Pinned_PreviewMouseMove(object sender, MouseEventArgs e)
+    {
+        if (e.LeftButton != MouseButtonState.Pressed || string.IsNullOrWhiteSpace(_pinDragTarget)) return;
+        var current = e.GetPosition(this);
+        if (Math.Abs(current.X - _pinDragStart.X) < SystemParameters.MinimumHorizontalDragDistance &&
+            Math.Abs(current.Y - _pinDragStart.Y) < SystemParameters.MinimumVerticalDragDistance)
+        {
+            return;
+        }
+
+        var target = _pinDragTarget;
+        _pinDragTarget = null;
+        var data = new DataObject(PinnedDragFormat, target);
+        _ = DragDrop.DoDragDrop((DependencyObject)sender, data, DragDropEffects.Move);
+    }
+
+    private void Pinned_Drop(object sender, DragEventArgs e)
+    {
+        if (sender is not Button { Tag: string dropTarget }) return;
+        if (!e.Data.GetDataPresent(PinnedDragFormat) || e.Data.GetData(PinnedDragFormat) is not string sourceTarget) return;
+        if (string.Equals(sourceTarget, dropTarget, StringComparison.OrdinalIgnoreCase)) return;
+
+        var source = _settings.PinnedApps.FirstOrDefault(app =>
+            string.Equals(app.Target, sourceTarget, StringComparison.OrdinalIgnoreCase));
+        if (source is null) return;
+
+        _settings.PinnedApps.Remove(source);
+        var targetIndex = _settings.PinnedApps.FindIndex(app =>
+            string.Equals(app.Target, dropTarget, StringComparison.OrdinalIgnoreCase));
+        if (targetIndex < 0) _settings.PinnedApps.Add(source);
+        else _settings.PinnedApps.Insert(targetIndex, source);
+
+        SavePins();
+        ShellNotificationService.Publish("任务栏顺序已更新", source.Name, "shell");
         e.Handled = true;
     }
 
@@ -290,6 +372,7 @@ public partial class ShellBarWindow : Window
             if (alreadyPinned || string.IsNullOrWhiteSpace(item.ProcessPath)) return;
             _settings.PinnedApps.Add(new PinnedShellApp(item.ProcessName, item.ProcessPath, item.ProcessPath));
             SavePins();
+            ShellNotificationService.Publish("已固定到任务栏", item.ProcessName, "shell");
         };
         menu.Items.Add(pin);
         menu.IsOpen = true;
@@ -320,6 +403,16 @@ public partial class ShellBarWindow : Window
             AgentBox.Clear();
             var reply = await _runtime.ChatAsync(text);
             AgentBox.ToolTip = string.IsNullOrWhiteSpace(reply) ? "Agent 暂时没有返回结果" : reply;
+            if (!string.IsNullOrWhiteSpace(reply))
+            {
+                var preview = reply.Length <= 140 ? reply : $"{reply[..140]}…";
+                ShellNotificationService.Publish("图灵已完成", preview, "agent");
+            }
+        }
+        catch (Exception ex)
+        {
+            AgentBox.ToolTip = "Agent 请求失败";
+            ShellNotificationService.Publish("图灵执行失败", ex.Message, "error");
         }
         finally
         {
