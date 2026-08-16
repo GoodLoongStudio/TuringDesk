@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.IO;
 using System.Windows;
 using System.Windows.Input;
 using Microsoft.Web.WebView2.Core;
@@ -38,7 +39,17 @@ public partial class HarnessConsoleWindow : Window
         try
         {
             var url = await HarnessWebUiService.EnsureRunningAsync(_loadCancellation.Token);
-            await HarnessView.EnsureCoreWebView2Async();
+
+            // MSI installs the application under Program Files. Keep Chromium/WebView2
+            // state in the user's writable profile rather than beside the executable.
+            var webViewProfile = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "TuringDesk",
+                "WebView2");
+            Directory.CreateDirectory(webViewProfile);
+            var environment = await CoreWebView2Environment.CreateAsync(userDataFolder: webViewProfile);
+            await HarnessView.EnsureCoreWebView2Async(environment);
+
             ConfigureBrowserSurface();
             HarnessView.Source = url;
         }
