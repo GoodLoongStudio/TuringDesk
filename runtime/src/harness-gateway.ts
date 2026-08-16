@@ -3,10 +3,12 @@ import { randomUUID } from 'node:crypto'
 import { resolve } from 'node:path'
 import { createBundledHarnessSpawnSpec } from './harness-runtime.js'
 
+export type AgentTraceSink = (kind: string, text: string) => void
+
 export interface AgentGateway {
   readonly mode: string
   ensureReady?(): Promise<void>
-  run(message: string): Promise<string>
+  run(message: string, onTrace?: AgentTraceSink): Promise<string>
   close?(): Promise<void>
 }
 
@@ -15,7 +17,8 @@ class MockGateway implements AgentGateway {
 
   async ensureReady(): Promise<void> {}
 
-  async run(message: string): Promise<string> {
+  async run(message: string, onTrace?: AgentTraceSink): Promise<string> {
+    onTrace?.('mock', 'Mock Runtime 正在生成本地响应')
     return `TuringDesk Mock received: “${message}”. Choose a model in Settings to run the full DeepSeek Harness agent kernel.`
   }
 }
@@ -41,6 +44,7 @@ type ActiveRun = {
   readonly sessionId: string
   readonly queued: JsonRpcFrame[]
   readonly events: unknown[]
+  readonly onTrace?: AgentTraceSink
   resolve(value: string): void
   reject(error: Error): void
   timer: ReturnType<typeof setTimeout>
@@ -66,15 +70,17 @@ class DeepSeekHarnessGateway implements AgentGateway {
     await this.start()
   }
 
-  async run(message: string): Promise<string> {
+  async run(message: string, onTrace?: AgentTraceSink): Promise<string> {
     await this.start()
     if (this.activeRun) throw new Error('TuringDesk supports one Harness turn at a time')
 
+    onTrace?.('harness', 'DeepSeek Harness 已接收桌面任务')
     return new Promise<string>((resolveRun, rejectRun) => {
       const run: ActiveRun = {
         sessionId: this.sessionId,
         queued: [],
         events: [],
+        onTrace,
         resolve: resolveRun,
         reject: rejectRun,
         receivedReceipt: false,
@@ -93,6 +99,7 @@ class DeepSeekHarnessGateway implements AgentGateway {
         }
 
         run.messageId = result.messageId
+        run.onTrace?.('harness', `Harness 会话已建立 · ${run.messageId.slice(0, 8)}`)
         for (const frame of run.queued.splice(0)) {
           this.processRunNotification(run, frame)
           if (this.activeRun !== run) break
@@ -293,6 +300,7 @@ class DeepSeekHarnessGateway implements AgentGateway {
         && isInboxReceipt(frame.params.event, run.messageId)) {
         run.receivedReceipt = true
         run.events.push(frame.params.event)
+        run.onTrace?.('harness', '请求已进入 Harness Agent 队列')
       }
       return
     }
@@ -301,6 +309,8 @@ class DeepSeekHarnessGateway implements AgentGateway {
       && isRecord(frame.params)
       && frame.params.sessionId === run.sessionId) {
       run.events.push(frame.params.event)
+      const trace = traceForHarnessEvent(frame.params.event)
+      if (trace) run.onTrace?.(trace.kind, trace.text)
       return
     }
 
@@ -308,6 +318,7 @@ class DeepSeekHarnessGateway implements AgentGateway {
       && isRecord(frame.params)
       && frame.params.sessionId === run.sessionId
       && frame.params.status === 'idle') {
+      run.onTrace?.('harness', 'Harness 会话进入 idle，正在收口结果')
       this.finishRun(run, undefined, finalResponse(run.events))
     }
   }
@@ -316,8 +327,13 @@ class DeepSeekHarnessGateway implements AgentGateway {
     if (this.activeRun !== run) return
     clearTimeout(run.timer)
     this.activeRun = undefined
-    if (error) run.reject(error)
-    else run.resolve(value || '(Harness completed without a final text response.)')
+    if (error) {
+      run.onTrace?.('error', error.message)
+      run.reject(error)
+    } else {
+      run.onTrace?.('complete', 'DeepSeek Harness 已完成本轮桌面任务')
+      run.resolve(value || '(Harness completed without a final text response.)')
+    }
   }
 
   private failRuntime(error: Error): void {
@@ -334,6 +350,27 @@ function isInboxReceipt(event: unknown, messageId: string): boolean {
   if (!isRecord(event) || event.type !== 'agent/inbox/spliced' || !isRecord(event.data)) return false
   const inserted = event.data.inserted
   return Array.isArray(inserted) && inserted.some((message) => isRecord(message) && message.id === messageId)
+}
+
+function traceForHarnessEvent(event: unknown): { kind: string; text: string } | undefined {
+  if (!isRecord(event) || typeof event.type !== 'string') return undefined
+  const type = event.type
+  const data = isRecord(event.data) ? event.data : undefined
+
+  if (type === 'assistant/message') return { kind: 'reply', text: '模型正在生成最终回复' }
+  if (type.includes('reason') || type.includes('thinking')) return { kind: 'reasoning', text: 'DeepSeek Harness 正在推理与规划' }
+  if (type.includes('tool') || type.includes('mcp')) {
+    const toolName = firstString(data?.toolName, data?.name, data?.tool, data?.method) ?? 'Windows MCP tool'
+    return { kind: 'tool', text: `调用 ${toolName}` }
+  }
+  if (type.includes('checkpoint')) return { kind: 'checkpoint', text: 'Harness 已保存执行检查点' }
+  if (type.includes('compact')) return { kind: 'context', text: 'Harness 正在整理上下文' }
+  if (type.includes('error')) return { kind: 'error', text: firstString(data?.message, data?.error) ?? `Harness 事件：${type}` }
+  return undefined
+}
+
+function firstString(...values: unknown[]): string | undefined {
+  return values.find((value): value is string => typeof value === 'string' && value.trim().length > 0)
 }
 
 function finalResponse(events: unknown[]): string {
