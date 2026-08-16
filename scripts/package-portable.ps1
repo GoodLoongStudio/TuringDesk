@@ -15,7 +15,14 @@ $ShellHostDir = Join-Path $PackageRoot "shellhost"
 $RuntimeAppDir = Join-Path $PackageRoot "runtime\app"
 $RuntimeNodeDir = Join-Path $PackageRoot "runtime\node"
 
+$NodeArchitecture = switch ($RuntimeIdentifier) {
+    "win-x64" { "x64" }
+    "win-arm64" { "arm64" }
+    default { throw "Unsupported Windows runtime identifier: $RuntimeIdentifier" }
+}
+
 Write-Host "Building $PackageName" -ForegroundColor Cyan
+Write-Host "Runtime architecture: $RuntimeIdentifier / Node $NodeArchitecture" -ForegroundColor Cyan
 
 if (Test-Path $PackageRoot) {
     Remove-Item $PackageRoot -Recurse -Force
@@ -34,7 +41,7 @@ finally {
     Pop-Location
 }
 
-Write-Host "Publishing self-contained Windows desktop..." -ForegroundColor Cyan
+Write-Host "Publishing self-contained Windows desktop for $RuntimeIdentifier..." -ForegroundColor Cyan
 $DesktopProject = Join-Path $Root "src\TuringDesk.Desktop\TuringDesk.Desktop.csproj"
 dotnet publish $DesktopProject `
     --configuration $Configuration `
@@ -45,7 +52,7 @@ dotnet publish $DesktopProject `
     -p:DebugSymbols=false `
     --output $DesktopDir
 
-Write-Host "Publishing resilient replacement ShellHost..." -ForegroundColor Cyan
+Write-Host "Publishing resilient replacement ShellHost for $RuntimeIdentifier..." -ForegroundColor Cyan
 $ShellHostProject = Join-Path $Root "src\TuringDesk.ShellHost\TuringDesk.ShellHost.csproj"
 dotnet publish $ShellHostProject `
     --configuration $Configuration `
@@ -70,14 +77,14 @@ finally {
     Pop-Location
 }
 
-Write-Host "Downloading embedded Node.js $NodeVersion..." -ForegroundColor Cyan
+Write-Host "Downloading embedded Node.js $NodeVersion for Windows $NodeArchitecture..." -ForegroundColor Cyan
 $TempRoot = if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { $env:TEMP }
-$NodeZip = Join-Path $TempRoot "node-$NodeVersion-win-x64.zip"
-$NodeExtract = Join-Path $TempRoot "node-$NodeVersion-win-x64"
+$NodeZip = Join-Path $TempRoot "node-$NodeVersion-win-$NodeArchitecture.zip"
+$NodeExtract = Join-Path $TempRoot "node-$NodeVersion-win-$NodeArchitecture"
 if (Test-Path $NodeExtract) { Remove-Item $NodeExtract -Recurse -Force }
-Invoke-WebRequest "https://nodejs.org/dist/v$NodeVersion/node-v$NodeVersion-win-x64.zip" -OutFile $NodeZip
+Invoke-WebRequest "https://nodejs.org/dist/v$NodeVersion/node-v$NodeVersion-win-$NodeArchitecture.zip" -OutFile $NodeZip
 Expand-Archive $NodeZip -DestinationPath $NodeExtract -Force
-$NodeSource = Join-Path $NodeExtract "node-v$NodeVersion-win-x64"
+$NodeSource = Join-Path $NodeExtract "node-v$NodeVersion-win-$NodeArchitecture"
 $EmbeddedNode = Join-Path $RuntimeNodeDir "node.exe"
 Copy-Item (Join-Path $NodeSource "node.exe") $EmbeddedNode -Force
 if (Test-Path (Join-Path $NodeSource "LICENSE")) {
@@ -100,7 +107,10 @@ if (Test-Path (Join-Path $Root "packaging\THIRD-PARTY-NOTICES.txt")) {
 }
 
 foreach ($Required in @(
+    (Join-Path $DesktopDir "TuringDesk.Desktop.exe"),
     (Join-Path $ShellHostDir "TuringDesk.ShellHost.exe"),
+    $EmbeddedNode,
+    (Join-Path $RuntimeAppDir "harness\turingdesk.cordis.yml"),
     (Join-Path $PackageRoot "Enable-TuringDeskShell.ps1"),
     (Join-Path $PackageRoot "Restore-Explorer.ps1")
 )) {
@@ -109,10 +119,16 @@ foreach ($Required in @(
     }
 }
 
+$DetectedNodeArch = (& $EmbeddedNode -p "process.arch").Trim()
+if ($DetectedNodeArch -ne $NodeArchitecture) {
+    throw "Embedded Node architecture mismatch. Expected $NodeArchitecture, got $DetectedNodeArch"
+}
+
 $BuildInfo = @"
 TuringDesk $Version
 Runtime: $RuntimeIdentifier
-Node: $NodeVersion
+Architecture: $NodeArchitecture
+Node: $NodeVersion ($DetectedNodeArch)
 DeepSeek Harness: 0.1.0-rc.6
 Shell mode: Windows Custom User Interface (current-user policy)
 Shell host: shellhost/TuringDesk.ShellHost.exe
