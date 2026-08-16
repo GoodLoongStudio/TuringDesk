@@ -18,7 +18,7 @@ public static class SystemStatusService
         var network = NetworkInterface.GetIsNetworkAvailable();
         var hasPower = GetSystemPowerStatus(out var power);
         var hasBattery = hasPower && power.BatteryFlag != 128 && power.BatteryLifePercent != 255;
-        var percent = hasBattery ? Math.Clamp((int)power.BatteryLifePercent, 0, 100) : null;
+        int? percent = hasBattery ? Math.Clamp((int)power.BatteryLifePercent, 0, 100) : null;
         var charging = hasBattery && (power.BatteryFlag & 8) != 0;
 
         return new ShellSystemStatus(
