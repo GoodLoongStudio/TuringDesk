@@ -71,9 +71,13 @@ jobs:
         shell: pwsh
         run: |
           dotnet restore src/TuringDesk.Desktop/TuringDesk.Desktop.csproj
+          if ($LASTEXITCODE -ne 0) { throw "Desktop restore failed: $LASTEXITCODE" }
           dotnet build src/TuringDesk.Desktop/TuringDesk.Desktop.csproj --configuration Release --no-restore
+          if ($LASTEXITCODE -ne 0) { throw "Desktop build failed: $LASTEXITCODE" }
           dotnet restore src/TuringDesk.ShellHost/TuringDesk.ShellHost.csproj
+          if ($LASTEXITCODE -ne 0) { throw "ShellHost restore failed: $LASTEXITCODE" }
           dotnet build src/TuringDesk.ShellHost/TuringDesk.ShellHost.csproj --configuration Release --no-restore
+          if ($LASTEXITCODE -ne 0) { throw "ShellHost build failed: $LASTEXITCODE" }
 
       - run: corepack enable
 
