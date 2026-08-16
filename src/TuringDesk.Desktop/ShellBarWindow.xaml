@@ -40,9 +40,11 @@
                         <Button Tag="{Binding Target}" Click="Pinned_Click" MouseRightButtonUp="Pinned_MouseRightButtonUp" PreviewMouseLeftButtonDown="Pinned_PreviewMouseLeftButtonDown" PreviewMouseMove="Pinned_PreviewMouseMove" Drop="Pinned_Drop" AllowDrop="True" Width="40" Height="42" Padding="0" Margin="0,0,3,0" ToolTip="{Binding Name}">
                             <Grid>
                                 <Image Source="{Binding Icon}" Width="22" Height="22" Stretch="Uniform" RenderOptions.BitmapScalingMode="HighQuality"/>
-                                <TextBlock Text="{Binding Glyph}" FontSize="15" HorizontalAlignment="Center" VerticalAlignment="Center" Foreground="#AAB4C8">
-                                    <TextBlock.Style><Style TargetType="TextBlock"><Setter Property="Visibility" Value="Collapsed"/><Style.Triggers><DataTrigger Binding="{Binding Icon}" Value="{x:Null}"><Setter Property="Visibility" Value="Visible"/></DataTrigger></Style.Triggers></Style></TextBlock.Style>
-                                </TextBlock>
+                                <local:ShellIcon Kind="App" Width="19" Height="19" Foreground="#AAB4C8" HorizontalAlignment="Center" VerticalAlignment="Center">
+                                    <local:ShellIcon.Style>
+                                        <Style TargetType="local:ShellIcon"><Setter Property="Visibility" Value="Collapsed"/><Style.Triggers><DataTrigger Binding="{Binding Icon}" Value="{x:Null}"><Setter Property="Visibility" Value="Visible"/></DataTrigger></Style.Triggers></Style>
+                                    </local:ShellIcon.Style>
+                                </local:ShellIcon>
                             </Grid>
                         </Button>
                     </DataTemplate>
@@ -71,7 +73,7 @@
                     <Grid.ColumnDefinitions><ColumnDefinition Width="76"/><ColumnDefinition Width="*"/><ColumnDefinition Width="40"/></Grid.ColumnDefinitions>
                     <local:AgentStatusBadge Margin="3"/>
                     <TextBox Grid.Column="1" x:Name="AgentBox" BorderThickness="0" Background="Transparent" Padding="3,8" VerticalContentAlignment="Center" KeyDown="AgentBox_KeyDown" ToolTip="直接告诉图灵你想做什么"/>
-                    <Button Grid.Column="2" Content="→" Margin="4" Padding="0" Click="AgentSend_Click"/>
+                    <Button Grid.Column="2" Margin="4" Padding="0" Click="AgentSend_Click" ToolTip="发送给图灵"><local:ShellIcon Kind="ArrowRight" Width="17" Height="17" Foreground="#B7C1D5"/></Button>
                 </Grid>
             </Border>
 
