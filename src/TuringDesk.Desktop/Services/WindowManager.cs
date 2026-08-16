@@ -9,6 +9,7 @@ public sealed record WindowSnapshot(
     string Title,
     int ProcessId,
     string ProcessName,
+    string? ProcessPath,
     int X,
     int Y,
     int Width,
@@ -129,10 +130,7 @@ public sealed class WindowManager
 
     public bool Move(string handle, int x, int y)
     {
-        if (!TryResolveHandle(handle, out var hWnd) || !TryGetRect(hWnd, out var rect) || !IsManageableWindow(hWnd))
-        {
-            return false;
-        }
+        if (!TryResolveHandle(handle, out var hWnd) || !TryGetRect(hWnd, out var rect) || !IsManageableWindow(hWnd)) return false;
 
         var area = GetWorkArea();
         var width = rect.Right - rect.Left;
@@ -146,10 +144,7 @@ public sealed class WindowManager
 
     public bool Resize(string handle, int width, int height)
     {
-        if (!TryResolveHandle(handle, out var hWnd) || !TryGetRect(hWnd, out var rect) || !IsManageableWindow(hWnd))
-        {
-            return false;
-        }
+        if (!TryResolveHandle(handle, out var hWnd) || !TryGetRect(hWnd, out var rect) || !IsManageableWindow(hWnd)) return false;
 
         var area = GetWorkArea();
         var safeWidth = Math.Clamp(width, 320, Math.Max(320, area.Right - area.Left));
@@ -191,10 +186,20 @@ public sealed class WindowManager
         if (processIdRaw == 0 || processIdRaw > int.MaxValue) return null;
         var processId = (int)processIdRaw;
         var processName = "unknown";
+        string? processPath = null;
 
         try
         {
-            processName = Process.GetProcessById(processId).ProcessName;
+            using var process = Process.GetProcessById(processId);
+            processName = process.ProcessName;
+            try
+            {
+                processPath = process.MainModule?.FileName;
+            }
+            catch
+            {
+                // Protected/elevated processes can deny access to their image path.
+            }
         }
         catch
         {
@@ -206,6 +211,7 @@ public sealed class WindowManager
             GetTitle(hWnd),
             processId,
             processName,
+            processPath,
             rect.Left,
             rect.Top,
             rect.Right - rect.Left,
@@ -243,62 +249,25 @@ public sealed class WindowManager
     private static NativeRect GetWorkArea()
     {
         if (SystemParametersInfo(SpiGetWorkArea, 0, out var area, 0)) return area;
-        return new NativeRect
-        {
-            Left = 0,
-            Top = 0,
-            Right = GetSystemMetrics(0),
-            Bottom = GetSystemMetrics(1)
-        };
+        return new NativeRect { Left = 0, Top = 0, Right = GetSystemMetrics(0), Bottom = GetSystemMetrics(1) };
     }
 
     private delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
 
     [StructLayout(LayoutKind.Sequential)]
-    private struct NativeRect
-    {
-        public int Left;
-        public int Top;
-        public int Right;
-        public int Bottom;
-    }
+    private struct NativeRect { public int Left; public int Top; public int Right; public int Bottom; }
 
-    [DllImport("user32.dll")]
-    private static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
-
-    [DllImport("user32.dll")]
-    private static extern bool IsWindowVisible(IntPtr hWnd);
-
-    [DllImport("user32.dll")]
-    private static extern bool IsWindow(IntPtr hWnd);
-
-    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
-    private static extern int GetWindowText(IntPtr hWnd, StringBuilder lpString, int nMaxCount);
-
-    [DllImport("user32.dll")]
-    private static extern int GetWindowTextLength(IntPtr hWnd);
-
-    [DllImport("user32.dll")]
-    private static extern bool GetWindowRect(IntPtr hWnd, out NativeRect lpRect);
-
-    [DllImport("user32.dll")]
-    private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
-
-    [DllImport("user32.dll")]
-    private static extern bool MoveWindow(IntPtr hWnd, int x, int y, int width, int height, bool repaint);
-
-    [DllImport("user32.dll")]
-    private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
-
-    [DllImport("user32.dll")]
-    private static extern bool SetForegroundWindow(IntPtr hWnd);
-
-    [DllImport("user32.dll")]
-    private static extern IntPtr GetForegroundWindow();
-
-    [DllImport("user32.dll", SetLastError = true)]
-    private static extern bool SystemParametersInfo(uint uiAction, uint uiParam, out NativeRect pvParam, uint fWinIni);
-
-    [DllImport("user32.dll")]
-    private static extern int GetSystemMetrics(int nIndex);
+    [DllImport("user32.dll")] private static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
+    [DllImport("user32.dll")] private static extern bool IsWindowVisible(IntPtr hWnd);
+    [DllImport("user32.dll")] private static extern bool IsWindow(IntPtr hWnd);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern int GetWindowText(IntPtr hWnd, StringBuilder lpString, int nMaxCount);
+    [DllImport("user32.dll")] private static extern int GetWindowTextLength(IntPtr hWnd);
+    [DllImport("user32.dll")] private static extern bool GetWindowRect(IntPtr hWnd, out NativeRect lpRect);
+    [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
+    [DllImport("user32.dll")] private static extern bool MoveWindow(IntPtr hWnd, int x, int y, int width, int height, bool repaint);
+    [DllImport("user32.dll")] private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+    [DllImport("user32.dll")] private static extern bool SetForegroundWindow(IntPtr hWnd);
+    [DllImport("user32.dll")] private static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll", SetLastError = true)] private static extern bool SystemParametersInfo(uint uiAction, uint uiParam, out NativeRect pvParam, uint fWinIni);
+    [DllImport("user32.dll")] private static extern int GetSystemMetrics(int nIndex);
 }
