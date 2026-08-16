@@ -115,7 +115,7 @@ public sealed class WindowManager
     public int MinimizeAll()
     {
         var count = 0;
-        EnumWindows((hWnd, _) =>
+        EnumWindows((hWnd, ignored) =>
         {
             if (IsManageableWindow(hWnd))
             {
