@@ -8,7 +8,7 @@
         Background="#0B0D12"
         Foreground="{StaticResource TextBrush}"
         FontFamily="Segoe UI Variable, Segoe UI">
-    <Grid>
+    <Grid x:Name="DesktopRoot">
         <Grid.Background>
             <RadialGradientBrush Center="0.18,0.14" GradientOrigin="0.18,0.14" RadiusX="0.9" RadiusY="0.9">
                 <GradientStop Color="#20284D" Offset="0"/>
@@ -16,6 +16,18 @@
                 <GradientStop Color="#0B0D12" Offset="1"/>
             </RadialGradientBrush>
         </Grid.Background>
+        <Grid.ContextMenu>
+            <ContextMenu>
+                <MenuItem Header="刷新" Click="Refresh_Click"/>
+                <MenuItem Header="新建文件夹" Click="NewFolder_Click"/>
+                <MenuItem Header="打开桌面文件夹" Click="OpenDesktopFolder_Click"/>
+                <Separator/>
+                <MenuItem Header="显示设置" Click="DisplaySettings_Click"/>
+                <MenuItem Header="个性化 / 壁纸" Click="Personalize_Click"/>
+                <Separator/>
+                <MenuItem Header="打开图灵控制中心" Click="ControlCenter_Click"/>
+            </ContextMenu>
+        </Grid.ContextMenu>
 
         <Grid Margin="24,20,24,78">
             <Grid.RowDefinitions>
@@ -62,12 +74,6 @@
                      ScrollViewer.VerticalScrollBarVisibility="Auto"
                      ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                      MouseDoubleClick="DesktopItemsList_MouseDoubleClick">
-                <ListBox.ContextMenu>
-                    <ContextMenu>
-                        <MenuItem Header="刷新" Click="Refresh_Click"/>
-                        <MenuItem Header="打开桌面文件夹" Click="OpenDesktopFolder_Click"/>
-                    </ContextMenu>
-                </ListBox.ContextMenu>
                 <ListBox.ItemsPanel>
                     <ItemsPanelTemplate>
                         <WrapPanel Orientation="Horizontal"/>
@@ -136,7 +142,7 @@
             </ListBox>
 
             <Border x:Name="DesktopHint" Grid.Row="2" HorizontalAlignment="Left" Background="#181D29" BorderBrush="#30394F" BorderThickness="1" CornerRadius="12" Padding="12,7" Margin="4,14,0,0">
-                <TextBlock Text="双击桌面项目直接打开 · 底部任务栏可以搜索应用、切换窗口或直接问图灵" Foreground="#9AA5BC" FontSize="10.5"/>
+                <TextBlock Text="右键桌面可刷新、新建文件夹或进入个性化 · 底部任务栏可以切换窗口或直接问图灵" Foreground="#9AA5BC" FontSize="10.5"/>
             </Border>
         </Grid>
     </Grid>
