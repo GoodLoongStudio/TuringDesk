@@ -13,14 +13,15 @@ DIRECT INSTALL FLOW
 v0.9 no longer ships Preview or normal-app entry points in the user-facing package.
 1. Extract the entire ARM64 archive.
 2. Double-click Install-TuringDesk.cmd.
-3. TuringDesk copies itself to %LOCALAPPDATA%\TuringDesk\Shell and configures the CURRENT USER replacement Shell.
+3. TuringDesk stages the new build under %LOCALAPPDATA%\TuringDesk\Versions\<version-build> and points the CURRENT USER replacement Shell at that staged ShellHost. This allows installing a new TuringDesk build while an older Shell build is still running.
 4. TuringDesk asks whether to sign out now.
-5. Choose Yes to sign out immediately; the next sign-in enters TuringDesk directly instead of Explorer.
+5. Choose Yes to sign out immediately; the next sign-in enters the newly installed TuringDesk directly instead of Explorer.
 6. Choose No only if you want to postpone the new Shell until a later sign-out/sign-in.
 
 NEW IN v0.9
 - ARM64 is the only produced Windows package/artifact.
 - The package is direct replacement-shell only; Preview-TuringDeskShell and Start-TuringDesk are intentionally not shipped.
+- Direct upgrades use versioned staging instead of overwriting the currently running Shell binaries.
 - A Wallpaper Engine-inspired Desktop DIY Center is accessible from the taskbar Settings button and the Control Center Settings button.
 - DIY properties persist in %LOCALAPPDATA%\TuringDesk\shell-settings.json and update the live shell.
 - Customization includes wallpaper source/path/fill, accent color, taskbar opacity, Agent card enable/opacity/auto-hide/side, plus reusable visual presets.
@@ -74,8 +75,8 @@ SHELL ACTIVATION / SIGN-OUT
 Install-TuringDesk.cmd is the user-facing entry point.
 Internally it invokes Enable-TuringDeskShell.ps1.
 After install/update TuringDesk asks whether the user wants to sign out immediately.
-- Yes: current user signs out and the replacement Shell takes effect on next sign-in.
-- No: current session continues and the new Shell waits until a later sign-out/sign-in.
+- Yes: current user signs out and the staged replacement Shell takes effect on next sign-in.
+- No: current session continues and the staged new Shell waits until a later sign-out/sign-in.
 
 RECOVERY
 Normal recovery:
@@ -86,13 +87,14 @@ Emergency recovery:
 1. Press Ctrl+Shift+Esc to open Task Manager.
 2. Run a new task: powershell
 3. Execute:
-   & "$env:LOCALAPPDATA\TuringDesk\Shell\Restore-Explorer.ps1"
+   & "$env:LOCALAPPDATA\TuringDesk\Restore-Explorer.ps1"
 4. Sign out/sign in if required.
 
 AUTOMATIC FAIL-SAFE
 - ShellHost supervises TuringDesk Desktop.
 - Repeated early shell exits cause automatic current-user Explorer recovery.
 - Recovery state is stored under HKCU\Software\TuringDesk\Shell.
+- The currently selected version directory is recorded in the same state key.
 - TuringDesk does not overwrite the machine-wide Winlogon Shell value.
 
 SAFETY BOUNDARY
