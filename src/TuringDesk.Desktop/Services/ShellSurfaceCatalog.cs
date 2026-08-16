@@ -11,14 +11,16 @@ public sealed record DesktopSurfaceItem(
     string Kind,
     string Subtitle,
     bool IsDirectory,
-    ImageSource? Icon);
+    ImageSource? Icon,
+    string IconKind = "File");
 
 public sealed record StartAppItem(
     string Name,
     string Target,
     string Glyph,
     string Category,
-    ImageSource? Icon);
+    ImageSource? Icon,
+    string IconKind = "App");
 
 public static class ShellSurfaceCatalog
 {
@@ -49,7 +51,8 @@ public static class ShellSurfaceCatalog
                         "folder",
                         "文件夹",
                         true,
-                        ShellIconService.GetIcon(directory, large: true)));
+                        ShellIconService.GetIcon(directory, large: true),
+                        "Folder"));
                 }
 
                 foreach (var file in Directory.EnumerateFiles(root))
@@ -64,7 +67,8 @@ public static class ShellSurfaceCatalog
                         extension.TrimStart('.'),
                         SubtitleForExtension(extension),
                         false,
-                        ShellIconService.GetIcon(file, large: true)));
+                        ShellIconService.GetIcon(file, large: true),
+                        IconKindForExtension(extension)));
                 }
             }
             catch
@@ -88,10 +92,10 @@ public static class ShellSurfaceCatalog
 
         var items = new Dictionary<string, StartAppItem>(StringComparer.CurrentCultureIgnoreCase)
         {
-            ["设置"] = new("设置", "ms-settings:", "⚙", "系统", null),
-            ["文件"] = new("文件", userProfile, "▣", "系统", ShellIconService.GetIcon(userProfile, large: false)),
-            ["文档"] = new("文档", documents, "≡", "文件夹", ShellIconService.GetIcon(documents, large: false)),
-            ["下载"] = new("下载", downloads, "↓", "文件夹", ShellIconService.GetIcon(downloads, large: false))
+            ["设置"] = new("设置", "ms-settings:", "⚙", "系统", null, "Settings"),
+            ["文件"] = new("文件", userProfile, "▣", "系统", ShellIconService.GetIcon(userProfile, large: false), "Folder"),
+            ["文档"] = new("文档", documents, "≡", "文件夹", ShellIconService.GetIcon(documents, large: false), "Folder"),
+            ["下载"] = new("下载", downloads, "↓", "文件夹", ShellIconService.GetIcon(downloads, large: false), "Folder")
         };
 
         var roots = new[]
@@ -122,7 +126,8 @@ public static class ShellSurfaceCatalog
                         file,
                         "◆",
                         category,
-                        ShellIconService.GetIcon(file, large: false)));
+                        ShellIconService.GetIcon(file, large: false),
+                        "App"));
                 }
             }
             catch
@@ -213,6 +218,13 @@ public static class ShellSurfaceCatalog
             return true;
         }
     }
+
+    private static string IconKindForExtension(string extension) => extension switch
+    {
+        ".txt" or ".md" or ".doc" or ".docx" or ".pdf" => "TextFile",
+        ".lnk" or ".url" or ".appref-ms" or ".exe" or ".msi" => "App",
+        _ => "File"
+    };
 
     private static string GlyphForExtension(string extension) => extension switch
     {
