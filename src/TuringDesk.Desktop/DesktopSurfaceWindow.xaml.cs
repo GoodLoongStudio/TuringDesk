@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Collections.Specialized;
 using System.IO;
 using System.Windows;
 using System.Windows.Controls;
@@ -6,6 +7,8 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
 using System.Windows.Threading;
+using Microsoft.VisualBasic;
+using Microsoft.VisualBasic.FileIO;
 using TuringDesk.Desktop.Services;
 
 namespace TuringDesk.Desktop;
@@ -235,20 +238,153 @@ public partial class DesktopSurfaceWindow : Window
         DesktopItemsList.SelectedItem = item;
 
         var menu = new ContextMenu();
-        var open = new MenuItem { Header = "打开" };
+        var open = CreateMenuItem("打开", "OpenFolder");
         open.Click += (_, _) => _ = ShellSurfaceCatalog.OpenTarget(item.Path);
         menu.Items.Add(open);
 
-        var location = new MenuItem { Header = "打开文件所在位置" };
+        var location = CreateMenuItem("打开文件所在位置", "Folder");
         location.Click += (_, _) => _ = ShellSurfaceCatalog.OpenContainingFolder(item.Path);
         menu.Items.Add(location);
 
         menu.Items.Add(new Separator());
-        var properties = new MenuItem { Header = "属性" };
+        var copy = CreateMenuItem("复制", "Copy", "Ctrl+C");
+        copy.Click += (_, _) => CopyItemToClipboard(item);
+        menu.Items.Add(copy);
+
+        var rename = CreateMenuItem("重命名", "Rename", "F2");
+        rename.Click += async (_, _) => await RenameItemAsync(item);
+        menu.Items.Add(rename);
+
+        var recycle = CreateMenuItem("删除到回收站", "Delete", "Delete");
+        recycle.Click += async (_, _) => await RecycleItemAsync(item);
+        menu.Items.Add(recycle);
+
+        menu.Items.Add(new Separator());
+        var properties = CreateMenuItem("属性", "Properties");
         properties.Click += (_, _) => _ = ShellSurfaceCatalog.ShowProperties(item.Path);
         menu.Items.Add(properties);
         menu.IsOpen = true;
         e.Handled = true;
+    }
+
+    private static MenuItem CreateMenuItem(string header, string iconKind, string? gesture = null) => new()
+    {
+        Header = header,
+        InputGestureText = gesture ?? string.Empty,
+        Icon = new ShellIcon { Kind = iconKind, Width = 16, Height = 16, Foreground = new SolidColorBrush(Color.FromRgb(174, 184, 203)) }
+    };
+
+    private void DesktopItemsList_KeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.V && Keyboard.Modifiers.HasFlag(ModifierKeys.Control))
+        {
+            e.Handled = true;
+            _ = PasteFromClipboardAsync();
+            return;
+        }
+
+        if (DesktopItemsList.SelectedItem is not DesktopSurfaceItem item) return;
+
+        if (e.Key == Key.Enter)
+        {
+            e.Handled = true;
+            _ = ShellSurfaceCatalog.OpenTarget(item.Path);
+        }
+        else if (e.Key == Key.F2)
+        {
+            e.Handled = true;
+            _ = RenameItemAsync(item);
+        }
+        else if (e.Key == Key.Delete)
+        {
+            e.Handled = true;
+            _ = RecycleItemAsync(item);
+        }
+        else if (e.Key == Key.C && Keyboard.Modifiers.HasFlag(ModifierKeys.Control))
+        {
+            e.Handled = true;
+            CopyItemToClipboard(item);
+        }
+    }
+
+    private void CopyItemToClipboard(DesktopSurfaceItem item)
+    {
+        try
+        {
+            var paths = new StringCollection { item.Path };
+            Clipboard.SetFileDropList(paths);
+            ShellNotificationService.Publish("已复制", item.Name, "shell");
+        }
+        catch
+        {
+            ShellNotificationService.Publish("复制失败", "Windows 剪贴板当前不可用。", "warning");
+        }
+    }
+
+    private async Task RenameItemAsync(DesktopSurfaceItem item)
+    {
+        var oldPath = item.Path;
+        if (!File.Exists(oldPath) && !Directory.Exists(oldPath)) return;
+
+        var oldFileName = Path.GetFileName(oldPath);
+        var extension = item.IsDirectory ? string.Empty : Path.GetExtension(oldFileName);
+        var defaultName = item.IsDirectory ? oldFileName : Path.GetFileNameWithoutExtension(oldFileName);
+        var entered = Interaction.InputBox("输入新的名称：", "TuringDesk · 重命名", defaultName).Trim();
+        if (string.IsNullOrWhiteSpace(entered) || entered == defaultName) return;
+        if (entered.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)
+        {
+            MessageBox.Show("名称包含 Windows 不允许的字符。", "TuringDesk", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        var newFileName = item.IsDirectory || !string.IsNullOrWhiteSpace(Path.GetExtension(entered))
+            ? entered
+            : entered + extension;
+        var destination = Path.Combine(Path.GetDirectoryName(oldPath) ?? string.Empty, newFileName);
+        if (File.Exists(destination) || Directory.Exists(destination))
+        {
+            MessageBox.Show("同名文件或文件夹已经存在。", "TuringDesk", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        try
+        {
+            if (item.IsDirectory) Directory.Move(oldPath, destination);
+            else File.Move(oldPath, destination);
+            await RefreshSurfaceAsync();
+            DesktopItemsList.SelectedItem = DesktopItems.FirstOrDefault(candidate =>
+                string.Equals(candidate.Path, destination, StringComparison.OrdinalIgnoreCase));
+            ShellNotificationService.Publish("已重命名", Path.GetFileName(destination), "shell");
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"无法重命名：{ex.Message}", "TuringDesk", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+    }
+
+    private async Task RecycleItemAsync(DesktopSurfaceItem item)
+    {
+        if (!File.Exists(item.Path) && !Directory.Exists(item.Path)) return;
+        var result = MessageBox.Show($"将“{item.Name}”移动到回收站？", "TuringDesk", MessageBoxButton.YesNo, MessageBoxImage.Question);
+        if (result != MessageBoxResult.Yes) return;
+
+        try
+        {
+            if (item.IsDirectory)
+            {
+                FileSystem.DeleteDirectory(item.Path, UIOption.OnlyErrorDialogs, RecycleOption.SendToRecycleBin, UICancelOption.DoNothing);
+            }
+            else
+            {
+                FileSystem.DeleteFile(item.Path, UIOption.OnlyErrorDialogs, RecycleOption.SendToRecycleBin, UICancelOption.DoNothing);
+            }
+            await RefreshSurfaceAsync();
+            ShellNotificationService.Publish("已移至回收站", item.Name, "shell");
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"无法移动到回收站：{ex.Message}", "TuringDesk", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
     }
 
     private void DesktopItemsList_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
@@ -306,8 +442,15 @@ public partial class DesktopSurfaceWindow : Window
     {
         if (!_showDesktopItems || !e.Data.GetDataPresent(DataFormats.FileDrop)) return;
         if (e.Data.GetData(DataFormats.FileDrop) is not string[] paths || paths.Length == 0) return;
+        await CopyPathsToDesktopAsync(paths);
+    }
 
-        var result = await ShellFileTransferService.CopyToDesktopAsync(paths);
+    private async Task CopyPathsToDesktopAsync(IEnumerable<string> paths)
+    {
+        var materialized = paths.Where(path => !string.IsNullOrWhiteSpace(path)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        if (materialized.Length == 0) return;
+
+        var result = await ShellFileTransferService.CopyToDesktopAsync(materialized);
         await RefreshSurfaceAsync();
 
         var summary = $"复制 {result.Copied} 项";
@@ -316,20 +459,30 @@ public partial class DesktopSurfaceWindow : Window
         ShellNotificationService.Publish("桌面文件投放完成", summary, result.Failed > 0 ? "warning" : "shell");
     }
 
+    private async Task PasteFromClipboardAsync()
+    {
+        try
+        {
+            if (!Clipboard.ContainsFileDropList())
+            {
+                ShellNotificationService.Publish("没有可粘贴的文件", "先从文件管理器或桌面复制文件/文件夹。", "shell");
+                return;
+            }
+            await CopyPathsToDesktopAsync(Clipboard.GetFileDropList().Cast<string>());
+        }
+        catch
+        {
+            ShellNotificationService.Publish("粘贴失败", "Windows 剪贴板当前不可用。", "warning");
+        }
+    }
+
     private void ControlCenter_Click(object sender, RoutedEventArgs e) => _controlCenter.ShowControlCenter();
 
     private async void Refresh_Click(object sender, RoutedEventArgs e) => await RefreshSurfaceAsync();
 
     private async void NewFolder_Click(object sender, RoutedEventArgs e)
     {
-        var desktop = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
-        var candidate = Path.Combine(desktop, "新建文件夹");
-        var suffix = 2;
-        while (Directory.Exists(candidate) || File.Exists(candidate))
-        {
-            candidate = Path.Combine(desktop, $"新建文件夹 ({suffix++})");
-        }
-
+        var candidate = CreateUniqueDesktopPath("新建文件夹", string.Empty);
         try
         {
             Directory.CreateDirectory(candidate);
@@ -341,6 +494,35 @@ public partial class DesktopSurfaceWindow : Window
             MessageBox.Show("无法在桌面创建文件夹。", "TuringDesk", MessageBoxButton.OK, MessageBoxImage.Warning);
         }
     }
+
+    private async void NewTextFile_Click(object sender, RoutedEventArgs e)
+    {
+        var candidate = CreateUniqueDesktopPath("新建文本文档", ".txt");
+        try
+        {
+            await File.WriteAllTextAsync(candidate, string.Empty);
+            await RefreshSurfaceAsync();
+            ShellNotificationService.Publish("已创建文本文档", Path.GetFileName(candidate), "shell");
+        }
+        catch
+        {
+            MessageBox.Show("无法在桌面创建文本文档。", "TuringDesk", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+    }
+
+    private static string CreateUniqueDesktopPath(string baseName, string extension)
+    {
+        var desktop = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
+        var candidate = Path.Combine(desktop, baseName + extension);
+        var suffix = 2;
+        while (Directory.Exists(candidate) || File.Exists(candidate))
+        {
+            candidate = Path.Combine(desktop, $"{baseName} ({suffix++}){extension}");
+        }
+        return candidate;
+    }
+
+    private async void Paste_Click(object sender, RoutedEventArgs e) => await PasteFromClipboardAsync();
 
     private void OpenDesktopFolder_Click(object sender, RoutedEventArgs e)
     {
