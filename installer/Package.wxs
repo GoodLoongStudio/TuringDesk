@@ -49,9 +49,27 @@
       </Directory>
     </StandardDirectory>
 
+    <StandardDirectory Id="DesktopFolder">
+      <Component Id="DesktopShortcut" Guid="*">
+        <Shortcut Id="TuringDeskDesktopShortcut"
+                  Name="TuringDesk"
+                  Description="TuringDesk AI desktop"
+                  Target="[INSTALLFOLDER]desktop\TuringDesk.Desktop.exe"
+                  WorkingDirectory="INSTALLFOLDER"
+                  Icon="TuringDesk.ico" />
+        <RegistryValue Root="HKCU"
+                       Key="Software\GoodLoongStudio\TuringDesk"
+                       Name="DesktopShortcutInstalled"
+                       Type="integer"
+                       Value="1"
+                       KeyPath="yes" />
+      </Component>
+    </StandardDirectory>
+
     <Feature Id="MainFeature" Title="TuringDesk" Level="1">
       <Files Include="$(PayloadRoot)\**" Directory="INSTALLFOLDER" />
       <ComponentRef Id="StartMenuShortcuts" />
+      <ComponentRef Id="DesktopShortcut" />
     </Feature>
 
     <Icon Id="TuringDesk.ico" SourceFile="$(PayloadRoot)\TuringDesk.ico" />
