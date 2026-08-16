@@ -3,6 +3,10 @@
   "version": "0.2.0",
   "private": true,
   "type": "module",
+  "files": [
+    "dist",
+    "harness"
+  ],
   "scripts": {
     "dev": "tsx watch src/server.ts",
     "start": "node dist/server.js",
