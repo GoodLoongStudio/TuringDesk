@@ -24,7 +24,7 @@ function Confirm-TuringDeskLogoff {
 
     try {
         $popup = New-Object -ComObject WScript.Shell
-        $message = "TuringDesk Shell 已启用或更新，需要注销当前 Windows 用户后才能完全生效。`r`n`r`n现在注销吗？`r`n`r`n选择“否”可以稍后手动注销。"
+        $message = "TuringDesk Shell 已启用或更新，需要注销当前 Windows 用户后才能完全生效。`r`n`r`n现在注销吗？`r`n`r`n选择 No 可以稍后手动注销。"
         # 4 = Yes/No, 64 = information icon. Popup returns 6 for Yes and 7 for No.
         $result = $popup.Popup($message, 0, "TuringDesk - 需要重新登录", 68)
         return $result -eq 6
