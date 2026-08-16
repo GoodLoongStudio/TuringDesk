@@ -47,9 +47,24 @@
                 </StackPanel>
 
                 <StackPanel Grid.Column="3" Orientation="Horizontal" HorizontalAlignment="Right">
-                    <Button Style="{StaticResource TitleBarButtonStyle}" Content="—" Click="Minimize_Click"/>
-                    <Button x:Name="MaximizeButton" Style="{StaticResource TitleBarButtonStyle}" Content="□" Click="Maximize_Click"/>
-                    <Button Style="{StaticResource TitleBarButtonStyle}" Content="✕" Click="Close_Click"/>
+                    <Button Style="{StaticResource TitleBarButtonStyle}" Click="Minimize_Click" ToolTip="最小化"><local:ShellIcon Kind="Minimize" Width="15" Height="15"/></Button>
+                    <Button x:Name="MaximizeButton" Style="{StaticResource TitleBarButtonStyle}" Content="□" Click="Maximize_Click" ToolTip="最大化 / 还原">
+                        <Button.ContentTemplate>
+                            <DataTemplate>
+                                <local:ShellIcon Width="15" Height="15">
+                                    <local:ShellIcon.Style>
+                                        <Style TargetType="local:ShellIcon">
+                                            <Setter Property="Kind" Value="Maximize"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding WindowState, RelativeSource={RelativeSource AncestorType=Window}}" Value="Maximized"><Setter Property="Kind" Value="RestoreWindow"/></DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </local:ShellIcon.Style>
+                                </local:ShellIcon>
+                            </DataTemplate>
+                        </Button.ContentTemplate>
+                    </Button>
+                    <Button Style="{StaticResource TitleBarButtonStyle}" Click="Close_Click" ToolTip="关闭"><local:ShellIcon Kind="Close" Width="15" Height="15"/></Button>
                 </StackPanel>
             </Grid>
         </Border>
@@ -65,7 +80,9 @@
                     <Button x:Name="NavMemoryButton" Style="{StaticResource TopNavButtonStyle}" Click="NavMemory_Click"><StackPanel Orientation="Horizontal"><local:ShellIcon Kind="Memory" Width="15" Height="15" Margin="0,0,7,0"/><TextBlock Text="记忆"/></StackPanel></Button>
                 </StackPanel>
                 <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                    <Button x:Name="MicButton" Style="{StaticResource IconButtonStyle}" Content="&#xE720;" Click="SpeechToggle_Click" ToolTip="常驻语音"/>
+                    <Button x:Name="MicButton" Style="{StaticResource IconButtonStyle}" Content="&#xE720;" Click="SpeechToggle_Click" ToolTip="常驻语音">
+                        <Button.ContentTemplate><DataTemplate><local:ShellIcon Kind="Microphone" Width="16" Height="16"/></DataTemplate></Button.ContentTemplate>
+                    </Button>
                     <Button Style="{StaticResource AgentPillButtonStyle}" Click="AgentPanel_Click" Margin="4,0">
                         <StackPanel Orientation="Horizontal"><Ellipse x:Name="AgentStateDot" Width="7" Height="7" Fill="{StaticResource WarningBrush}" Margin="0,0,7,0" VerticalAlignment="Center"/><TextBlock x:Name="AgentStatusText" Text="Agent connecting" VerticalAlignment="Center"/></StackPanel>
                     </Button>
@@ -139,9 +156,7 @@
                 </ScrollViewer>
 
                 <ScrollViewer x:Name="WorkspacesPage" Visibility="Collapsed" VerticalScrollBarVisibility="Auto"><StackPanel Margin="28,24,28,40"><TextBlock Text="工作区" FontSize="28" FontWeight="SemiBold"/><TextBlock Text="把一组应用、窗口布局与上下文作为一个可恢复的工作状态。" Foreground="{StaticResource MutedBrush}" FontSize="13" Margin="0,5,0,20"/><Border Style="{StaticResource CardBorderStyle}"><StackPanel><StackPanel Orientation="Horizontal"><local:ShellIcon Kind="Workspace" Width="18" Height="18" Foreground="{StaticResource AccentBrush}" Margin="0,0,8,0"/><TextBlock Text="Desktop Workspace" FontSize="17" FontWeight="SemiBold"/></StackPanel><TextBlock Text="当前活动 · Chrome / VS Code / Terminal 可由 Agent 编排" Foreground="{StaticResource MutedBrush}" Margin="0,6,0,0"/></StackPanel></Border></StackPanel></ScrollViewer>
-
                 <ScrollViewer x:Name="TasksPage" Visibility="Collapsed" VerticalScrollBarVisibility="Auto"><StackPanel Margin="28,24,28,40"><TextBlock Text="任务" FontSize="28" FontWeight="SemiBold"/><TextBlock Text="图灵执行过和正在执行的桌面任务会集中在这里。" Foreground="{StaticResource MutedBrush}" FontSize="13" Margin="0,5,0,20"/><Border Style="{StaticResource CardBorderStyle}"><StackPanel Orientation="Horizontal"><local:ShellIcon Kind="Tasks" Width="18" Height="18" Foreground="{StaticResource AccentBrush}" Margin="0,0,9,0"/><TextBlock Text="实时执行记录先放在 Agent Control Panel；后续这里会成为可恢复任务中心。" TextWrapping="Wrap" Foreground="{StaticResource MutedBrush}"/></StackPanel></Border></StackPanel></ScrollViewer>
-
                 <ScrollViewer x:Name="MemoryPage" Visibility="Collapsed" VerticalScrollBarVisibility="Auto"><StackPanel Margin="28,24,28,40"><TextBlock Text="记忆" FontSize="28" FontWeight="SemiBold"/><TextBlock Text="让用户明确知道图灵记住了什么，并能够删除或关闭记忆。" Foreground="{StaticResource MutedBrush}" FontSize="13" Margin="0,5,0,20"/><Border Style="{StaticResource CardBorderStyle}"><StackPanel Orientation="Horizontal"><local:ShellIcon Kind="Memory" Width="18" Height="18" Foreground="{StaticResource AccentBrush}" Margin="0,0,9,0"/><TextBlock Text="当前开发预览尚未开放长期个人记忆写入；这里只保留未来的透明控制入口。" TextWrapping="Wrap" Foreground="{StaticResource MutedBrush}"/></StackPanel></Border></StackPanel></ScrollViewer>
             </Grid>
 
@@ -151,10 +166,7 @@
                     <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
                     <Grid>
                         <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                            <Border Width="32" Height="32" Background="{StaticResource AccentSoftBrush}" CornerRadius="16" Margin="0,0,9,0"><local:ShellIcon Kind="Agent" Width="17" Height="17" Foreground="{StaticResource AccentBrush}" HorizontalAlignment="Center" VerticalAlignment="Center"/></Border>
-                            <StackPanel><TextBlock Text="Turing Agent" FontSize="15" FontWeight="SemiBold"/><TextBlock Text="Agent Control Panel" FontSize="10" Foreground="{StaticResource MutedBrush}"/></StackPanel>
-                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center"><Border Width="32" Height="32" Background="{StaticResource AccentSoftBrush}" CornerRadius="16" Margin="0,0,9,0"><local:ShellIcon Kind="Agent" Width="17" Height="17" Foreground="{StaticResource AccentBrush}" HorizontalAlignment="Center" VerticalAlignment="Center"/></Border><StackPanel><TextBlock Text="Turing Agent" FontSize="15" FontWeight="SemiBold"/><TextBlock Text="Agent Control Panel" FontSize="10" Foreground="{StaticResource MutedBrush}"/></StackPanel></StackPanel>
                         <Button Grid.Column="1" Style="{StaticResource IconButtonStyle}" Click="AgentPanel_Click" ToolTip="关闭"><local:ShellIcon Kind="Close" Width="15" Height="15"/></Button>
                     </Grid>
                     <Border Grid.Row="1" Background="{StaticResource AccentSoftBrush}" CornerRadius="10" Padding="14" Margin="0,14,0,10"><StackPanel><TextBlock x:Name="AgentStateTitle" Text="正在连接能力层…" FontSize="15" FontWeight="SemiBold"/><TextBlock x:Name="AgentStateDetail" Text="图灵会把理解和执行过程显示在这里。" TextWrapping="Wrap" Foreground="{StaticResource MutedBrush}" FontSize="12" Margin="0,5,0,0"/></StackPanel></Border>

@@ -6,8 +6,7 @@ namespace TuringDesk.Desktop;
 
 public partial class ShellIcon : UserControl
 {
-    public static readonly DependencyProperty KindProperty = DependencyProperty.Register(
-        nameof(Kind), typeof(string), typeof(ShellIcon), new PropertyMetadata("Agent", OnKindChanged));
+    public static readonly DependencyProperty KindProperty = DependencyProperty.Register(nameof(Kind), typeof(string), typeof(ShellIcon), new PropertyMetadata("Agent", OnKindChanged));
 
     private static readonly IReadOnlyDictionary<string, string> Paths = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
     {
@@ -18,6 +17,10 @@ public partial class ShellIcon : UserControl
         ["Memory"] = "M9,4 C6,3 4,6 5,9 C2,11 3,15 6,16 C5,19 8,21 11,19 M15,4 C18,3 20,6 19,9 C22,11 21,15 18,16 C19,19 16,21 13,19 M12,5 L12,19 M9,9 L15,9 M9,14 L15,14",
         ["Agent"] = "M12,2 L14.2,8.2 20.5,10.5 14.2,12.8 12,19 9.8,12.8 3.5,10.5 9.8,8.2 Z M18.5,3.5 L19.3,5.7 21.5,6.5 19.3,7.3 18.5,9.5 17.7,7.3 15.5,6.5 17.7,5.7 Z",
         ["Tasks"] = "M5,5 L19,5 19,17 5,17 Z M2,8 L5,8 M2,8 L2,20 16,20 M16,17 L16,20",
+        ["Microphone"] = "M9,5 C9,2.5 15,2.5 15,5 L15,11 C15,15 9,15 9,11 Z M6,10 L6,12 C6,16 8.7,19 12,19 C15.3,19 18,16 18,12 L18,10 M12,19 L12,22 M9,22 L15,22",
+        ["Minimize"] = "M5,17 L19,17",
+        ["Maximize"] = "M5,5 L19,5 19,19 5,19 Z",
+        ["RestoreWindow"] = "M8,8 L20,8 20,20 8,20 Z M4,4 L16,4 16,8 M4,4 L4,16 8,16",
         ["Network"] = "M3,9 C8,4 16,4 21,9 M6,12 C10,8 14,8 18,12 M9,15 C11,13 13,13 15,15 M12,19 L12,19.1",
         ["Volume"] = "M4,10 L8,10 13,6 13,18 8,14 4,14 Z M16,9 C18,11 18,13 16,15 M18,6 C22,10 22,14 18,18",
         ["Notification"] = "M6,17 L18,17 M8,17 L8,10 C8,5 16,5 16,10 L16,17 M10,20 C11,21 13,21 14,20",
@@ -60,28 +63,8 @@ public partial class ShellIcon : UserControl
         ["Error"] = "M12,3 A9,9 0 1 0 12,21 A9,9 0 1 0 12,3 M8,8 L16,16 M16,8 L8,16"
     };
 
-    public ShellIcon()
-    {
-        InitializeComponent();
-        ApplyKind(Kind);
-    }
-
-    public string Kind
-    {
-        get => (string)GetValue(KindProperty);
-        set => SetValue(KindProperty, value);
-    }
-
-    private static void OnKindChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
-    {
-        if (d is ShellIcon icon) icon.ApplyKind(e.NewValue as string ?? "Agent");
-    }
-
-    private void ApplyKind(string kind)
-    {
-        if (!Paths.TryGetValue(kind, out var data)) data = Paths["App"];
-        var geometry = Geometry.Parse(data);
-        if (geometry.CanFreeze) geometry.Freeze();
-        IconPath.Data = geometry;
-    }
+    public ShellIcon() { InitializeComponent(); ApplyKind(Kind); }
+    public string Kind { get => (string)GetValue(KindProperty); set => SetValue(KindProperty, value); }
+    private static void OnKindChanged(DependencyObject d, DependencyPropertyChangedEventArgs e) { if (d is ShellIcon icon) icon.ApplyKind(e.NewValue as string ?? "Agent"); }
+    private void ApplyKind(string kind) { if (!Paths.TryGetValue(kind, out var data)) data = Paths["App"]; var geometry = Geometry.Parse(data); if (geometry.CanFreeze) geometry.Freeze(); IconPath.Data = geometry; }
 }
