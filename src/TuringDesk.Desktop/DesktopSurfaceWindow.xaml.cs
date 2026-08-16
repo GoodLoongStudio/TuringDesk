@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using System.IO;
 using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
@@ -131,7 +132,26 @@ public partial class DesktopSurfaceWindow : Window
     private void DesktopItemsList_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
         _dragStart = e.GetPosition(DesktopItemsList);
-        _dragPath = (DesktopItemsList.SelectedItem as DesktopSurfaceItem)?.Path;
+        var container = FindAncestor<ListBoxItem>(e.OriginalSource as DependencyObject);
+        if (container?.DataContext is DesktopSurfaceItem item)
+        {
+            DesktopItemsList.SelectedItem = item;
+            _dragPath = item.Path;
+        }
+        else
+        {
+            _dragPath = null;
+        }
+    }
+
+    private static T? FindAncestor<T>(DependencyObject? current) where T : DependencyObject
+    {
+        while (current is not null)
+        {
+            if (current is T match) return match;
+            current = VisualTreeHelper.GetParent(current);
+        }
+        return null;
     }
 
     private void DesktopItemsList_PreviewMouseMove(object sender, MouseEventArgs e)
