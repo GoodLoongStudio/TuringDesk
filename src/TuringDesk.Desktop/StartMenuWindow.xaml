@@ -89,7 +89,7 @@
                     </ListBox.ItemContainerStyle>
                     <ListBox.ItemTemplate>
                         <DataTemplate>
-                            <Button Tag="{Binding Target}" Click="App_Click" Height="48" HorizontalContentAlignment="Stretch" Padding="10,0">
+                            <Button Tag="{Binding Target}" Click="App_Click" MouseRightButtonUp="App_MouseRightButtonUp" Height="48" HorizontalContentAlignment="Stretch" Padding="10,0" ToolTip="右键可固定到任务栏">
                                 <Grid>
                                     <Grid.ColumnDefinitions><ColumnDefinition Width="38"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                                     <Grid Width="30" Height="30" VerticalAlignment="Center">
