@@ -1,5 +1,6 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { AgentActivityTracker } from './agent-activity.js'
+import { HarnessWebSurface } from './harness-web.js'
 import { DesktopIntentAgent } from './mock-agent.js'
 import { ModelGatewayManager } from './model-gateway.js'
 import type { RuntimeModelConfig } from './model-config.js'
@@ -9,6 +10,7 @@ const port = Number(process.env.TURINGDESK_RUNTIME_PORT ?? '4317')
 const desktopAgent = new DesktopIntentAgent()
 const models = new ModelGatewayManager()
 const activity = new AgentActivityTracker()
+const harnessWeb = new HarnessWebSurface()
 
 function json(res: ServerResponse, status: number, body: unknown): void {
   res.writeHead(status, {
@@ -33,7 +35,18 @@ async function readJson(req: IncomingMessage): Promise<any> {
 const server = createServer(async (req, res) => {
   try {
     if (req.method === 'GET' && req.url === '/health') {
-      json(res, 200, { ok: true, mode: models.mode, version: '0.4.0', model: models.current })
+      json(res, 200, { ok: true, mode: models.mode, version: '0.5.0', model: models.current })
+      return
+    }
+
+    if (req.method === 'GET' && req.url === '/v1/harness/web') {
+      json(res, 200, await harnessWeb.status())
+      return
+    }
+
+    if (req.method === 'POST' && req.url === '/v1/harness/web') {
+      const url = await harnessWeb.ensureReady()
+      json(res, 200, { ok: true, url, state: 'ready' })
       return
     }
 
@@ -107,7 +120,10 @@ server.listen(port, host, () => {
 })
 
 async function shutdown(): Promise<void> {
-  await models.close().catch(() => undefined)
+  await Promise.all([
+    models.close().catch(() => undefined),
+    harnessWeb.close().catch(() => undefined)
+  ])
   server.close(() => process.exit(0))
 }
 
