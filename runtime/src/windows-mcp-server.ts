@@ -5,11 +5,16 @@ import { CapabilityClient } from './capability-client.js'
 
 const capabilities = new CapabilityClient()
 const server = new Server(
-  { name: 'turingdesk-windows', version: '0.2.0' },
+  { name: 'turingdesk-windows', version: '0.3.0' },
   { capabilities: { tools: {} } }
 )
 
 const tools: Tool[] = [
+  {
+    name: 'desktop_snapshot',
+    description: 'Read one coherent snapshot of the current Windows desktop: monitors, visible application windows and the foreground window. Use this before multi-window desktop planning when current screen state matters.',
+    inputSchema: { type: 'object', additionalProperties: false, properties: {} }
+  },
   {
     name: 'app_launch',
     description: 'Launch an allow-listed Windows desktop application. Allowed app aliases: chrome, code, terminal.',
@@ -99,6 +104,9 @@ server.setRequestHandler(CallToolRequestSchema, async request => {
   try {
     let result: unknown
     switch (name) {
+      case 'desktop_snapshot':
+        result = await capabilities.execute('desktop.snapshot')
+        break
       case 'app_launch':
         result = await capabilities.execute('app.launch', { app: requireString(args, 'app') })
         break
