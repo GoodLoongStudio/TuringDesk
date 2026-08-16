@@ -7,28 +7,28 @@ $ErrorActionPreference = "Stop"
 Add-Type -AssemblyName System.Drawing
 
 function New-TuringDeskPng([int]$Size) {
-    $bitmap = New-Object System.Drawing.Bitmap($Size, $Size, [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
+    $bitmap = [System.Drawing.Bitmap]::new($Size, $Size, [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
     $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
     try {
         $graphics.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
         $graphics.Clear([System.Drawing.Color]::Transparent)
 
         $scale = $Size / 256.0
-        function S([double]$v) { return [single]($v * $scale) }
+        function S([double]$Value) { return [single]($Value * $scale) }
 
-        $badgeBrush = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(255, 18, 39, 78))
-        $ringPen = New-Object System.Drawing.Pen([System.Drawing.Color]::FromArgb(255, 49, 104, 212), (S 7))
-        $innerPen = New-Object System.Drawing.Pen([System.Drawing.Color]::FromArgb(190, 32, 72, 151), (S 4))
-        $arrowBrush = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(255, 58, 116, 255))
-        $highlightBrush = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(255, 92, 148, 255))
-        $glintBrush = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(220, 120, 176, 255))
+        $badgeBrush = [System.Drawing.SolidBrush]::new([System.Drawing.Color]::FromArgb(255, 18, 39, 78))
+        $ringPen = [System.Drawing.Pen]::new([System.Drawing.Color]::FromArgb(255, 49, 104, 212), (S 7))
+        $innerPen = [System.Drawing.Pen]::new([System.Drawing.Color]::FromArgb(190, 32, 72, 151), (S 4))
+        $arrowBrush = [System.Drawing.SolidBrush]::new([System.Drawing.Color]::FromArgb(255, 58, 116, 255))
+        $highlightBrush = [System.Drawing.SolidBrush]::new([System.Drawing.Color]::FromArgb(255, 92, 148, 255))
+        $glintBrush = [System.Drawing.SolidBrush]::new([System.Drawing.Color]::FromArgb(220, 120, 176, 255))
 
         try {
             $graphics.FillEllipse($badgeBrush, (S 30), (S 30), (S 196), (S 196))
             $graphics.DrawEllipse($ringPen, (S 30), (S 30), (S 196), (S 196))
             $graphics.DrawEllipse($innerPen, (S 47), (S 47), (S 162), (S 162))
 
-            $arrow = @(
+            [System.Drawing.PointF[]]$arrow = @(
                 [System.Drawing.PointF]::new((S 106), (S 73)),
                 [System.Drawing.PointF]::new((S 168), (S 73)),
                 [System.Drawing.PointF]::new((S 168), (S 56)),
@@ -46,7 +46,7 @@ function New-TuringDeskPng([int]$Size) {
             )
             $graphics.FillPolygon($arrowBrush, $arrow)
 
-            $highlight = @(
+            [System.Drawing.PointF[]]$highlight = @(
                 [System.Drawing.PointF]::new((S 168), (S 61)),
                 [System.Drawing.PointF]::new((S 200), (S 96)),
                 [System.Drawing.PointF]::new((S 168), (S 127)),
@@ -72,9 +72,14 @@ function New-TuringDeskPng([int]$Size) {
             $glintBrush.Dispose()
         }
 
-        $stream = New-Object System.IO.MemoryStream
-        $bitmap.Save($stream, [System.Drawing.Imaging.ImageFormat]::Png)
-        return $stream.ToArray()
+        $pngStream = [System.IO.MemoryStream]::new()
+        try {
+            $bitmap.Save($pngStream, [System.Drawing.Imaging.ImageFormat]::Png)
+            return $pngStream.ToArray()
+        }
+        finally {
+            $pngStream.Dispose()
+        }
     }
     finally {
         $graphics.Dispose()
@@ -97,7 +102,7 @@ if (-not [string]::IsNullOrWhiteSpace($parent)) {
 }
 
 $stream = [System.IO.File]::Create($target)
-$writer = New-Object System.IO.BinaryWriter($stream)
+$writer = [System.IO.BinaryWriter]::new($stream)
 try {
     # ICONDIR: reserved, type=icon, image count.
     $writer.Write([UInt16]0)
@@ -119,7 +124,7 @@ try {
     }
 
     foreach ($image in $images) {
-        $writer.Write($image.Bytes)
+        $writer.Write([byte[]]$image.Bytes)
     }
 }
 finally {
