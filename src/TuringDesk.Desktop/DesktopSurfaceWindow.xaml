@@ -35,8 +35,8 @@
                         <TextBlock Text="✦" FontSize="18" Foreground="#9DAAFF" HorizontalAlignment="Center" VerticalAlignment="Center"/>
                     </Border>
                     <StackPanel>
-                        <TextBlock Text="图灵桌面" FontSize="16" FontWeight="SemiBold"/>
-                        <TextBlock Text="AI Native Desktop for Windows" Foreground="#94A0B8" FontSize="11"/>
+                        <TextBlock x:Name="DesktopTitleText" Text="图灵桌面" FontSize="16" FontWeight="SemiBold"/>
+                        <TextBlock x:Name="MonitorLabelText" Text="AI Native Desktop for Windows" Foreground="#94A0B8" FontSize="11"/>
                     </StackPanel>
                 </StackPanel>
 
@@ -45,7 +45,7 @@
                         <TextBlock x:Name="ClockText" Text="--:--" FontSize="26" FontWeight="SemiBold" HorizontalAlignment="Right"/>
                         <TextBlock x:Name="DateText" Text="----年--月--日" Foreground="#94A0B8" FontSize="11" HorizontalAlignment="Right"/>
                     </StackPanel>
-                    <Button Height="38" Padding="14,0" Click="ControlCenter_Click" ToolTip="打开 TuringDesk 控制中心">
+                    <Button x:Name="ControlCenterButton" Height="38" Padding="14,0" Click="ControlCenter_Click" ToolTip="打开 TuringDesk 控制中心">
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Text="✦" Foreground="#9DAAFF" Margin="0,0,7,0"/>
                             <TextBlock Text="打开图灵"/>
@@ -108,13 +108,25 @@
                     <DataTemplate>
                         <Grid ToolTip="{Binding Path}">
                             <Grid.RowDefinitions>
-                                <RowDefinition Height="48"/>
+                                <RowDefinition Height="52"/>
                                 <RowDefinition Height="*"/>
                             </Grid.RowDefinitions>
-                            <Border Width="44" Height="44" CornerRadius="12" Background="#20283A" HorizontalAlignment="Center">
-                                <TextBlock Text="{Binding Glyph}" FontSize="22" Foreground="#A9B4FF" HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                            </Border>
-                            <StackPanel Grid.Row="1" VerticalAlignment="Top" Margin="0,4,0,0">
+                            <Grid Width="48" Height="48" HorizontalAlignment="Center">
+                                <Image Source="{Binding Icon}" Width="42" Height="42" Stretch="Uniform" RenderOptions.BitmapScalingMode="HighQuality"/>
+                                <TextBlock Text="{Binding Glyph}" FontSize="22" Foreground="#A9B4FF" HorizontalAlignment="Center" VerticalAlignment="Center">
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock">
+                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding Icon}" Value="{x:Null}">
+                                                    <Setter Property="Visibility" Value="Visible"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
+                            </Grid>
+                            <StackPanel Grid.Row="1" VerticalAlignment="Top" Margin="0,2,0,0">
                                 <TextBlock Text="{Binding Name}" TextAlignment="Center" TextTrimming="CharacterEllipsis" FontSize="11.5" FontWeight="SemiBold"/>
                                 <TextBlock Text="{Binding Subtitle}" TextAlignment="Center" TextTrimming="CharacterEllipsis" Foreground="#8390A8" FontSize="9.5" Margin="0,2,0,0"/>
                             </StackPanel>
@@ -123,7 +135,7 @@
                 </ListBox.ItemTemplate>
             </ListBox>
 
-            <Border Grid.Row="2" HorizontalAlignment="Left" Background="#181D29" BorderBrush="#30394F" BorderThickness="1" CornerRadius="12" Padding="12,7" Margin="4,14,0,0">
+            <Border x:Name="DesktopHint" Grid.Row="2" HorizontalAlignment="Left" Background="#181D29" BorderBrush="#30394F" BorderThickness="1" CornerRadius="12" Padding="12,7" Margin="4,14,0,0">
                 <TextBlock Text="双击桌面项目直接打开 · 底部任务栏可以搜索应用、切换窗口或直接问图灵" Foreground="#9AA5BC" FontSize="10.5"/>
             </Border>
         </Grid>
