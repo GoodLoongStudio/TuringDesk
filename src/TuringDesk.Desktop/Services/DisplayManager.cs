@@ -86,15 +86,25 @@ public static class DisplayManager
     }
 
     public static void PositionPopupBottomCenter(Window window, DisplayMonitor monitor, int marginPixels = 10) =>
-        PositionPopup(window, monitor, PopupHorizontal.Center, PopupVertical.Bottom, marginPixels);
+        PositionPopup(window, monitor, PopupHorizontal.Center, PopupVertical.Bottom, marginPixels, 0, 0);
 
     public static void PositionPopupBottomRight(Window window, DisplayMonitor monitor, int marginPixels = 10) =>
-        PositionPopup(window, monitor, PopupHorizontal.Right, PopupVertical.Bottom, marginPixels);
+        PositionPopup(window, monitor, PopupHorizontal.Right, PopupVertical.Bottom, marginPixels, 0, 0);
 
     public static void PositionPopupCenter(Window window, DisplayMonitor monitor, int marginPixels = 10) =>
-        PositionPopup(window, monitor, PopupHorizontal.Center, PopupVertical.Center, marginPixels);
+        PositionPopup(window, monitor, PopupHorizontal.Center, PopupVertical.Center, marginPixels, 0, 0);
 
-    private static void PositionPopup(Window window, DisplayMonitor monitor, PopupHorizontal horizontal, PopupVertical vertical, int marginPixels)
+    public static void PositionAgentCard(Window window, DisplayMonitor monitor, string side, int horizontalOffsetPixels, int bottomOffsetPixels = 0, int marginPixels = 12) =>
+        PositionPopup(
+            window,
+            monitor,
+            string.Equals(side, "left", StringComparison.OrdinalIgnoreCase) ? PopupHorizontal.Left : PopupHorizontal.Right,
+            PopupVertical.Bottom,
+            marginPixels,
+            Math.Max(0, horizontalOffsetPixels),
+            Math.Max(0, bottomOffsetPixels));
+
+    private static void PositionPopup(Window window, DisplayMonitor monitor, PopupHorizontal horizontal, PopupVertical vertical, int marginPixels, int horizontalOffsetPixels, int bottomOffsetPixels)
     {
         var handle = new WindowInteropHelper(window).Handle;
         if (handle == IntPtr.Zero) return;
@@ -106,23 +116,24 @@ public static class DisplayManager
 
         var x = horizontal switch
         {
-            PopupHorizontal.Right => monitor.WorkRight - width - marginPixels,
+            PopupHorizontal.Left => monitor.WorkLeft + marginPixels + horizontalOffsetPixels,
+            PopupHorizontal.Right => monitor.WorkRight - width - marginPixels - horizontalOffsetPixels,
             _ => monitor.WorkLeft + (monitor.WorkWidth - width) / 2
         };
 
         var y = vertical switch
         {
-            PopupVertical.Bottom => monitor.WorkBottom - height - marginPixels,
+            PopupVertical.Bottom => monitor.WorkBottom - height - marginPixels - bottomOffsetPixels,
             _ => monitor.WorkTop + (monitor.WorkHeight - height) / 2
         };
 
-        x = Math.Max(monitor.WorkLeft + marginPixels, x);
-        y = Math.Max(monitor.WorkTop + marginPixels, y);
+        x = Math.Max(monitor.WorkLeft + marginPixels, Math.Min(x, monitor.WorkRight - width - marginPixels));
+        y = Math.Max(monitor.WorkTop + marginPixels, Math.Min(y, monitor.WorkBottom - height - marginPixels));
 
         _ = SetWindowPos(handle, HwndTopmost, x, y, Math.Max(1, width), Math.Max(1, height), SwpNoActivate | SwpShowWindow);
     }
 
-    private enum PopupHorizontal { Center, Right }
+    private enum PopupHorizontal { Left, Center, Right }
     private enum PopupVertical { Center, Bottom }
 
     private delegate bool MonitorEnumProc(IntPtr hMonitor, IntPtr hdcMonitor, IntPtr lprcMonitor, IntPtr dwData);
