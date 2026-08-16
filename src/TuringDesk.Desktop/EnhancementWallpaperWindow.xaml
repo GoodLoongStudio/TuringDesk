@@ -21,41 +21,43 @@
           video, or WebView renderer can replace this WPF scene later without
           changing how TuringDesk integrates with Explorer.
         -->
-        <Grid Opacity="0.62">
-            <Grid.Background>
-                <RadialGradientBrush Center="0.82,0.15"
-                                     GradientOrigin="0.82,0.15"
-                                     RadiusX="0.72"
-                                     RadiusY="0.72">
-                    <GradientStop Color="#553F62FF" Offset="0" />
-                    <GradientStop Color="#182A3C72" Offset="0.46" />
-                    <GradientStop Color="#00000000" Offset="1" />
-                </RadialGradientBrush>
-            </Grid.Background>
-        </Grid>
+        <Grid x:Name="AmbientSceneLayer">
+            <Grid Opacity="0.62">
+                <Grid.Background>
+                    <RadialGradientBrush Center="0.82,0.15"
+                                         GradientOrigin="0.82,0.15"
+                                         RadiusX="0.72"
+                                         RadiusY="0.72">
+                        <GradientStop Color="#553F62FF" Offset="0" />
+                        <GradientStop Color="#182A3C72" Offset="0.46" />
+                        <GradientStop Color="#00000000" Offset="1" />
+                    </RadialGradientBrush>
+                </Grid.Background>
+            </Grid>
 
-        <Grid Opacity="0.46">
-            <Grid.Background>
-                <RadialGradientBrush Center="0.12,0.88"
-                                     GradientOrigin="0.12,0.88"
-                                     RadiusX="0.78"
-                                     RadiusY="0.78">
-                    <GradientStop Color="#4430A8A4" Offset="0" />
-                    <GradientStop Color="#16215A61" Offset="0.48" />
-                    <GradientStop Color="#00000000" Offset="1" />
-                </RadialGradientBrush>
-            </Grid.Background>
-        </Grid>
+            <Grid Opacity="0.46">
+                <Grid.Background>
+                    <RadialGradientBrush Center="0.12,0.88"
+                                         GradientOrigin="0.12,0.88"
+                                         RadiusX="0.78"
+                                         RadiusY="0.78">
+                        <GradientStop Color="#4430A8A4" Offset="0" />
+                        <GradientStop Color="#16215A61" Offset="0.48" />
+                        <GradientStop Color="#00000000" Offset="1" />
+                    </RadialGradientBrush>
+                </Grid.Background>
+            </Grid>
 
-        <Border VerticalAlignment="Top"
-                Height="110"
-                Opacity="0.24">
-            <Border.Background>
-                <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
-                    <GradientStop Color="#24000000" Offset="0" />
-                    <GradientStop Color="#00000000" Offset="1" />
-                </LinearGradientBrush>
-            </Border.Background>
-        </Border>
+            <Border VerticalAlignment="Top"
+                    Height="110"
+                    Opacity="0.24">
+                <Border.Background>
+                    <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
+                        <GradientStop Color="#24000000" Offset="0" />
+                        <GradientStop Color="#00000000" Offset="1" />
+                    </LinearGradientBrush>
+                </Border.Background>
+            </Border>
+        </Grid>
     </Grid>
 </Window>
