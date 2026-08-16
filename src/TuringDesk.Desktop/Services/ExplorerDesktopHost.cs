@@ -46,7 +46,12 @@ internal static class ExplorerDesktopHost
         exStyle &= ~WsExAppWindow;
         SetWindowStyle(windowHandle, GwlExStyle, exStyle);
 
-        if (SetParent(windowHandle, host) == IntPtr.Zero && Marshal.GetLastWin32Error() != 0)
+        // SetParent legitimately returns NULL when the previous parent was the
+        // desktop. Clear last-error first so a stale Win32 error cannot turn a
+        // successful reparent into a false failure.
+        Marshal.SetLastPInvokeError(0);
+        _ = SetParent(windowHandle, host);
+        if (Marshal.GetLastPInvokeError() != 0)
         {
             return false;
         }
@@ -84,9 +89,8 @@ internal static class ExplorerDesktopHost
         if (progman == IntPtr.Zero) return IntPtr.Zero;
 
         // Ask Explorer to create the WorkerW wallpaper host when it has not
-        // already done so. This message is the same desktop-layer seam used by
-        // established live-wallpaper applications; failure is harmless because
-        // Progman remains a valid fallback on simpler Explorer layouts.
+        // already done so. Failure is harmless because Progman remains a valid
+        // fallback on Explorer layouts that host SHELLDLL_DefView directly.
         _ = SendMessageTimeout(
             progman,
             0x052C,
@@ -111,7 +115,6 @@ internal static class ExplorerDesktopHost
 
         if (wallpaperHost != IntPtr.Zero) return wallpaperHost;
 
-        // Some Explorer builds keep SHELLDLL_DefView directly under Progman.
         return FindWindowEx(progman, IntPtr.Zero, "SHELLDLL_DefView", null) != IntPtr.Zero
             ? progman
             : IntPtr.Zero;
