@@ -1,10 +1,10 @@
-TuringDesk v0.3 Replacement Shell Developer Preview
+TuringDesk v0.4 Replacement Shell Developer Preview
 ===================================================
 
 Target: Windows 11 x64
 
 IMPORTANT
-v0.3 can REALLY replace Explorer for the current Windows user. Do not enable shell mode until the normal preview works on your PC.
+v0.4 can REALLY replace Explorer for the current Windows user. Do not enable shell mode until the normal preview and shell preview both work on your PC.
 
 SAFE ORDER
 1. Extract the whole archive to a normal folder.
@@ -15,16 +15,26 @@ SAFE ORDER
 
 WHAT "REAL SHELL" MEANS
 - Explorer.exe is not the login shell for the configured user.
-- TuringDesk Desktop becomes the desktop/control surface.
-- TuringDesk Shell Bar registers as a Windows AppBar at the bottom of the screen.
+- TuringDesk owns the desktop surface, Start menu and bottom taskbar surface.
+- TuringDesk Shell Bar registers as a Windows AppBar and reserves work area.
 - Native apps remain normal top-level Windows windows.
-- The Shell Bar lists running windows and can focus them.
-- Maximized apps reserve room for the Shell Bar.
+- The taskbar lists running windows; clicking the active task minimizes it, clicking again restores/focuses it.
 - Agent text entry is always available from the Shell Bar.
+
+NEW IN v0.4
+- A dedicated desktop surface replaces the Explorer desktop view.
+- The desktop surface reads the current user's Desktop and Public Desktop folders.
+- Desktop files, folders and shortcuts can be opened directly by double-clicking them.
+- Desktop contents refresh automatically while the shell is running.
+- A TuringDesk Start menu indexes current-user and all-user Windows Start Menu shortcuts.
+- Start search filters installed shortcut names and categories.
+- Pinned Chrome, VS Code, Terminal, Files and TuringDesk entries are available from Start.
+- A Show Desktop button minimizes ordinary application windows and reveals the desktop surface.
+- Shell Bar reacts to display, DPI and work-area changes and repositions its AppBar.
 
 RECOVERY
 Normal recovery:
-- Click the "Explorer" button on the right side of the TuringDesk Shell Bar.
+- Click the right-most recovery arrow on the TuringDesk Shell Bar.
 - ShellHost restores the previous/current-user shell policy and starts explorer.exe.
 
 Emergency recovery:
@@ -38,13 +48,13 @@ AUTOMATIC FAIL-SAFE
 - ShellHost supervises TuringDesk Desktop.
 - If the desktop shell repeatedly exits shortly after startup, ShellHost automatically removes the TuringDesk CustomShell policy and launches explorer.exe.
 - Recovery state is stored under HKCU\Software\TuringDesk\Shell.
-- The shell policy is current-user only; v0.3 does not overwrite the machine-wide Winlogon Shell value.
+- The shell policy is current-user only; v0.4 does not overwrite the machine-wide Winlogon Shell value.
 
 WINDOWS INTEGRATION
-TuringDesk v0.3 uses the Windows Custom User Interface / CustomShell user policy:
+TuringDesk v0.4 uses the Windows Custom User Interface / CustomShell user policy:
 HKCU\Software\Microsoft\Windows\CurrentVersion\Policies\System\Shell
 
-This is intentionally different from the Enterprise-only Shell Launcher feature. The Custom User Interface policy is available on supported Windows 11 Pro, Enterprise, Education and IoT editions.
+This is intentionally different from the Enterprise-only Shell Launcher feature.
 
 VOICE
 - Windows Desktop Speech recognition remains always-on when an installed recognizer is available.
@@ -70,11 +80,12 @@ SAFETY BOUNDARY
 - No service installation.
 - No unrestricted PowerShell/Bash capability is exposed to the Agent.
 - Destructive Agent capabilities such as file.delete, install and power actions are still not exposed.
-- app.launch remains allow-listed in this developer preview.
+- Start Menu and desktop launches happen only from explicit user clicks/double-clicks.
 
 KNOWN LIMITATIONS
-- v0.3 Shell Bar is primary-monitor-first; multi-monitor taskbars come later.
-- Explorer desktop icons/start menu/taskbar are absent while TuringDesk is the shell.
-- TuringDesk does not yet reimplement the full Windows notification area, jump lists or Start menu index.
+- v0.4 is still primary-monitor-first; independent taskbars on each monitor come later.
+- The Windows notification area/system tray is not reimplemented yet.
+- Jump lists, taskbar pin persistence, drag-reorder and full Start Menu app metadata/icons are not complete yet.
+- Desktop icons currently use TuringDesk glyphs instead of extracting native Windows shell icons.
 - Full-screen games and unusual exclusive-mode applications still need real-device testing.
 - This is unsigned developer software, so SmartScreen may warn.
