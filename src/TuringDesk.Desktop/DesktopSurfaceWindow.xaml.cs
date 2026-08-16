@@ -4,6 +4,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Media.Animation;
 using System.Windows.Threading;
 using TuringDesk.Desktop.Services;
 
@@ -11,6 +12,9 @@ namespace TuringDesk.Desktop;
 
 public partial class DesktopSurfaceWindow : Window
 {
+    private static readonly TimeSpan TransitionDuration = TimeSpan.FromMilliseconds(145);
+    private static readonly TimeSpan RefreshFreshness = TimeSpan.FromSeconds(3);
+
     private readonly MainWindow _controlCenter;
     private readonly WindowManager _windows = new();
     private readonly DispatcherTimer _refreshTimer;
@@ -21,6 +25,8 @@ public partial class DesktopSurfaceWindow : Window
     private string? _wallpaperPath;
     private Point _dragStart;
     private string? _dragPath;
+    private DateTimeOffset _lastSurfaceRefresh = DateTimeOffset.MinValue;
+    private int _transitionVersion;
 
     public ObservableCollection<DesktopSurfaceItem> DesktopItems { get; } = new();
 
@@ -48,19 +54,86 @@ public partial class DesktopSurfaceWindow : Window
         _refreshTimer.Tick += async (_, _) => await RefreshSurfaceAsync();
     }
 
-    internal void ShowAsDesktop(bool minimizeWindows)
+    internal bool IsPrimary => _monitor.IsPrimary;
+
+    internal void ShowAsDesktop(bool minimizeWindows, bool activate, bool animate = true)
     {
         if (minimizeWindows)
         {
             _windows.MinimizeAll();
         }
 
-        if (!IsVisible) Show();
+        var transition = ++_transitionVersion;
+        BeginAnimation(OpacityProperty, null);
         PositionOnMonitor();
         WindowState = WindowState.Normal;
-        Activate();
-        Focus();
-        _ = RefreshSurfaceAsync();
+
+        if (!IsVisible)
+        {
+            Opacity = animate ? 0 : 1;
+            Show();
+        }
+
+        if (animate)
+        {
+            var fade = new DoubleAnimation
+            {
+                From = Math.Clamp(Opacity, 0, 1),
+                To = 1,
+                Duration = new Duration(TransitionDuration),
+                EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseOut }
+            };
+            BeginAnimation(OpacityProperty, fade, HandoffBehavior.SnapshotAndReplace);
+        }
+        else
+        {
+            Opacity = 1;
+        }
+
+        if (activate)
+        {
+            Dispatcher.BeginInvoke(new Action(() =>
+            {
+                if (transition != _transitionVersion || !IsVisible) return;
+                Activate();
+                Focus();
+            }), DispatcherPriority.Input);
+        }
+
+        if (DateTimeOffset.UtcNow - _lastSurfaceRefresh > RefreshFreshness)
+        {
+            _ = RefreshSurfaceAsync();
+        }
+    }
+
+    internal void HideFromDesktop(bool animate = true)
+    {
+        if (!IsVisible) return;
+        var transition = ++_transitionVersion;
+        BeginAnimation(OpacityProperty, null);
+
+        if (!animate)
+        {
+            Opacity = 1;
+            Hide();
+            return;
+        }
+
+        var fade = new DoubleAnimation
+        {
+            From = Math.Clamp(Opacity, 0, 1),
+            To = 0,
+            Duration = new Duration(TimeSpan.FromMilliseconds(95)),
+            EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseIn }
+        };
+        fade.Completed += (_, _) =>
+        {
+            if (transition != _transitionVersion) return;
+            BeginAnimation(OpacityProperty, null);
+            Opacity = 1;
+            Hide();
+        };
+        BeginAnimation(OpacityProperty, fade, HandoffBehavior.SnapshotAndReplace);
     }
 
     private async void OnLoaded(object sender, RoutedEventArgs e)
@@ -80,7 +153,11 @@ public partial class DesktopSurfaceWindow : Window
         DateText.Text = DateTime.Now.ToString("yyyy年M月d日 · dddd");
         RefreshWallpaper();
 
-        if (!_showDesktopItems || _refreshing) return;
+        if (!_showDesktopItems || _refreshing)
+        {
+            _lastSurfaceRefresh = DateTimeOffset.UtcNow;
+            return;
+        }
         _refreshing = true;
 
         try
@@ -88,23 +165,23 @@ public partial class DesktopSurfaceWindow : Window
             var selectedPath = (DesktopItemsList.SelectedItem as DesktopSurfaceItem)?.Path;
             var latest = await Task.Run(ShellSurfaceCatalog.LoadDesktopItems);
 
-            if (DesktopItems.Count == latest.Count &&
-                DesktopItems.Select(item => item.Path).SequenceEqual(latest.Select(item => item.Path), StringComparer.OrdinalIgnoreCase))
+            if (DesktopItems.Count != latest.Count ||
+                !DesktopItems.Select(item => item.Path).SequenceEqual(latest.Select(item => item.Path), StringComparer.OrdinalIgnoreCase))
             {
-                return;
+                DesktopItems.Clear();
+                foreach (var item in latest)
+                {
+                    DesktopItems.Add(item);
+                }
+
+                if (!string.IsNullOrWhiteSpace(selectedPath))
+                {
+                    DesktopItemsList.SelectedItem = DesktopItems.FirstOrDefault(item =>
+                        string.Equals(item.Path, selectedPath, StringComparison.OrdinalIgnoreCase));
+                }
             }
 
-            DesktopItems.Clear();
-            foreach (var item in latest)
-            {
-                DesktopItems.Add(item);
-            }
-
-            if (!string.IsNullOrWhiteSpace(selectedPath))
-            {
-                DesktopItemsList.SelectedItem = DesktopItems.FirstOrDefault(item =>
-                    string.Equals(item.Path, selectedPath, StringComparison.OrdinalIgnoreCase));
-            }
+            _lastSurfaceRefresh = DateTimeOffset.UtcNow;
         }
         finally
         {
@@ -127,6 +204,29 @@ public partial class DesktopSurfaceWindow : Window
         {
             _ = ShellSurfaceCatalog.OpenTarget(item.Path);
         }
+    }
+
+    private void DesktopItemsList_MouseRightButtonUp(object sender, MouseButtonEventArgs e)
+    {
+        var container = FindAncestor<ListBoxItem>(e.OriginalSource as DependencyObject);
+        if (container?.DataContext is not DesktopSurfaceItem item) return;
+        DesktopItemsList.SelectedItem = item;
+
+        var menu = new ContextMenu();
+        var open = new MenuItem { Header = "打开" };
+        open.Click += (_, _) => _ = ShellSurfaceCatalog.OpenTarget(item.Path);
+        menu.Items.Add(open);
+
+        var location = new MenuItem { Header = "打开文件所在位置" };
+        location.Click += (_, _) => _ = ShellSurfaceCatalog.OpenContainingFolder(item.Path);
+        menu.Items.Add(location);
+
+        menu.Items.Add(new Separator());
+        var properties = new MenuItem { Header = "属性" };
+        properties.Click += (_, _) => _ = ShellSurfaceCatalog.ShowProperties(item.Path);
+        menu.Items.Add(properties);
+        menu.IsOpen = true;
+        e.Handled = true;
     }
 
     private void DesktopItemsList_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
