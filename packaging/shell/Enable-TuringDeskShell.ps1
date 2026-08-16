@@ -1,4 +1,13 @@
+param(
+    [switch]$Logoff,
+    [switch]$NoLogoff
+)
+
 $ErrorActionPreference = "Stop"
+
+if ($Logoff -and $NoLogoff) {
+    throw "Use only one of -Logoff or -NoLogoff."
+}
 
 $SourceRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $InstallRoot = Join-Path $env:LOCALAPPDATA "TuringDesk\Shell"
@@ -7,6 +16,27 @@ $StatePath = "HKCU:\Software\TuringDesk\Shell"
 
 function Normalize-Path([string]$PathValue) {
     return [System.IO.Path]::GetFullPath($PathValue).TrimEnd('\')
+}
+
+function Confirm-TuringDeskLogoff {
+    if ($Logoff) { return $true }
+    if ($NoLogoff) { return $false }
+
+    try {
+        Add-Type -AssemblyName PresentationFramework -ErrorAction Stop
+        $result = [System.Windows.MessageBox]::Show(
+            "TuringDesk Shell 已启用或更新，需要注销当前 Windows 用户后才能完全生效。`n`n现在注销吗？`n`n选择“否”可以稍后手动注销。",
+            "TuringDesk · 需要重新登录",
+            [System.Windows.MessageBoxButton]::YesNo,
+            [System.Windows.MessageBoxImage]::Information,
+            [System.Windows.MessageBoxResult]::No
+        )
+        return $result -eq [System.Windows.MessageBoxResult]::Yes
+    }
+    catch {
+        $choice = Read-Host "TuringDesk Shell needs sign-out/sign-in. Sign out now? [y/N]"
+        return $choice -match '^(y|yes)$'
+    }
 }
 
 $SourceRoot = Normalize-Path $SourceRoot
@@ -53,4 +83,12 @@ Write-Host "Recovery:" -ForegroundColor Cyan
 Write-Host "  Ctrl+Shift+Esc -> Run new task -> powershell"
 Write-Host "  Then run: & '$InstallRoot\Restore-Explorer.ps1'"
 Write-Host ""
-Write-Host "For a safe test before signing out, run Preview-TuringDeskShell.ps1."
+
+if (Confirm-TuringDeskLogoff) {
+    Write-Host "Signing out current Windows user..." -ForegroundColor Yellow
+    Start-Process -FilePath "$env:SystemRoot\System32\shutdown.exe" -ArgumentList "/l"
+    exit 0
+}
+
+Write-Host "Sign-out was postponed. The new shell will take effect the next time you sign out and sign in." -ForegroundColor Cyan
+Write-Host "Automation options: -Logoff to sign out immediately, or -NoLogoff to suppress the prompt."
