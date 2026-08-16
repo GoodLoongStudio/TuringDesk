@@ -1,0 +1,90 @@
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
+  <Package Id="GoodLoongStudio.TuringDesk"
+           Name="TuringDesk"
+           Manufacturer="GoodLoong Studio"
+           Version="$(ProductVersion)"
+           UpgradeCode="{2E740F15-37FC-4DCB-973D-8F4AC5E03A2A}"
+           Scope="perMachine"
+           Codepage="65001">
+
+    <MajorUpgrade DowngradeErrorMessage="A newer version of TuringDesk is already installed." />
+    <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
+
+    <StandardDirectory Id="ProgramFiles6432Folder">
+      <Directory Id="GOODLOONGFOLDER" Name="GoodLoong Studio">
+        <Directory Id="INSTALLFOLDER" Name="TuringDesk" />
+      </Directory>
+    </StandardDirectory>
+
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Directory Id="TURINGDESKMENU" Name="TuringDesk">
+        <Component Id="StartMenuShortcuts" Guid="*">
+          <Shortcut Id="TuringDeskShortcut"
+                    Name="TuringDesk"
+                    Description="TuringDesk AI desktop"
+                    Target="[INSTALLFOLDER]desktop\TuringDesk.Desktop.exe"
+                    WorkingDirectory="INSTALLFOLDER"
+                    Icon="TuringDesk.ico" />
+          <Shortcut Id="EnableShellShortcut"
+                    Name="启用 TuringDesk 桌面"
+                    Description="将 TuringDesk 设为当前 Windows 用户的桌面"
+                    Target="[INSTALLFOLDER]Enable-TuringDeskShell.cmd"
+                    WorkingDirectory="INSTALLFOLDER"
+                    Icon="TuringDesk.ico" />
+          <Shortcut Id="RestoreExplorerShortcut"
+                    Name="恢复 Windows Explorer 桌面"
+                    Description="恢复当前 Windows 用户的 Explorer 桌面"
+                    Target="[INSTALLFOLDER]Restore-Explorer.cmd"
+                    WorkingDirectory="INSTALLFOLDER"
+                    Icon="TuringDesk.ico" />
+          <RemoveFolder Id="RemoveTuringDeskProgramMenu" On="uninstall" />
+          <RegistryValue Root="HKCU"
+                         Key="Software\GoodLoongStudio\TuringDesk"
+                         Name="StartMenuShortcutsInstalled"
+                         Type="integer"
+                         Value="1"
+                         KeyPath="yes" />
+        </Component>
+      </Directory>
+    </StandardDirectory>
+
+    <Feature Id="MainFeature" Title="TuringDesk" Level="1">
+      <Files Include="$(PayloadRoot)\**" Directory="INSTALLFOLDER" />
+      <ComponentRef Id="StartMenuShortcuts" />
+    </Feature>
+
+    <Icon Id="TuringDesk.ico" SourceFile="$(PayloadRoot)\TuringDesk.ico" />
+    <Property Id="ARPPRODUCTICON" Value="TuringDesk.ico" />
+    <Property Id="ARPNOREPAIR" Value="0" />
+
+    <ui:WixUI Id="WixUI_InstallDir"
+              InstallDirectory="INSTALLFOLDER"
+              ExtendedPathValidation="yes" />
+
+    <!--
+      Shell replacement is deliberately opt-in after installation. On a real
+      uninstall we restore Explorer before MSI removes the installed scripts.
+      Major-upgrade removal skips this action so the user's selected shell is
+      not needlessly toggled during an in-place update.
+    -->
+    <SetProperty Id="RestoreExplorerOnUninstall"
+                 Value="&quot;[SystemFolder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoProfile -ExecutionPolicy Bypass -File &quot;[INSTALLFOLDER]Restore-Explorer.ps1&quot;"
+                 Before="RestoreExplorerOnUninstall"
+                 Sequence="execute"
+                 Condition="REMOVE~=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE" />
+
+    <CustomAction Id="RestoreExplorerOnUninstall"
+                  BinaryRef="Wix4UtilCA_$(sys.BUILDARCHSHORT)"
+                  DllEntry="WixQuietExec"
+                  Execute="deferred"
+                  Impersonate="yes"
+                  Return="ignore" />
+
+    <InstallExecuteSequence>
+      <Custom Action="RestoreExplorerOnUninstall"
+              Before="RemoveFiles"
+              Condition="REMOVE~=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE" />
+    </InstallExecuteSequence>
+  </Package>
+</Wix>

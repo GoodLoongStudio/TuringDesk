@@ -1,21 +1,19 @@
 # DeepSeek Harness + TuringDesk Windows MCP
 
-TuringDesk v0.2 embeds DeepSeek Harness as its Agent Kernel. Users do not install Harness, provide a Harness command, or edit Cordis configuration.
+TuringDesk v0.11 embeds DeepSeek Harness as the desktop Agent kernel.
+
+Users do not need to install Harness separately, provide a Harness command, or manually assemble a Cordis profile for the normal packaged product.
+
+## Runtime topology
 
 ```text
 TuringDesk Desktop
       |
+      | starts/ensures on app startup
       v
-TuringDesk Runtime :4317
+DeepSeek Harness 0.1.0-rc.6
       |
-      | supervises bundled JSON-RPC runtime
-      v
-DeepSeek Harness (`dsh-jsonrpc-agent`)
-      |
-      | TuringDesk-owned Cordis profile
-      v
-@deepseek-ai/dsh-mcp-client (stdio)
-      |
+      | TuringDesk MCP integration
       v
 runtime/app/windows-mcp-server.js
       |
@@ -27,45 +25,87 @@ TuringDesk Capability Server :4318
 Win32 / Windows apps
 ```
 
+The official Harness WebUI is also available:
+
+```text
+DeepSeek Harness Web profile :4319
+      |
+      v
+TuringDesk HarnessConsoleWindow
+      |
+      v
+WebView2
+```
+
+The WebView window is optional UI. It is **not** the Harness service lifecycle owner.
+
+## Always-on Harness lifecycle
+
+When `TuringDesk.Desktop.exe` starts, TuringDesk begins ensuring the bundled Harness service in the background.
+
+Important product behavior:
+
+- TuringDesk desktop appearance is not blocked while Harness boots.
+- Quick Agent text input does not require the user to open the WebView first.
+- Voice Agent commands do not require the WebView first.
+- Conversation Card / Execution Trace Card remain available without the WebView.
+- Opening the Harness console reuses/ensures the same local Harness service path.
+- Closing the Harness WebView does not mean “stop the Agent kernel”.
+
+If the background Harness startup fails, the desktop remains usable and surfaces the error instead of making the entire shell unusable.
+
+## Official WebUI strategy
+
+TuringDesk intentionally does **not** maintain a second full Harness frontend.
+
+The complete Harness control surface is the upstream official WebUI, launched using the bundled `dsh --profile web` path and displayed inside WebView2.
+
+TuringDesk adds only the desktop-native shell around it:
+
+- no browser address bar
+- no browser tabs
+- native TuringDesk window chrome
+- local-only URL
+- TuringDesk Windows MCP patch injected at startup
+
+This keeps compatibility with future Harness UI improvements while avoiding duplicate implementation.
+
+## TuringDesk-native Agent UI remains
+
+Using the official Harness WebUI does not remove TuringDesk's own AI desktop experience.
+
+TuringDesk continues to own:
+
+- quick Agent command input
+- always-on voice interaction
+- Conversation Card
+- Execution Trace Card
+- runtime/model status surfaces
+- desktop approvals and Windows-specific UX
+
+The cards show product-visible state and execution trajectory, not private model chain-of-thought.
+
 ## Embedded runtime
 
-TuringDesk pins the published DeepSeek Harness runtime family to `0.1.0-rc.6` for v0.2. The integration profile is owned by TuringDesk at:
+v0.11 pins the published DeepSeek Harness runtime family to:
+
+```text
+0.1.0-rc.6
+```
+
+TuringDesk-owned integration profile:
 
 ```text
 runtime/harness/turingdesk.cordis.yml
 ```
 
-At runtime TuringDesk automatically:
+The packaged runtime includes native dependencies required by Harness, including the Windows ARM64 `node-pty` / subprocess support used by the upstream runtime.
 
-1. Locates the bundled `dsh-jsonrpc-agent` entry.
-2. Starts it with the TuringDesk Cordis profile.
-3. Verifies the JSON-RPC server identifies itself as `deepseek-harness-sdk-runtime`.
-4. Starts the TuringDesk Windows MCP server through Harness.
-5. Routes the selected model through Harness.
-6. Supervises the Harness child process and retries bounded restarts after an unexpected exit.
-
-`TURINGDESK_HARNESS_COMMAND` and related variables are retained only as developer overrides; they are not required by the portable product.
-
-## Model routing
-
-Mock mode is the only non-Harness execution mode and exists for safe no-key desktop testing.
-
-Every real model provider is mediated by DeepSeek Harness:
-
-```text
-DeepSeek API -----------------> dsh-llm-deepseek -----\
-Ollama -----------------------\                        |
-LM Studio ---------------------+-> dsh-llm-pi-ai ------+-> Harness Agent
-OpenAI-compatible gateway ----/                        |
-                                                        v
-                                                  TuringDesk MCP
-```
-
-The desktop UI remains beginner-friendly: choose a provider, enter a model when needed, paste an API key when required, then Save/Test. Secrets are stored in Windows Credential Manager and are passed to the local Runtime only when the configuration is applied.
+Developer overrides such as `TURINGDESK_HARNESS_COMMAND` remain development escape hatches and are not required by normal installation.
 
 ## Windows tools
 
-The stable TuringDesk capability names are:
+The reviewed TuringDesk capability family currently includes:
 
 ```text
 app.launch
@@ -77,7 +117,7 @@ window.resize
 window.tile
 ```
 
-Harness sees the MCP-qualified names:
+Harness sees MCP-qualified tool names such as:
 
 ```text
 mcp__turingdesk__app_launch
@@ -91,23 +131,31 @@ mcp__turingdesk__window_tile
 
 ## Safety boundary
 
-The Harness core is embedded, but TuringDesk intentionally does **not** compose unrestricted Bash, PowerShell, filesystem mutation, install, delete, power, or administrator tools into its v0.2 Agent profile.
+Harness is the reasoning/execution kernel, but it does not receive unrestricted Windows authority.
 
-- Capability endpoint binds only to `127.0.0.1`.
-- `app.launch` is allow-listed to Chrome, VS Code, and Terminal.
-- TuringDesk refuses to manage its own HWND.
-- Move/resize operations are clamped to the Windows work area.
-- No close/delete/install/power/admin capability is exposed yet.
-- Harness can act on Windows only through the reviewed TuringDesk MCP capability surface in this version.
+Current rules include:
+
+- Capability endpoint binds only to loopback.
+- Windows actions pass through TuringDesk-owned MCP / Capability contracts.
+- No unrestricted PowerShell/Bash tool is exposed by default.
+- No unrestricted administrator capability is exposed by default.
+- Destructive desktop file operations remain explicit user UI actions unless a separately reviewed Agent capability is added later.
+- Power/session operations remain explicit user actions with confirmation.
+- TuringDesk avoids exposing its own HWND to Agent window-management operations.
+- Move/resize operations are constrained to valid Windows work areas.
 
 ## CI acceptance gate
 
-A v0.2 portable package is uploaded only after all of the following pass:
+The v0.11 ARM64 MSI is uploaded only after the important integration gates pass:
 
-- Runtime install/typecheck/build
+- Runtime install / typecheck / build
 - MCP protocol smoke test
-- real bundled `dsh-jsonrpc-agent` boot
+- bundled DeepSeek Harness boot
 - TuringDesk Cordis profile load
-- Harness JSON-RPC `initialize` identity check
-- Windows desktop Release build
-- a second Harness boot test from the **final portable directory** using the embedded Windows `node.exe` and packaged `node_modules`
+- final installed-layout Harness Agent smoke test
+- final installed-layout official Harness WebUI smoke test
+- Windows Desktop + ShellHost Release build
+- executable Application Icon extraction check
+- MSI generation and artifact verification
+
+This is intentionally stronger than a source-only compile check: Harness is tested again from the same layout that is placed in the Windows installer.

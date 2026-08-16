@@ -86,14 +86,24 @@ public partial class DesktopDiyCenterWindow : Window
         PreviewConversationCard.BorderBrush = ShellThemeService.AccentBrush(appearance);
     }
 
-    private async void Model_Click(object sender, RoutedEventArgs e)
+    private void Harness_Click(object sender, RoutedEventArgs e)
+    {
+        var dialog = new HarnessConsoleWindow { Owner = this };
+        dialog.ShowDialog();
+    }
+
+    private async void QuickModel_Click(object sender, RoutedEventArgs e)
     {
         var current = await _modelStore.LoadAsync();
         var key = _modelStore.LoadApiKey();
         var dialog = new ModelSettingsWindow(_runtime, _modelStore, current, key) { Owner = this };
         if (dialog.ShowDialog() == true && dialog.SavedSettings is not null)
         {
-            ShellNotificationService.Publish("模型设置已更新", $"{ModelProviderPresets.Find(dialog.SavedSettings.ProviderId).Name} · {dialog.SavedSettings.Model}", "agent");
+            var preset = ModelProviderPresets.Find(dialog.SavedSettings.ProviderId);
+            ShellNotificationService.Publish(
+                "快捷 Agent 模型已更新",
+                $"{preset.Name} · {dialog.SavedSettings.Model}",
+                "agent");
         }
     }
 

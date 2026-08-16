@@ -3,6 +3,10 @@
   "version": "0.2.0",
   "private": true,
   "type": "module",
+  "files": [
+    "dist",
+    "harness"
+  ],
   "scripts": {
     "dev": "tsx watch src/server.ts",
     "start": "node dist/server.js",
@@ -13,6 +17,7 @@
     "test:harness": "node dist/harness-integration-smoke.js"
   },
   "dependencies": {
+    "@deepseek-ai/dsh": "0.1.0-rc.6",
     "@deepseek-ai/dsh-agent-spine-demo": "0.1.0-rc.6",
     "@deepseek-ai/dsh-compaction-basic": "0.1.0-rc.6",
     "@deepseek-ai/dsh-llm-deepseek": "0.1.0-rc.6",

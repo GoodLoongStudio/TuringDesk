@@ -1,6 +1,7 @@
 param(
     [switch]$Logoff,
-    [switch]$NoLogoff
+    [switch]$NoLogoff,
+    [switch]$InstalledMode
 )
 
 $ErrorActionPreference = "Stop"
@@ -37,7 +38,7 @@ function Confirm-TuringDeskLogoff {
 
     try {
         $popup = New-Object -ComObject WScript.Shell
-        $message = "TuringDesk Shell 已安装或更新，需要注销当前 Windows 用户后才能切换到新版本。`r`n`r`n现在注销吗？`r`n`r`n选择 No 可以稍后手动注销。"
+        $message = "TuringDesk 桌面已启用或更新，需要注销当前 Windows 用户后才能切换到新版本。`r`n`r`n现在注销吗？`r`n`r`n选择 No 可以稍后手动注销。"
         # 4 = Yes/No, 64 = information icon. Popup returns 6 for Yes and 7 for No.
         $result = $popup.Popup($message, 0, "TuringDesk - 需要重新登录", 68)
         return $result -eq 6
@@ -51,17 +52,29 @@ function Confirm-TuringDeskLogoff {
 $SourceRoot = Normalize-Path $SourceRoot
 $TuringRoot = Normalize-Path $TuringRoot
 $VersionsRoot = Normalize-Path $VersionsRoot
-New-Item -ItemType Directory -Force -Path $TuringRoot, $VersionsRoot | Out-Null
+New-Item -ItemType Directory -Force -Path $TuringRoot | Out-Null
 
 $VersionTag = Get-PackageVersionTag
-$InstallId = "$VersionTag-$([DateTime]::UtcNow.ToString('yyyyMMddHHmmss'))-$PID"
-$InstallRoot = Normalize-Path (Join-Path $VersionsRoot $InstallId)
+$currentInstallRoot = $null
 
-Write-Host "Staging TuringDesk Shell $VersionTag to $InstallRoot" -ForegroundColor Cyan
-New-Item -ItemType Directory -Force -Path $InstallRoot | Out-Null
-robocopy $SourceRoot $InstallRoot /MIR /R:2 /W:1 /NFL /NDL /NJH /NJS /NP | Out-Null
-if ($LASTEXITCODE -ge 8) {
-    throw "Failed to stage TuringDesk Shell package. robocopy exit code: $LASTEXITCODE"
+if ($InstalledMode) {
+    # Standard Windows Installer mode: run directly from the Program Files installation.
+    # Do not duplicate the application into LocalAppData; MSI owns the installed files.
+    $InstallRoot = $SourceRoot
+    Write-Host "Enabling installed TuringDesk Shell $VersionTag from $InstallRoot" -ForegroundColor Cyan
+}
+else {
+    # Portable/development fallback retained for engineering builds.
+    New-Item -ItemType Directory -Force -Path $VersionsRoot | Out-Null
+    $InstallId = "$VersionTag-$([DateTime]::UtcNow.ToString('yyyyMMddHHmmss'))-$PID"
+    $InstallRoot = Normalize-Path (Join-Path $VersionsRoot $InstallId)
+
+    Write-Host "Staging portable TuringDesk Shell $VersionTag to $InstallRoot" -ForegroundColor Cyan
+    New-Item -ItemType Directory -Force -Path $InstallRoot | Out-Null
+    robocopy $SourceRoot $InstallRoot /MIR /R:2 /W:1 /NFL /NDL /NJH /NJS /NP | Out-Null
+    if ($LASTEXITCODE -ge 8) {
+        throw "Failed to stage TuringDesk Shell package. robocopy exit code: $LASTEXITCODE"
+    }
 }
 
 $ShellHost = Join-Path $InstallRoot "shellhost\TuringDesk.ShellHost.exe"
@@ -69,7 +82,8 @@ if (-not (Test-Path $ShellHost)) {
     throw "TuringDesk ShellHost is missing: $ShellHost"
 }
 
-# Keep a stable emergency recovery path even though the Shell itself is versioned.
+# Keep a stable emergency recovery script under LocalAppData. It remains usable even
+# if the installer is being repaired or an application update is incomplete.
 Copy-Item (Join-Path $SourceRoot "Restore-Explorer.ps1") (Join-Path $TuringRoot "Restore-Explorer.ps1") -Force
 if (Test-Path (Join-Path $SourceRoot "Restore-Explorer.cmd")) {
     Copy-Item (Join-Path $SourceRoot "Restore-Explorer.cmd") (Join-Path $TuringRoot "Restore-Explorer.cmd") -Force
@@ -89,16 +103,7 @@ if (-not $alreadyTuringDesk) {
         New-ItemProperty -Path $StatePath -Name PreviousShell -PropertyType String -Value $current.ToString() -Force | Out-Null
     }
 }
-
-New-ItemProperty -Path $StatePath -Name InstallRoot -PropertyType String -Value $InstallRoot -Force | Out-Null
-New-ItemProperty -Path $StatePath -Name Version -PropertyType String -Value $VersionTag -Force | Out-Null
-New-ItemProperty -Path $StatePath -Name Enabled -PropertyType DWord -Value 1 -Force | Out-Null
-New-ItemProperty -Path $PolicyPath -Name Shell -PropertyType String -Value ($Quote + $ShellHost + $Quote) -Force | Out-Null
-
-# Best-effort cleanup of versions that are not the newly staged version and are not
-# the currently running Shell. Locked/current files are intentionally ignored.
-$currentInstallRoot = $null
-if ($alreadyTuringDesk) {
+else {
     try {
         $currentShellPath = $current.ToString().Trim($Quote)
         $currentInstallRoot = Split-Path -Parent (Split-Path -Parent $currentShellPath)
@@ -107,20 +112,30 @@ if ($alreadyTuringDesk) {
     catch { $currentInstallRoot = $null }
 }
 
-Get-ChildItem $VersionsRoot -Directory -ErrorAction SilentlyContinue |
-    Where-Object {
-        (Normalize-Path $_.FullName) -ne $InstallRoot -and
-        (-not $currentInstallRoot -or (Normalize-Path $_.FullName) -ne $currentInstallRoot)
-    } |
-    Sort-Object LastWriteTimeUtc -Descending |
-    Select-Object -Skip 2 |
-    ForEach-Object {
-        Remove-Item $_.FullName -Recurse -Force -ErrorAction SilentlyContinue
-    }
+New-ItemProperty -Path $StatePath -Name InstallRoot -PropertyType String -Value $InstallRoot -Force | Out-Null
+New-ItemProperty -Path $StatePath -Name Version -PropertyType String -Value $VersionTag -Force | Out-Null
+New-ItemProperty -Path $StatePath -Name InstalledMode -PropertyType DWord -Value ([int]$InstalledMode.IsPresent) -Force | Out-Null
+New-ItemProperty -Path $StatePath -Name Enabled -PropertyType DWord -Value 1 -Force | Out-Null
+New-ItemProperty -Path $PolicyPath -Name Shell -PropertyType String -Value ($Quote + $ShellHost + $Quote) -Force | Out-Null
+
+if (-not $InstalledMode) {
+    # Best-effort cleanup for legacy portable versions only. MSI-installed files are
+    # owned exclusively by Windows Installer and are never mutated here.
+    Get-ChildItem $VersionsRoot -Directory -ErrorAction SilentlyContinue |
+        Where-Object {
+            (Normalize-Path $_.FullName) -ne $InstallRoot -and
+            (-not $currentInstallRoot -or (Normalize-Path $_.FullName) -ne $currentInstallRoot)
+        } |
+        Sort-Object LastWriteTimeUtc -Descending |
+        Select-Object -Skip 2 |
+        ForEach-Object {
+            Remove-Item $_.FullName -Recurse -Force -ErrorAction SilentlyContinue
+        }
+}
 
 Write-Host ""
 Write-Host "TuringDesk $VersionTag is now configured as the Custom User Interface for the CURRENT USER." -ForegroundColor Green
-Write-Host "The new version takes effect after sign-out/sign-in." -ForegroundColor Yellow
+Write-Host "The new desktop takes effect after sign-out/sign-in." -ForegroundColor Yellow
 Write-Host ""
 Write-Host "Emergency recovery:" -ForegroundColor Cyan
 Write-Host "  Ctrl+Shift+Esc -> Run new task -> powershell"

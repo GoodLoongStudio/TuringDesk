@@ -1,32 +1,45 @@
 # TuringDesk Desktop UX
 
-TuringDesk should feel immediately familiar to a Windows user while making the Agent impossible to miss.
+TuringDesk should feel immediately familiar to a Windows user while making the Agent continuously available.
 
 ## Product rule
 
-**80% familiar desktop + 20% agent-native interaction.**
+**80% familiar Windows desktop + 20% agent-native interaction.**
 
-The user must always be able to use ordinary mouse, keyboard, app-launch and window habits. Agent features enhance those habits instead of replacing them.
+Ordinary mouse, keyboard, app-launch, desktop-file and window habits remain valid. AI augments those habits instead of forcing the user into a full-screen chat product.
 
-## Shell information architecture
+## UI ownership rule
 
-TuringDesk follows the interaction grammar of a mature Windows desktop application rather than an AI dashboard.
+TuringDesk and DeepSeek Harness have different UI responsibilities.
 
-The shell has five stable surfaces:
+### TuringDesk owns the desktop-native experience
 
-1. **Compact custom title bar** — product identity, Runtime/model status, native window controls and the primary Agent text box in the center. The Agent input occupies the same high-frequency visual position that a normal desktop app would use for search.
-2. **Top navigation** — Home, Apps, Workspaces, Tasks and Memory. Navigation is shallow and page-oriented instead of using a permanent wide sidebar.
-3. **Page host** — ordinary desktop application content. Home and Apps use responsive card/grid layouts; other sections are independent pages/surfaces rather than chat tabs.
-4. **Agent Control Panel** — an on-demand right drawer showing Agent state, always-on voice state and execution history. It does not permanently consume workspace width.
-5. **Always-on Agent affordances** — the title-bar input, microphone button and compact Agent-state pill remain visible even when the Control Panel is closed.
+- Desktop Surface
+- Start Menu
+- Taskbar / AppBar
+- Desktop DIY / theme and wallpaper
+- quick Agent command input
+- always-on voice affordance
+- Conversation Card
+- Execution Trace Card
+- Windows-specific permission and recovery UX
 
-This gives TuringDesk strong Agent presence without turning every screen into a chat interface.
+### DeepSeek Harness owns the full Agent console
+
+The official Harness WebUI is reused directly and wrapped by WebView2 so it looks like an integrated desktop window instead of a browser tab.
+
+TuringDesk should **not** rebuild the entire Harness WebUI.
+
+The WebView console is optional. Closing it must not disable Harness or remove quick Agent interactions from the desktop.
 
 ## Agent presence
 
-The Agent should always expose its state through the compact top-level status and, when expanded, the Agent Control Panel:
+The Agent should remain visible through compact desktop surfaces rather than permanently occupying a large panel.
 
-- idle / ready
+Useful states include:
+
+- starting
+- ready / idle
 - listening
 - understanding
 - executing
@@ -34,43 +47,116 @@ The Agent should always expose its state through the compact top-level status an
 - completed
 - failed
 
-Actions must be observable and interruptible as capabilities grow. The Agent should never silently perform destructive or privileged operations.
+Agent actions must remain observable and interruptible as capabilities grow.
+
+## Quick interaction first
+
+The common path should be faster than opening a full control console:
+
+```text
+user types or speaks a request
+        ↓
+TuringDesk quick Agent input
+        ↓
+Conversation Card appears
+        ↓
+Execution Trace Card shows product-visible progress
+        ↓
+result returns to the card / desktop
+```
+
+The user opens the full Harness WebView only when they want deeper Harness session/control UI.
+
+## Conversation Card
+
+The Conversation Card is a lightweight desktop surface, not a replacement for the official Harness console.
+
+It should show information such as:
+
+- current user request
+- phase/status
+- Run ID
+- final answer
+- surfaced error state
+
+Text should remain selectable/copyable where practical.
+
+## Execution Trace Card
+
+The Execution Trace Card shows product execution events such as:
+
+- Runtime activity
+- Harness lifecycle / session state
+- MCP/tool invocation events
+- Windows capability progress
+
+It must **not** expose private model chain-of-thought.
+
+The purpose is observability: the user should understand what the desktop is doing without requiring a developer console.
+
+## Desktop customization remains a first-class feature
+
+Using the official Harness WebUI does not turn TuringDesk into a web wrapper.
+
+The surrounding desktop remains deeply customizable through TuringDesk-owned UI, including wallpaper, theme, taskbar appearance and Agent floating-card presentation.
+
+Current Desktop DIY concepts include:
+
+- System Fluent
+- Deep Space
+- Graphite
+- follow Windows wallpaper
+- custom wallpaper
+- solid background
+- accent color
+- taskbar opacity
+- Agent card opacity
+- left/right card placement
+- completion auto-hide
+
+## Native Windows visual priority
+
+TuringDesk should preserve native application identity whenever Windows already provides it.
+
+Icon rule:
+
+```text
+real Windows file/app icon
+  -> Windows Stock Icon
+  -> TuringDesk vector fallback
+```
+
+Do not replace Chrome, VS Code, folders, settings or other recognizable Windows/application icons with generic TuringDesk artwork just for visual uniformity.
+
+TuringDesk-specific concepts such as Agent affordances may use the product's own visual language.
 
 ## Familiarity first
 
 - Existing Windows apps remain native windows.
-- Direct app launch remains available even when AI Runtime is offline.
-- Top-level navigation behaves like a conventional Windows desktop app.
-- App libraries use cards/grids rather than prompt-only discovery.
-- Voice and Agent commands are additive interaction paths, not mandatory ones.
-- TuringDesk should not require users to learn prompt syntax.
-- Agent controls should not permanently steal a large fraction of the workspace.
-
-## Agent-native behavior
-
-The Agent may coordinate Apps, Files, Windows, Tasks and Workspaces through structured capabilities. The title-bar Agent box is global: a request can affect the active page, ordinary Windows windows or background task state without requiring the user to navigate to a dedicated chat page.
-
-UI surfaces show Agent suggestions, execution state and approvals, but execution authority remains in the capability/policy layer rather than view code.
-
-## Clean-room reference boundary
-
-Lively Wallpaper is a useful public reference for the *product grammar* of a polished Windows desktop application: compact title treatment, shallow top navigation, page-based content, card/grid presentation, command surfaces and secondary control panels.
-
-TuringDesk does **not** copy Lively source code, XAML, assets, icons, exact dimensions, exact colors, resource dictionaries or implementation details. TuringDesk implements its own WPF shell and visual system from independently written code. Lively is GPL-3.0, so this boundary must remain explicit.
+- Direct app launch remains available even if AI services are degraded.
+- Desktop files remain real files, not imported cards.
+- Start and task surfaces follow Windows interaction expectations.
+- Voice and Agent commands are additive paths, not mandatory ones.
+- Users should not need prompt syntax for ordinary actions.
+- Agent UI should not permanently steal a large part of the workspace.
+- Explorer recovery must remain obvious in replacement-shell mode.
 
 ## Framework strategy
 
-The v0.2 developer preview keeps the proven WPF shell so Harness, SAPI voice and portable distribution stay stable while the product interaction model is validated. The UI is organized around a shell/page/service boundary so a future WinUI 3 shell can replace the WPF presentation layer without changing the Agent Runtime or Windows Capability API.
+v0.11 keeps WPF as the desktop shell while Harness, Windows speech, WebView2 and replacement-shell behavior are stabilized.
 
-A WinUI 3 migration should be treated as a separate presentation-layer milestone, not mixed into Agent-kernel changes.
+The UI remains organized around shell/page/service boundaries so a future presentation-layer migration can occur without rewriting the Runtime / MCP contracts.
+
+A future WinUI 3 migration should be treated as a presentation milestone, not mixed into Agent-kernel architecture changes.
 
 ## Anti-patterns
 
 Do not evolve TuringDesk into:
 
 - a full-screen chatbot with a few app shortcuts;
+- a WebView-only shell around Harness;
 - a permanent three-column AI dashboard;
-- a permanent wide Agent sidebar that reduces ordinary workspace space;
-- an invisible automation daemon that gives no execution feedback;
-- a shell that removes familiar Windows interactions before Agent alternatives are clearly better;
-- UI code that directly implements model reasoning or privileged system policy.
+- a permanent wide Agent sidebar that reduces workspace space;
+- an invisible automation daemon with no execution feedback;
+- a shell that removes familiar Windows interactions before better replacements exist;
+- a UI layer that directly owns privileged system policy or unrestricted model execution.

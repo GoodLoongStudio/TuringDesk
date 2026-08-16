@@ -1,6 +1,11 @@
 packages:
   - .
 
+# The shipping runtime is installed into a Windows MSI. A flat/hoisted
+# node_modules layout avoids pnpm's virtual-store duplication and keeps the
+# installer well below the MSI 65,536-component limit.
+nodeLinker: hoisted
+
 # pnpm 11 blocks dependency lifecycle scripts unless they are explicitly reviewed.
 # Keep this allow-list narrow: these packages are present in the pinned Harness
 # dependency tree and require their normal installation/build steps.
@@ -9,3 +14,5 @@ allowBuilds:
   '@google/genai': true
   koffi: true
   protobufjs: true
+  '@deepseek-ai/dsh-subprocess-local': true
+  node-pty: true
