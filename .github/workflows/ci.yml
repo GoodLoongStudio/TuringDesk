@@ -65,13 +65,46 @@ jobs:
         with:
           dotnet-version: 8.0.x
       - run: corepack enable
-      - name: Build and verify replacement-shell package
+      - name: Build and verify x64 replacement-shell package
         shell: pwsh
-        run: ./scripts/package-portable.ps1 -Version "v0.7"
-      - name: Upload replacement-shell package
+        run: ./scripts/package-portable.ps1 -Version "v0.7" -RuntimeIdentifier "win-x64"
+      - name: Upload x64 replacement-shell package
         uses: actions/upload-artifact@v4
         with:
           name: TuringDesk-v0.7-win-x64
           path: artifacts/TuringDesk-v0.7-win-x64/**
+          if-no-files-found: error
+          retention-days: 30
+
+  portable-win-arm64:
+    needs: [runtime]
+    runs-on: windows-11-arm
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.19.0
+          architecture: arm64
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - name: Verify native ARM64 runner toolchain
+        shell: pwsh
+        run: |
+          $nodeArch = (node -p "process.arch").Trim()
+          $osArch = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString()
+          Write-Host "Node architecture: $nodeArch"
+          Write-Host "OS architecture: $osArch"
+          if ($nodeArch -ne "arm64") { throw "Expected native ARM64 Node, got $nodeArch" }
+          if ($osArch -ne "Arm64") { throw "Expected Windows ARM64 runner, got $osArch" }
+      - run: corepack enable
+      - name: Build and verify native ARM64 replacement-shell package
+        shell: pwsh
+        run: ./scripts/package-portable.ps1 -Version "v0.7" -RuntimeIdentifier "win-arm64"
+      - name: Upload native ARM64 replacement-shell package
+        uses: actions/upload-artifact@v4
+        with:
+          name: TuringDesk-v0.7-win-arm64
+          path: artifacts/TuringDesk-v0.7-win-arm64/**
           if-no-files-found: error
           retention-days: 30
