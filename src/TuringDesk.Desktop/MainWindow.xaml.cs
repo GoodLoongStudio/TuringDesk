@@ -19,6 +19,7 @@ public partial class MainWindow : Window
 
     public MainWindow()
     {
+        ShellThemeService.Apply(new ShellSettingsStore().Load().Appearance);
         InitializeComponent();
         _speech.Recognized += OnSpeechRecognized;
         _speech.StatusChanged += OnSpeechStatusChanged;
@@ -91,6 +92,7 @@ public partial class MainWindow : Window
     private async void OnClosed(object? sender, EventArgs e)
     {
         _speech.Dispose();
+        AgentFloatingCardsService.Hide();
         if (_capabilities is not null)
         {
             await _capabilities.DisposeAsync();
@@ -207,6 +209,7 @@ public partial class MainWindow : Window
         CommandBox.Clear();
         AddActivity("you", text);
         SetAgentState("正在理解你的请求…", TrimForUi(text, 120), Color.FromRgb(135, 150, 255));
+        AgentFloatingCardsService.Begin(DisplayManager.GetPrimary(), text);
 
         var reply = await _runtime.ChatAsync(text);
         if (reply is null)
@@ -214,12 +217,14 @@ public partial class MainWindow : Window
             const string offline = "Runtime is offline or the selected model could not answer.";
             AddActivity("ai", offline);
             SetAgentState("这次没有完成", "AI Runtime 离线或当前模型无法响应。", Color.FromRgb(240, 125, 125));
+            AgentFloatingCardsService.Fail("AI Runtime 离线或当前模型无法响应。你可以在桌面 DIY 中心检查模型与 DeepSeek Harness 设置。");
             return;
         }
 
         AddActivity("ai", reply);
         WorkspaceSuggestion.Text = TrimForUi(reply, 180);
         SetAgentState("已完成", TrimForUi(reply, 150), Color.FromRgb(84, 214, 138));
+        AgentFloatingCardsService.Complete(reply);
     }
 
     private async void SpeechToggle_Click(object sender, RoutedEventArgs e)
@@ -310,17 +315,19 @@ public partial class MainWindow : Window
 
     private async void ModelSettings_Click(object sender, RoutedEventArgs e)
     {
+        var dialog = new DesktopDiyCenterWindow(_runtime, _modelStore) { Owner = this };
+        dialog.ShowDialog();
         _modelSettings = await _modelStore.LoadAsync();
-        var key = _modelStore.LoadApiKey();
-        var dialog = new ModelSettingsWindow(_runtime, _modelStore, _modelSettings, key) { Owner = this };
-        if (dialog.ShowDialog() == true && dialog.SavedSettings is not null)
-        {
-            _modelSettings = dialog.SavedSettings;
-            UpdateModelStatus();
-            var providerName = ModelProviderPresets.Find(_modelSettings.ProviderId).Name;
-            AddActivity("model", $"Model switched to {providerName} / {_modelSettings.Model}.");
-            SetAgentState("模型已切换", $"现在使用 {providerName} · {_modelSettings.Model}", Color.FromRgb(84, 214, 138));
-        }
+        UpdateModelStatus();
+        ShellThemeService.Apply(new ShellSettingsStore().Load().Appearance);
+        AddActivity("settings", "Desktop DIY Center closed; live shell appearance settings remain applied.");
+    }
+
+    internal void ShowDiyCenter()
+    {
+        var dialog = new DesktopDiyCenterWindow(_runtime, _modelStore) { Owner = IsVisible ? this : null };
+        dialog.ShowDialog();
+        ShellThemeService.Apply(new ShellSettingsStore().Load().Appearance);
     }
 
     private void UpdateModelStatus()
