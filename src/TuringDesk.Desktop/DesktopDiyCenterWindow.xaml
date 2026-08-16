@@ -36,8 +36,7 @@
                     <Button Tag="graphite" Click="Preset_Click" HorizontalContentAlignment="Stretch" Margin="0,0,0,16" Padding="12"><StackPanel><TextBlock Text="Graphite" FontWeight="SemiBold"/><TextBlock Text="低饱和桌面，适合长时间工作" Foreground="{StaticResource MutedBrush}" TextWrapping="Wrap" FontSize="10.5" Margin="0,4,0,0"/></StackPanel></Button>
                     <Separator Margin="0,2,0,14"/>
                     <TextBlock Text="入口" Foreground="{StaticResource MutedBrush}" FontSize="11" Margin="4,0,0,8"/>
-                    <Button Click="Harness_Click" HorizontalContentAlignment="Left" Margin="0,0,0,8"><StackPanel Orientation="Horizontal"><local:ShellIcon Kind="Agent" Width="15" Height="15" Foreground="{StaticResource AccentBrush}" Margin="0,0,8,0"/><TextBlock Text="DeepSeek Harness"/></StackPanel></Button>
-                    <Button Click="Model_Click" HorizontalContentAlignment="Left" Margin="0,0,0,8"><StackPanel Orientation="Horizontal"><local:ShellIcon Kind="Settings" Width="15" Height="15" Foreground="#B8C1D2" Margin="0,0,8,0"/><TextBlock Text="快速模型连接"/></StackPanel></Button>
+                    <Button Click="Model_Click" HorizontalContentAlignment="Left" Margin="0,0,0,8"><StackPanel Orientation="Horizontal"><local:ShellIcon Kind="Agent" Width="15" Height="15" Foreground="{StaticResource AccentBrush}" Margin="0,0,8,0"/><TextBlock Text="DeepSeek Harness"/></StackPanel></Button>
                     <Button Click="Reset_Click" HorizontalContentAlignment="Left"><StackPanel Orientation="Horizontal"><local:ShellIcon Kind="Restart" Width="15" Height="15" Foreground="#B8C1D2" Margin="0,0,8,0"/><TextBlock Text="恢复外观默认值"/></StackPanel></Button>
                 </StackPanel>
             </Border>
