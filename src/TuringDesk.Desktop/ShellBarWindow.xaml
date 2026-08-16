@@ -19,8 +19,9 @@
                 <ColumnDefinition Width="46"/>
                 <ColumnDefinition Width="Auto"/>
                 <ColumnDefinition Width="*"/>
-                <ColumnDefinition Width="260"/>
+                <ColumnDefinition Width="250"/>
                 <ColumnDefinition Width="126"/>
+                <ColumnDefinition Width="42"/>
                 <ColumnDefinition Width="82"/>
                 <ColumnDefinition Width="46"/>
             </Grid.ColumnDefinitions>
@@ -42,7 +43,14 @@
                 <ItemsControl.ItemsPanel><ItemsPanelTemplate><StackPanel Orientation="Horizontal"/></ItemsPanelTemplate></ItemsControl.ItemsPanel>
                 <ItemsControl.ItemTemplate>
                     <DataTemplate>
-                        <Button Tag="{Binding Target}" Click="Pinned_Click" MouseRightButtonUp="Pinned_MouseRightButtonUp" Width="40" Height="42" Padding="0" Margin="0,0,3,0" ToolTip="{Binding Name}">
+                        <Button Tag="{Binding Target}"
+                                Click="Pinned_Click"
+                                MouseRightButtonUp="Pinned_MouseRightButtonUp"
+                                PreviewMouseLeftButtonDown="Pinned_PreviewMouseLeftButtonDown"
+                                PreviewMouseMove="Pinned_PreviewMouseMove"
+                                Drop="Pinned_Drop"
+                                AllowDrop="True"
+                                Width="40" Height="42" Padding="0" Margin="0,0,3,0" ToolTip="{Binding Name} · 可拖动排序">
                             <Grid>
                                 <Image Source="{Binding Icon}" Width="22" Height="22" Stretch="Uniform" RenderOptions.BitmapScalingMode="HighQuality"/>
                                 <TextBlock Text="{Binding Glyph}" FontSize="15" HorizontalAlignment="Center" VerticalAlignment="Center" Foreground="#AAB4C8">
@@ -91,12 +99,19 @@
                 <Button x:Name="PowerButton" Width="46" Height="38" Padding="0" Click="Power_Click" ToolTip="电源"><TextBlock x:Name="PowerText" Text="AC" FontSize="10.5"/></Button>
             </StackPanel>
 
-            <StackPanel Grid.Column="8" VerticalAlignment="Center" Margin="0,0,7,0">
+            <Button Grid.Column="8" Width="38" Height="38" Padding="0" Click="Notifications_Click" ToolTip="TuringDesk 通知中心">
+                <Grid>
+                    <TextBlock Text="♢" FontSize="17" Foreground="#AAB4C8" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                    <Border x:Name="NotificationDot" Width="7" Height="7" CornerRadius="4" Background="#8E9CFF" HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,5,5,0" Visibility="Collapsed"/>
+                </Grid>
+            </Button>
+
+            <StackPanel Grid.Column="9" VerticalAlignment="Center" Margin="0,0,7,0">
                 <TextBlock x:Name="ClockText" Text="--:--" FontWeight="SemiBold" HorizontalAlignment="Right" FontSize="11.5"/>
                 <TextBlock x:Name="DateText" Text="----/--/--" FontSize="9" Foreground="#8A95AA" HorizontalAlignment="Right"/>
             </StackPanel>
 
-            <Button Grid.Column="9" Width="40" Height="42" Padding="0" Click="Session_Click" ToolTip="会话与电源">
+            <Button Grid.Column="10" Width="40" Height="42" Padding="0" Click="Session_Click" ToolTip="会话与电源">
                 <TextBlock Text="⏻" FontSize="16" Foreground="#D6A76F"/>
             </Button>
         </Grid>
