@@ -23,32 +23,6 @@ public sealed class RuntimeClient
         }
     }
 
-    public async Task<HarnessWebState?> GetHarnessWebStateAsync()
-    {
-        try
-        {
-            return await _http.GetFromJsonAsync<HarnessWebState>("v1/harness/web");
-        }
-        catch
-        {
-            return null;
-        }
-    }
-
-    public async Task<HarnessWebState?> EnsureHarnessWebAsync()
-    {
-        try
-        {
-            using var response = await _http.PostAsync("v1/harness/web", null);
-            response.EnsureSuccessStatusCode();
-            return await response.Content.ReadFromJsonAsync<HarnessWebState>();
-        }
-        catch
-        {
-            return null;
-        }
-    }
-
     public async Task<AgentActivityState?> GetAgentStateAsync()
     {
         try
@@ -113,7 +87,6 @@ public sealed class RuntimeClient
 }
 
 public sealed record RuntimeHealth(bool Ok, string Mode, string Version, RuntimeModelSettings? Model);
-public sealed record HarnessWebState(bool Ok, string Url, string State, string? Error = null);
 public sealed record ChatRequest(string Message);
 public sealed record ChatResponse(string Reply, int? RunId = null);
 public sealed record ModelTestResponse(bool Ok, string Reply);
