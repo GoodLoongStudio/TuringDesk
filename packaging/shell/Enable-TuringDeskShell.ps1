@@ -14,6 +14,7 @@ $TuringRoot = Join-Path $env:LOCALAPPDATA "TuringDesk"
 $VersionsRoot = Join-Path $TuringRoot "Versions"
 $PolicyPath = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Policies\System"
 $StatePath = "HKCU:\Software\TuringDesk\Shell"
+$Quote = '"'
 
 function Normalize-Path([string]$PathValue) {
     return [System.IO.Path]::GetFullPath($PathValue).TrimEnd('\')
@@ -92,14 +93,14 @@ if (-not $alreadyTuringDesk) {
 New-ItemProperty -Path $StatePath -Name InstallRoot -PropertyType String -Value $InstallRoot -Force | Out-Null
 New-ItemProperty -Path $StatePath -Name Version -PropertyType String -Value $VersionTag -Force | Out-Null
 New-ItemProperty -Path $StatePath -Name Enabled -PropertyType DWord -Value 1 -Force | Out-Null
-New-ItemProperty -Path $PolicyPath -Name Shell -PropertyType String -Value ('"'.Replace('\','') + $ShellHost + '"'.Replace('\','')) -Force | Out-Null
+New-ItemProperty -Path $PolicyPath -Name Shell -PropertyType String -Value ($Quote + $ShellHost + $Quote) -Force | Out-Null
 
 # Best-effort cleanup of versions that are not the newly staged version and are not
 # the currently running Shell. Locked/current files are intentionally ignored.
 $currentInstallRoot = $null
 if ($alreadyTuringDesk) {
     try {
-        $currentShellPath = $current.ToString().Trim('"'.Replace('\',''))
+        $currentShellPath = $current.ToString().Trim($Quote)
         $currentInstallRoot = Split-Path -Parent (Split-Path -Parent $currentShellPath)
         $currentInstallRoot = Normalize-Path $currentInstallRoot
     }
