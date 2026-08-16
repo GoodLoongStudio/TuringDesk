@@ -11,6 +11,7 @@ public partial class StartMenuWindow : Window
     private readonly MainWindow _controlCenter;
     private readonly AppLauncher _launcher = new();
     private readonly DisplayMonitor _monitor;
+    private readonly ShellSettingsStore _settingsStore = new();
     private IReadOnlyList<StartAppItem> _allApps = Array.Empty<StartAppItem>();
     private bool _catalogLoaded;
 
@@ -119,6 +120,39 @@ public partial class StartMenuWindow : Window
             Hide();
             _ = ShellSurfaceCatalog.OpenTarget(target);
         }
+    }
+
+    private void App_MouseRightButtonUp(object sender, MouseButtonEventArgs e)
+    {
+        if (sender is not Button { DataContext: StartAppItem item }) return;
+
+        var settings = _settingsStore.Load();
+        var existing = settings.PinnedApps.FirstOrDefault(app =>
+            string.Equals(app.Target, item.Target, StringComparison.OrdinalIgnoreCase));
+
+        var menu = new ContextMenu();
+        var action = new MenuItem
+        {
+            Header = existing is null ? "固定到任务栏" : "从任务栏取消固定"
+        };
+        action.Click += (_, _) =>
+        {
+            if (existing is null)
+            {
+                settings.PinnedApps.Add(new PinnedShellApp(item.Name, item.Target, item.Target, item.Glyph));
+                ShellNotificationService.Publish("已固定到任务栏", item.Name, "shell");
+            }
+            else
+            {
+                settings.PinnedApps.RemoveAll(app =>
+                    string.Equals(app.Target, item.Target, StringComparison.OrdinalIgnoreCase));
+                ShellNotificationService.Publish("已取消固定", item.Name, "shell");
+            }
+            _settingsStore.Save(settings);
+        };
+        menu.Items.Add(action);
+        menu.IsOpen = true;
+        e.Handled = true;
     }
 
     private void AppsList_MouseDoubleClick(object sender, MouseButtonEventArgs e)
