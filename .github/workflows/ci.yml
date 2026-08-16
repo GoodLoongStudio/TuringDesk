@@ -24,58 +24,6 @@ jobs:
       - name: Boot bundled DeepSeek Harness + TuringDesk MCP
         run: pnpm test:harness
 
-  desktop:
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: 8.0.x
-      - run: dotnet restore src/TuringDesk.Desktop/TuringDesk.Desktop.csproj
-      - run: dotnet build src/TuringDesk.Desktop/TuringDesk.Desktop.csproj --configuration Release --no-restore
-      - run: dotnet restore src/TuringDesk.ShellHost/TuringDesk.ShellHost.csproj
-      - run: dotnet build src/TuringDesk.ShellHost/TuringDesk.ShellHost.csproj --configuration Release --no-restore
-      - name: Parse shell activation and recovery scripts
-        shell: pwsh
-        run: |
-          $files = @(
-            "packaging/shell/Enable-TuringDeskShell.ps1",
-            "packaging/shell/Restore-Explorer.ps1",
-            "packaging/shell/Preview-TuringDeskShell.ps1"
-          )
-          foreach ($file in $files) {
-            $tokens = $null
-            $errors = $null
-            [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $file), [ref]$tokens, [ref]$errors) | Out-Null
-            if ($errors.Count -gt 0) {
-              $errors | ForEach-Object { Write-Error "${file}: $($_.Message)" }
-              throw "PowerShell parser rejected $file"
-            }
-          }
-
-  portable-win-x64:
-    needs: [runtime, desktop]
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22.19.0
-      - uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: 8.0.x
-      - run: corepack enable
-      - name: Build and verify x64 replacement-shell package
-        shell: pwsh
-        run: ./scripts/package-portable.ps1 -Version "v0.8" -RuntimeIdentifier "win-x64"
-      - name: Upload x64 replacement-shell package
-        uses: actions/upload-artifact@v4
-        with:
-          name: TuringDesk-v0.8-win-x64
-          path: artifacts/TuringDesk-v0.8-win-x64/**
-          if-no-files-found: error
-          retention-days: 30
-
   portable-win-arm64:
     needs: [runtime]
     runs-on: windows-11-arm
@@ -97,14 +45,37 @@ jobs:
           Write-Host "OS architecture: $osArch"
           if ($nodeArch -ne "arm64") { throw "Expected native ARM64 Node, got $nodeArch" }
           if ($osArch -ne "Arm64") { throw "Expected Windows ARM64 runner, got $osArch" }
-      - run: corepack enable
-      - name: Build and verify native ARM64 replacement-shell package
+      - name: Build Desktop and ShellHost on ARM64
         shell: pwsh
-        run: ./scripts/package-portable.ps1 -Version "v0.8" -RuntimeIdentifier "win-arm64"
+        run: |
+          dotnet restore src/TuringDesk.Desktop/TuringDesk.Desktop.csproj
+          dotnet build src/TuringDesk.Desktop/TuringDesk.Desktop.csproj --configuration Release --no-restore
+          dotnet restore src/TuringDesk.ShellHost/TuringDesk.ShellHost.csproj
+          dotnet build src/TuringDesk.ShellHost/TuringDesk.ShellHost.csproj --configuration Release --no-restore
+      - name: Parse direct Shell install and recovery scripts
+        shell: pwsh
+        run: |
+          $files = @(
+            "packaging/shell/Enable-TuringDeskShell.ps1",
+            "packaging/shell/Restore-Explorer.ps1"
+          )
+          foreach ($file in $files) {
+            $tokens = $null
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $file), [ref]$tokens, [ref]$errors) | Out-Null
+            if ($errors.Count -gt 0) {
+              $errors | ForEach-Object { Write-Error "${file}: $($_.Message)" }
+              throw "PowerShell parser rejected $file"
+            }
+          }
+      - run: corepack enable
+      - name: Build and verify native ARM64 direct replacement-shell package
+        shell: pwsh
+        run: ./scripts/package-portable.ps1 -Version "v0.9" -RuntimeIdentifier "win-arm64"
       - name: Upload native ARM64 replacement-shell package
         uses: actions/upload-artifact@v4
         with:
-          name: TuringDesk-v0.8-win-arm64
-          path: artifacts/TuringDesk-v0.8-win-arm64/**
+          name: TuringDesk-v0.9-win-arm64
+          path: artifacts/TuringDesk-v0.9-win-arm64/**
           if-no-files-found: error
           retention-days: 30
