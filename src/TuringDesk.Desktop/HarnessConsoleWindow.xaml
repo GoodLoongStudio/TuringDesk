@@ -1,0 +1,72 @@
+<Window x:Class="TuringDesk.Desktop.HarnessConsoleWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="clr-namespace:TuringDesk.Desktop"
+        xmlns:wv2="clr-namespace:Microsoft.Web.WebView2.Wpf;assembly=Microsoft.Web.WebView2.Wpf"
+        Title="TuringDesk · Agent 控制台"
+        Width="1180" Height="780"
+        MinWidth="900" MinHeight="620"
+        WindowStartupLocation="CenterOwner"
+        WindowStyle="None"
+        ResizeMode="CanResize"
+        Background="{StaticResource WindowBrush}"
+        Foreground="{StaticResource TextBrush}"
+        FontFamily="Segoe UI Variable, Segoe UI">
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="48"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+
+        <Border Grid.Row="0"
+                Background="{StaticResource SurfaceBrush}"
+                BorderBrush="{StaticResource StrokeBrush}"
+                BorderThickness="0,0,0,1"
+                MouseLeftButtonDown="TitleBar_MouseLeftButtonDown">
+            <Grid Margin="14,0,8,0">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                    <local:ShellIcon Kind="Agent" Width="18" Height="18" Foreground="{StaticResource AccentBrush}" Margin="0,0,9,0"/>
+                    <TextBlock Text="Agent 控制台" FontSize="14" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                    <Border Background="{StaticResource AccentSoftBrush}" CornerRadius="10" Padding="8,3" Margin="10,0,0,0">
+                        <TextBlock Text="DeepSeek Harness" Foreground="{StaticResource AccentBrush}" FontSize="10" FontWeight="SemiBold"/>
+                    </Border>
+                </StackPanel>
+
+                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                    <Button Width="36" Height="32" Margin="0,0,4,0" Click="Refresh_Click" ToolTip="刷新">
+                        <local:ShellIcon Kind="Refresh" Width="14" Height="14"/>
+                    </Button>
+                    <Button Width="36" Height="32" Click="Close_Click" ToolTip="关闭">
+                        <local:ShellIcon Kind="Close" Width="13" Height="13"/>
+                    </Button>
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <Grid Grid.Row="1" Background="{StaticResource WindowBrush}">
+            <wv2:WebView2 x:Name="HarnessView" Visibility="Collapsed"/>
+
+            <Grid x:Name="LoadingPanel" Background="{StaticResource WindowBrush}">
+                <StackPanel Width="440" HorizontalAlignment="Center" VerticalAlignment="Center">
+                    <Border Width="58" Height="58" CornerRadius="16" Background="{StaticResource AccentSoftBrush}" HorizontalAlignment="Center" Margin="0,0,0,18">
+                        <local:ShellIcon Kind="Agent" Width="28" Height="28" Foreground="{StaticResource AccentBrush}" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                    </Border>
+                    <TextBlock x:Name="LoadingTitle" Text="正在启动 Agent 控制台" FontSize="20" FontWeight="SemiBold" TextAlignment="Center"/>
+                    <TextBlock x:Name="LoadingDetail"
+                               Text="正在启动本机 DeepSeek Harness WebUI…"
+                               Foreground="{StaticResource MutedBrush}"
+                               TextAlignment="Center"
+                               TextWrapping="Wrap"
+                               Margin="0,8,0,18"/>
+                    <ProgressBar x:Name="LoadingProgress" Height="3" IsIndeterminate="True"/>
+                    <Button x:Name="RetryButton" Content="重试" Width="96" Height="34" HorizontalAlignment="Center" Margin="0,18,0,0" Visibility="Collapsed" Click="Retry_Click"/>
+                </StackPanel>
+            </Grid>
+        </Grid>
+    </Grid>
+</Window>
