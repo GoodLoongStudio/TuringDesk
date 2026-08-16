@@ -7,7 +7,10 @@
         ShowInTaskbar="False"
         Background="#0B0D12"
         Foreground="{StaticResource TextBrush}"
-        FontFamily="Segoe UI Variable, Segoe UI">
+        FontFamily="Segoe UI Variable, Segoe UI"
+        AllowDrop="True"
+        DragOver="Desktop_DragOver"
+        Drop="Desktop_Drop">
     <Grid x:Name="DesktopRoot">
         <Grid.Background>
             <RadialGradientBrush Center="0.18,0.14" GradientOrigin="0.18,0.14" RadiusX="0.9" RadiusY="0.9">
@@ -73,7 +76,9 @@
                      BorderThickness="0"
                      ScrollViewer.VerticalScrollBarVisibility="Auto"
                      ScrollViewer.HorizontalScrollBarVisibility="Disabled"
-                     MouseDoubleClick="DesktopItemsList_MouseDoubleClick">
+                     MouseDoubleClick="DesktopItemsList_MouseDoubleClick"
+                     PreviewMouseLeftButtonDown="DesktopItemsList_PreviewMouseLeftButtonDown"
+                     PreviewMouseMove="DesktopItemsList_PreviewMouseMove">
                 <ListBox.ItemsPanel>
                     <ItemsPanelTemplate>
                         <WrapPanel Orientation="Horizontal"/>
@@ -142,7 +147,7 @@
             </ListBox>
 
             <Border x:Name="DesktopHint" Grid.Row="2" HorizontalAlignment="Left" Background="#181D29" BorderBrush="#30394F" BorderThickness="1" CornerRadius="12" Padding="12,7" Margin="4,14,0,0">
-                <TextBlock Text="右键桌面可刷新、新建文件夹或进入个性化 · 底部任务栏可以切换窗口或直接问图灵" Foreground="#9AA5BC" FontSize="10.5"/>
+                <TextBlock Text="文件可拖入/拖出桌面 · 右键可新建文件夹或进入个性化 · 底部任务栏可切换窗口或问图灵" Foreground="#9AA5BC" FontSize="10.5"/>
             </Border>
         </Grid>
     </Grid>
