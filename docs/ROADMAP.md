@@ -1,79 +1,141 @@
 # TuringDesk Roadmap
 
-## v0.1 — Desktop bootstrap
+## 已完成基础阶段
+
+### v0.1 — Desktop bootstrap
 
 - [x] Windows desktop shell UI
 - [x] local runtime process boundary
-- [x] DeepSeek Harness stdio JSON-RPC gateway
-- [x] persistent Harness chat session identity
-- [x] launch Chrome / VS Code / Terminal
-- [x] discover native top-level windows
-- [x] native side-by-side window layout demo
-- [x] CI builds Runtime + Windows Desktop
-- [x] portable Windows x64 developer build
+- [x] DeepSeek Harness integration path
+- [x] native Windows app/window discovery
+- [x] basic app launch and window layout
+- [x] CI build pipeline
 
-## v0.2 — Capability bus, voice, model onboarding
+### v0.2 — Capability bus / voice / model onboarding
 
-- [x] stable TuringDesk capability protocol
+- [x] stable TuringDesk Capability boundary
 - [x] loopback-only Windows Capability Server
-- [x] `app.launch`
-- [x] `window.list/find/focus/move/resize/tile`
-- [x] TuringDesk MCP server for DeepSeek Harness
-- [x] MCP compatibility smoke test
-- [x] remove command parsing from the WPF UI
-- [x] Runtime-side desktop intent path for no-key testing
-- [x] always-on Windows desktop speech recognition
-- [x] wake phrase flow: “图灵桌面” / “Turing Desk”
-- [x] visible pause/resume microphone control
-- [x] beginner-friendly model settings dialog
-- [x] DeepSeek API preset
-- [x] Ollama and LM Studio local-model presets
-- [x] generic OpenAI-compatible endpoint
-- [x] Windows Credential Manager storage for the active API key
-- [x] model connection test
-- [ ] real Windows 11 microphone validation
-- [ ] live DeepSeek Harness + MCP agent turn on Windows
+- [x] TuringDesk Windows MCP bridge
+- [x] Windows speech recognition / wake flow
+- [x] beginner-oriented model connection path
+- [x] Windows Credential Manager secret storage
+- [x] MCP / Harness smoke tests
 
-Target demos:
+### v0.3–v0.10 — Replacement shell and desktop productization
 
-> “图灵桌面，打开 Chrome。”
+- [x] optional current-user replacement Shell
+- [x] resilient `TuringDesk.ShellHost`
+- [x] Explorer recovery path
+- [x] Desktop Surface
+- [x] Start Menu
+- [x] Windows AppBar-based taskbar
+- [x] desktop file / shortcut indexing
+- [x] practical Windows-style desktop context operations
+- [x] persistent Agent command entry
+- [x] Conversation Card
+- [x] Execution Trace Card
+- [x] Desktop DIY Center
+- [x] wallpaper / theme / taskbar / Agent-card customization
+- [x] multi-monitor shell/taskbar groundwork
+- [x] persistent taskbar pinning groundwork
+- [x] semantic TuringDesk vector icon fallback system
 
-> “图灵桌面” → “打开 Chrome 和 VS Code，左右排列。”
+## v0.11 — Standard installer + native-first icons + official Harness WebUI
 
-> Settings → DeepSeek → paste API key → Test → Save.
+- [x] Windows ARM64 MSI installer
+- [x] Program Files installation ownership
+- [x] Start menu / repair / upgrade / uninstall lifecycle
+- [x] restore Explorer before real uninstall
+- [x] real multi-size TuringDesk Application Icon embedded into Desktop EXE
+- [x] real multi-size TuringDesk Application Icon embedded into ShellHost EXE
+- [x] installer / Start menu product icon
+- [x] Windows native Shell Icon first for real apps/files
+- [x] Windows Stock Icon fallback for Windows system functions
+- [x] TuringDesk vector icon only when native icon is unavailable
+- [x] bundle DeepSeek Harness runtime family `0.1.0-rc.6`
+- [x] official Harness WebUI packaged and smoke-tested from final install layout
+- [x] WebView2 wrapper for official Harness WebUI
+- [x] TuringDesk launch automatically starts/ensures Harness in background
+- [x] Harness WebView remains optional UI rather than service lifecycle owner
+- [x] Quick Agent interactions remain available without opening the Harness WebView
+- [x] Conversation / Execution Trace Cards remain TuringDesk-native
+- [x] ARM64 CI generates a verified MSI artifact
 
-> Settings → Ollama / LM Studio → fill model ID → Save without an API key.
+Current release target:
 
-## v0.3 — Agentic desktop
+```text
+TuringDesk-v0.11-win-arm64.msi
+```
 
-- [ ] tool approval UI and policy broker
-- [ ] stream Harness tool activity into Desktop
-- [ ] persistent/recoverable sessions
+## v0.12 — Usability and reliability pass
+
+Priority: **make v0.11 comfortable to use repeatedly on a real Windows machine**.
+
+- [ ] real-device Windows 11 ARM64 install / upgrade / uninstall matrix
+- [ ] real replacement-shell sign-in / recovery soak testing
+- [ ] Harness automatic restart / health-state UX hardening
+- [ ] faster cold start and smaller installation footprint
+- [ ] reduce duplicated Runtime/Harness packaging work in CI
+- [ ] quick Agent interaction UX polish
+- [ ] better Conversation / Trace Card streaming updates
+- [ ] explicit stop/cancel affordance for active Agent runs
+- [ ] approval UI for capabilities that require user confirmation
+- [ ] desktop / taskbar animation and Fluent polish
+- [ ] more complete native icon resolution for special Windows shell objects
+- [ ] keyboard/global shortcut pass
+
+## v0.13 — Windows compatibility pass
+
+- [ ] notification-area / system-tray compatibility layer
+- [ ] Jump Lists
+- [ ] desktop free-position persistence
+- [ ] richer Explorer context-menu extension compatibility
+- [ ] multi-monitor edge cases and independent monitor state
+- [ ] DPI / work-area / display hot-plug hardening
+- [ ] full-screen / borderless / exclusive-mode game compatibility tests
+- [ ] sleep / resume / Fast User Switching validation
+
+## v0.14 — Agent capability expansion
+
+Capabilities should grow behind policy rather than by exposing a generic shell.
+
 - [ ] robust app/process/window identity
 - [ ] Windows UI Automation inspection/action tools
-- [ ] file search and safe file actions
-- [ ] dynamic workspace cards
-- [ ] browser surface/integration
+- [ ] safe file search and reviewed file actions
+- [ ] browser DOM integration
+- [ ] workspace context awareness
 - [ ] task/goal center
-- [ ] context awareness for active workspace/windows
-- [ ] optional cloud speech fallback for languages not installed locally
+- [ ] recoverable Agent sessions
+- [ ] structured audit/event history
+- [ ] permission scopes per capability / plugin
 
-## v0.5 — Daily-driver preview
+## v0.15 — Distribution quality
 
-- [ ] local encrypted settings migration/versioning
-- [ ] crash recovery
-- [ ] auto start/login experience
-- [ ] multi-monitor workspace management
-- [ ] local + cloud model routing policies
-- [ ] signed MSIX/installer and updater
-- [ ] migrate speech backend to `Windows.Media.SpeechRecognition` when packaged identity is available
+- [ ] Windows x64 MSI build
+- [ ] code signing
+- [ ] SmartScreen / reputation-friendly distribution flow
+- [ ] installer upgrade migration tests
+- [ ] automatic updater strategy
+- [ ] settings migration/versioning
+- [ ] crash reporting / diagnostics export
+- [ ] release channel separation (stable / preview / dev)
 
-## v1.0 — AI-native Windows shell
+## v1.0 — AI-native Windows desktop
 
-Only after the desktop is stable:
+v1.0 should only be declared after TuringDesk is stable enough to behave like a real desktop rather than a technical preview.
 
-- optional Explorer shell replacement on supported Windows editions
-- system-level window/workspace lifecycle
-- plugin/skill distribution
-- security policy and audit log
+Target qualities:
+
+- reliable optional replacement-shell experience
+- fast recovery path
+- persistent Agent kernel
+- quick text and voice interaction
+- full Harness console available on demand
+- observable Agent execution
+- strong Windows app compatibility
+- safe capability / permission model
+- plugin / skill distribution
 - developer SDK for third-party capabilities and AI surfaces
+- signed installer and updater
+
+The goal is not “put a chatbot on Windows”. The goal is a Windows desktop where AI is a first-class interaction and execution layer without discarding the Windows ecosystem.
