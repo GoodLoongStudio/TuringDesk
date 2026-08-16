@@ -10,14 +10,16 @@ public partial class StartMenuWindow : Window
 {
     private readonly MainWindow _controlCenter;
     private readonly AppLauncher _launcher = new();
+    private readonly DisplayMonitor _monitor;
     private IReadOnlyList<StartAppItem> _allApps = Array.Empty<StartAppItem>();
     private bool _catalogLoaded;
 
     public ObservableCollection<StartAppItem> VisibleApps { get; } = new();
 
-    public StartMenuWindow(MainWindow controlCenter)
+    public StartMenuWindow(MainWindow controlCenter, DisplayMonitor monitor)
     {
         _controlCenter = controlCenter;
+        _monitor = monitor;
         InitializeComponent();
         DataContext = this;
         Loaded += OnLoaded;
@@ -26,8 +28,8 @@ public partial class StartMenuWindow : Window
 
     internal async Task ShowMenuAsync()
     {
-        PositionWindow();
         if (!IsVisible) Show();
+        PositionWindow();
         Activate();
         SearchBox.Focus();
         Keyboard.Focus(SearchBox);
@@ -53,6 +55,9 @@ public partial class StartMenuWindow : Window
     private void OnLoaded(object sender, RoutedEventArgs e)
     {
         UserNameText.Text = Environment.UserName;
+        MonitorText.Text = _monitor.IsPrimary
+            ? "主显示器 · 当前 Shell 会话"
+            : $"扩展显示器 · {_monitor.Width}×{_monitor.Height}";
         PositionWindow();
     }
 
@@ -89,12 +94,7 @@ public partial class StartMenuWindow : Window
             : $"{visible.Length} 个结果";
     }
 
-    private void PositionWindow()
-    {
-        var workArea = SystemParameters.WorkArea;
-        Left = workArea.Left + Math.Max(10, (workArea.Width - Width) / 2);
-        Top = Math.Max(workArea.Top + 10, workArea.Bottom - Height - 10);
-    }
+    private void PositionWindow() => DisplayManager.PositionPopupBottomCenter(this, _monitor);
 
     private async Task LaunchPinnedAsync(string app)
     {
