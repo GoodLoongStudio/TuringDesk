@@ -40,7 +40,7 @@
                         <Button Tag="{Binding Target}" Click="Pinned_Click" MouseRightButtonUp="Pinned_MouseRightButtonUp" PreviewMouseLeftButtonDown="Pinned_PreviewMouseLeftButtonDown" PreviewMouseMove="Pinned_PreviewMouseMove" Drop="Pinned_Drop" AllowDrop="True" Width="40" Height="42" Padding="0" Margin="0,0,3,0" ToolTip="{Binding Name}">
                             <Grid>
                                 <Image Source="{Binding Icon}" Width="22" Height="22" Stretch="Uniform" RenderOptions.BitmapScalingMode="HighQuality"/>
-                                <local:ShellIcon Kind="App" Width="19" Height="19" Foreground="#AAB4C8" HorizontalAlignment="Center" VerticalAlignment="Center">
+                                <local:ShellIcon Kind="{Binding Glyph}" Width="19" Height="19" Foreground="#AAB4C8" HorizontalAlignment="Center" VerticalAlignment="Center">
                                     <local:ShellIcon.Style>
                                         <Style TargetType="local:ShellIcon"><Setter Property="Visibility" Value="Collapsed"/><Style.Triggers><DataTrigger Binding="{Binding Icon}" Value="{x:Null}"><Setter Property="Visibility" Value="Visible"/></DataTrigger></Style.Triggers></Style>
                                     </local:ShellIcon.Style>
@@ -96,15 +96,25 @@
                     </Grid>
                 </Button>
                 <Button Width="38" Height="38" Padding="0" Click="Volume_Click" ToolTip="声音设置"><local:ShellIcon Kind="Volume" Width="18" Height="18" Foreground="#AAB4C8"/></Button>
-                <Button x:Name="PowerButton" Width="46" Height="38" Padding="0" Click="Power_Click" ToolTip="电源"><StackPanel Orientation="Horizontal" HorizontalAlignment="Center"><local:ShellIcon Kind="Battery" Width="16" Height="16" Foreground="#AAB4C8" Margin="0,0,3,0"/><TextBlock x:Name="PowerText" Text="AC" FontSize="9.5" VerticalAlignment="Center"/></StackPanel></Button>
+                <Button x:Name="PowerButton" Width="52" Height="38" Padding="0" Click="Power_Click" ToolTip="电源">
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                        <local:ShellIcon Width="16" Height="16" Foreground="#AAB4C8" Margin="0,0,4,0">
+                            <local:ShellIcon.Style>
+                                <Style TargetType="local:ShellIcon">
+                                    <Setter Property="Kind" Value="Battery"/>
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding Text, ElementName=PowerText}" Value="AC"><Setter Property="Kind" Value="Plug"/></DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </local:ShellIcon.Style>
+                        </local:ShellIcon>
+                        <TextBlock x:Name="PowerText" Text="AC" FontSize="9.5" VerticalAlignment="Center"/>
+                    </StackPanel>
+                </Button>
             </StackPanel>
 
             <Button Grid.Column="8" Width="38" Height="38" Padding="0" Click="Settings_Click" ToolTip="桌面 DIY 中心"><local:ShellIcon Kind="Settings" Width="18" Height="18" Foreground="#B5BED0"/></Button>
-
-            <Button Grid.Column="9" Width="38" Height="38" Padding="0" Click="Notifications_Click" ToolTip="TuringDesk 通知中心">
-                <Grid Width="20" Height="20"><local:ShellIcon Kind="Notification" Width="18" Height="18" Foreground="#AAB4C8" HorizontalAlignment="Center" VerticalAlignment="Center"/><Border x:Name="NotificationDot" Width="7" Height="7" CornerRadius="4" Background="#8E9CFF" HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,-1,-1,0" Visibility="Collapsed" BorderBrush="#101319" BorderThickness="1"/></Grid>
-            </Button>
-
+            <Button Grid.Column="9" Width="38" Height="38" Padding="0" Click="Notifications_Click" ToolTip="TuringDesk 通知中心"><Grid Width="20" Height="20"><local:ShellIcon Kind="Notification" Width="18" Height="18" Foreground="#AAB4C8" HorizontalAlignment="Center" VerticalAlignment="Center"/><Border x:Name="NotificationDot" Width="7" Height="7" CornerRadius="4" Background="#8E9CFF" HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,-1,-1,0" Visibility="Collapsed" BorderBrush="#101319" BorderThickness="1"/></Grid></Button>
             <StackPanel Grid.Column="10" VerticalAlignment="Center" Margin="0,0,7,0"><TextBlock x:Name="ClockText" Text="--:--" FontWeight="SemiBold" HorizontalAlignment="Right" FontSize="11.5"/><TextBlock x:Name="DateText" Text="----/--/--" FontSize="9" Foreground="#8A95AA" HorizontalAlignment="Right"/></StackPanel>
             <Button Grid.Column="11" Width="40" Height="42" Padding="0" Click="Session_Click" ToolTip="会话与电源"><local:ShellIcon Kind="Power" Width="18" Height="18" Foreground="#D6A76F"/></Button>
         </Grid>

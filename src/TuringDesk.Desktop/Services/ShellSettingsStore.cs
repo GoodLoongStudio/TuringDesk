@@ -3,7 +3,7 @@ using System.Text.Json;
 
 namespace TuringDesk.Desktop.Services;
 
-public sealed record PinnedShellApp(string Name, string Target, string? IconTarget, string Glyph = "◆");
+public sealed record PinnedShellApp(string Name, string Target, string? IconTarget, string Glyph = "App");
 
 public sealed class ShellAppearanceSettings
 {
@@ -33,9 +33,7 @@ public sealed class ShellSettingsStore
 
     public ShellSettingsStore()
     {
-        var directory = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "TuringDesk");
+        var directory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "TuringDesk");
         Directory.CreateDirectory(directory);
         _path = Path.Combine(directory, "shell-settings.json");
     }
@@ -84,15 +82,9 @@ public sealed class ShellSettingsStore
     private static ShellSettings Normalize(ShellSettings settings)
     {
         var appearance = settings.Appearance ?? new ShellAppearanceSettings();
-        appearance.WallpaperMode = appearance.WallpaperMode is "system" or "custom" or "solid"
-            ? appearance.WallpaperMode
-            : "system";
-        appearance.WallpaperPath = string.IsNullOrWhiteSpace(appearance.WallpaperPath)
-            ? null
-            : appearance.WallpaperPath.Trim();
-        appearance.WallpaperFit = appearance.WallpaperFit is "cover" or "contain" or "stretch"
-            ? appearance.WallpaperFit
-            : "cover";
+        appearance.WallpaperMode = appearance.WallpaperMode is "system" or "custom" or "solid" ? appearance.WallpaperMode : "system";
+        appearance.WallpaperPath = string.IsNullOrWhiteSpace(appearance.WallpaperPath) ? null : appearance.WallpaperPath.Trim();
+        appearance.WallpaperFit = appearance.WallpaperFit is "cover" or "contain" or "stretch" ? appearance.WallpaperFit : "cover";
         appearance.AccentHex = NormalizeHex(appearance.AccentHex, "#8796FF");
         appearance.TaskbarOpacity = Math.Clamp(appearance.TaskbarOpacity, 0.60, 1.0);
         appearance.AgentCardOpacity = Math.Clamp(appearance.AgentCardOpacity, 0.70, 1.0);
@@ -125,9 +117,9 @@ public sealed class ShellSettingsStore
     {
         PinnedApps =
         [
-            new("Chrome", "chrome", null, "◉"),
-            new("VS Code", "code", null, "⌘"),
-            new("Terminal", "terminal", null, ">_")
+            new("Chrome", "chrome", null, "Browser"),
+            new("VS Code", "code", null, "Code"),
+            new("Terminal", "terminal", null, "Terminal")
         ],
         Appearance = CreateDefaultAppearance()
     };

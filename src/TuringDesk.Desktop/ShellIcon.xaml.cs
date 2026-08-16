@@ -8,6 +8,11 @@ public partial class ShellIcon : UserControl
 {
     public static readonly DependencyProperty KindProperty = DependencyProperty.Register(nameof(Kind), typeof(string), typeof(ShellIcon), new PropertyMetadata("Agent", OnKindChanged));
 
+    private const string BrowserPath = "M12,3 A9,9 0 1 0 12,21 A9,9 0 1 0 12,3 M3.5,9 L20.5,9 M4.5,15 L19.5,15 M12,3 C9,7 9,17 12,21 M12,3 C15,7 15,17 12,21";
+    private const string CodePath = "M9,7 L4,12 9,17 M15,7 L20,12 15,17 M13,5 L11,19";
+    private const string TerminalPath = "M4,5 L20,5 20,19 4,19 Z M7,9 L10,12 7,15 M12,15 L17,15";
+    private const string AppPath = "M4,4 L10,4 10,10 4,10 Z M14,4 L20,4 20,10 14,10 Z M4,14 L10,14 10,20 4,20 Z M14,14 L20,14 20,20 14,20 Z";
+
     private static readonly IReadOnlyDictionary<string, string> Paths = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
     {
         ["Start"] = "M3,3 L10,3 10,10 3,10 Z M14,3 L21,3 21,10 14,10 Z M3,14 L10,14 10,21 3,21 Z M14,14 L21,14 21,21 14,21 Z",
@@ -31,12 +36,16 @@ public partial class ShellIcon : UserControl
         ["Settings"] = "M12,8.5 A3.5,3.5 0 1 0 12,15.5 A3.5,3.5 0 1 0 12,8.5 M12,3 L13,5.2 15.5,5.8 17.5,4.5 19.5,6.5 18.2,8.5 18.8,11 21,12 18.8,13 18.2,15.5 19.5,17.5 17.5,19.5 15.5,18.2 13,18.8 12,21 11,18.8 8.5,18.2 6.5,19.5 4.5,17.5 5.8,15.5 5.2,13 3,12 5.2,11 5.8,8.5 4.5,6.5 6.5,4.5 8.5,5.8 11,5.2 Z",
         ["Search"] = "M10.5,4 A6.5,6.5 0 1 0 10.5,17 A6.5,6.5 0 1 0 10.5,4 M15.2,15.2 L21,21",
         ["Close"] = "M5,5 L19,19 M19,5 L5,19",
-        ["Browser"] = "M12,3 A9,9 0 1 0 12,21 A9,9 0 1 0 12,3 M3.5,9 L20.5,9 M4.5,15 L19.5,15 M12,3 C9,7 9,17 12,21 M12,3 C15,7 15,17 12,21",
-        ["Code"] = "M9,7 L4,12 9,17 M15,7 L20,12 15,17 M13,5 L11,19",
-        ["Terminal"] = "M4,5 L20,5 20,19 4,19 Z M7,9 L10,12 7,15 M12,15 L17,15",
+        ["Browser"] = BrowserPath,
+        ["Code"] = CodePath,
+        ["Terminal"] = TerminalPath,
+        ["App"] = AppPath,
+        ["◉"] = BrowserPath,
+        ["⌘"] = CodePath,
+        [">_"] = TerminalPath,
+        ["◆"] = AppPath,
         ["File"] = "M6,3 L14,3 19,8 19,21 6,21 Z M14,3 L14,8 19,8 M9,12 L16,12 M9,16 L16,16",
         ["TextFile"] = "M6,3 L14,3 19,8 19,21 6,21 Z M14,3 L14,8 19,8 M9,12 L16,12 M9,15 L16,15 M9,18 L14,18",
-        ["App"] = "M4,4 L10,4 10,10 4,10 Z M14,4 L20,4 20,10 14,10 Z M4,14 L10,14 10,20 4,20 Z M14,14 L20,14 20,20 14,20 Z",
         ["ArrowRight"] = "M5,12 L19,12 M14,7 L19,12 14,17",
         ["User"] = "M12,4 A4,4 0 1 0 12,12 A4,4 0 1 0 12,4 M5,21 C5.5,16 18.5,16 19,21",
         ["Refresh"] = "M20,8 L20,3 15,3 M20,3 C16,0.5 9,1.5 5.5,6 C2,10.5 3,16 7,19 M4,16 L4,21 9,21 M4,21 C8,23.5 15,22.5 18.5,18 C22,13.5 21,8 17,5",
