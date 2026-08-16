@@ -1,8 +1,8 @@
-TuringDesk v0.9 ARM64 Replacement Shell
-=======================================
+TuringDesk v0.10 ARM64 Replacement Shell
+========================================
 
 Target: Windows 11 ARM64
-Artifact: TuringDesk-v0.9-win-arm64
+Artifact: TuringDesk-v0.10-win-arm64
 
 PRODUCT DIRECTION
 TuringDesk has two equal product pillars:
@@ -10,28 +10,24 @@ TuringDesk has two equal product pillars:
 2. DeepSeek Harness integration: Harness is the reasoning/execution kernel of the desktop, not a floating chatbot. Its execution state and trajectory are visible in the shell and it acts only through TuringDesk-owned MCP/Capability boundaries.
 
 DIRECT INSTALL FLOW
-v0.9 no longer ships Preview or normal-app entry points in the user-facing package.
+v0.10 is a direct replacement-shell package and does not ship Preview or normal-app entry points.
 1. Extract the entire ARM64 archive.
 2. Double-click Install-TuringDesk.cmd.
-3. TuringDesk stages the new build under %LOCALAPPDATA%\TuringDesk\Versions\<version-build> and points the CURRENT USER replacement Shell at that staged ShellHost. This allows installing a new TuringDesk build while an older Shell build is still running.
+3. TuringDesk stages the new build under %LOCALAPPDATA%\TuringDesk\Versions\<version-build> and points the CURRENT USER replacement Shell at that staged ShellHost.
 4. TuringDesk asks whether to sign out now.
-5. Choose Yes to sign out immediately; the next sign-in enters the newly installed TuringDesk directly instead of Explorer.
+5. Choose Yes to sign out immediately; the next sign-in enters TuringDesk instead of Explorer.
 6. Choose No only if you want to postpone the new Shell until a later sign-out/sign-in.
 
-NEW IN v0.9
-- ARM64 is the only produced Windows package/artifact.
-- The package is direct replacement-shell only; Preview-TuringDeskShell and Start-TuringDesk are intentionally not shipped.
-- Direct upgrades use versioned staging instead of overwriting the currently running Shell binaries.
-- A Wallpaper Engine-inspired Desktop DIY Center is accessible from the taskbar Settings button and the Control Center Settings button.
-- DIY properties persist in %LOCALAPPDATA%\TuringDesk\shell-settings.json and update the live shell.
-- Customization includes wallpaper source/path/fill, accent color, taskbar opacity, Agent card enable/opacity/auto-hide/side, plus reusable visual presets.
-- The DIY Center contains a live desktop/taskbar/Agent-card preview and links to model + DeepSeek Harness settings.
-- Calling Agent dynamically opens TWO independent floating cards: Conversation and Execution Trace.
-- Conversation and Trace card text uses editable/selectable TextBox controls, so standard select/copy/paste and Ctrl+C/Ctrl+V behavior works.
-- Conversation card shows the user prompt, result/error and Run ID.
-- Trace card polls live Runtime state and renders real TuringDesk/Harness trace items.
-- DeepSeek Harness gateway forwards selected live Harness session/tool/reasoning/checkpoint events into the Runtime trace state.
-- Agent cards can auto-hide after completion, stay visible indefinitely, move to the left/right side, or be disabled from DIY Center.
+NEW IN v0.10
+- Replaces visible placeholder glyphs in Start/taskbar/desktop shell surfaces with a reusable vector ShellIcon system.
+- Start fixed actions now have semantic Browser / Code / Terminal / Folder / Agent / Search / Settings / Desktop icons.
+- App and desktop-item fallbacks use semantic vector icons when Windows cannot provide a native file/app icon.
+- Taskbar pinned-app fallback and Agent send affordance no longer use placeholder text glyphs.
+- Desktop blank-area context menu now includes Refresh, New Folder, New Text Document, Paste, Open Desktop Folder, Display Settings, Personalization and TuringDesk Control Center.
+- Desktop item context menu now includes Open, Open File Location, Copy, Rename, Move to Recycle Bin and Properties.
+- Desktop keyboard workflow now supports Enter, F2, Delete, Ctrl+C and Ctrl+V.
+- Delete is an explicit user action with confirmation and sends the item to the Windows Recycle Bin instead of permanently deleting it.
+- Existing v0.9 Desktop DIY Center, Agent Conversation card, Agent Execution Trace card and DeepSeek Harness trajectory remain intact.
 
 DESKTOP DIY CENTER
 - Presets: System Fluent, Deep Space, Graphite.
@@ -46,14 +42,12 @@ AGENT DYNAMIC CARDS
 Conversation card:
 - automatically appears when an Agent command starts from Control Center, taskbar input or voice flow;
 - shows request, live phase, Run ID and final reply/error;
-- request and response text can be selected, edited, copied and pasted;
-- includes Paste and Copy All controls.
+- request and response text can be selected, edited, copied and pasted.
 
 Execution Trace card:
 - appears together with the Conversation card;
 - refreshes from /v1/agent/state while the run is active;
 - surfaces Runtime / DeepSeek Harness / MCP-oriented trace steps when available;
-- trace text can be selected, edited, copied and pasted;
 - does not expose hidden model chain-of-thought; it only shows product execution events and tool/runtime trajectory.
 
 DEEPSEEK HARNESS
@@ -65,18 +59,12 @@ DEEPSEEK HARNESS
 
 DESKTOP / TASKBAR
 - Real current-user + Public Desktop items with native Windows icons when available.
-- Windows-style desktop blank-area context operations remain available.
-- Desktop files retain Open / Open file location / Properties actions.
+- Semantic TuringDesk vector icon fallback when native icon extraction is unavailable.
+- Windows-style blank-area context operations and practical file-item context operations.
+- File/folder drag-in remains copy-only and never silently removes the source.
 - Custom/system wallpaper is applied by TuringDesk desktop surfaces and updates live from DIY settings.
 - Taskbar includes Start, Show Desktop, Control Center, Task Switcher, pinned apps, window tasks, Agent input, status area, DIY Settings, notifications, clock and session/power.
 - Pinned apps persist and synchronize across monitor taskbars.
-
-SHELL ACTIVATION / SIGN-OUT
-Install-TuringDesk.cmd is the user-facing entry point.
-Internally it invokes Enable-TuringDeskShell.ps1.
-After install/update TuringDesk asks whether the user wants to sign out immediately.
-- Yes: current user signs out and the staged replacement Shell takes effect on next sign-in.
-- No: current session continues and the staged new Shell waits until a later sign-out/sign-in.
 
 RECOVERY
 Normal recovery:
@@ -94,7 +82,6 @@ AUTOMATIC FAIL-SAFE
 - ShellHost supervises TuringDesk Desktop.
 - Repeated early shell exits cause automatic current-user Explorer recovery.
 - Recovery state is stored under HKCU\Software\TuringDesk\Shell.
-- The currently selected version directory is recorded in the same state key.
 - TuringDesk does not overwrite the machine-wide Winlogon Shell value.
 
 SAFETY BOUNDARY
@@ -103,6 +90,7 @@ SAFETY BOUNDARY
 - No driver or Windows service installation.
 - No unrestricted PowerShell/Bash capability is exposed to Agent.
 - No file.delete, package install, admin or power capability is exposed to Harness.
+- Desktop recycle/rename/copy operations are explicit user UI actions, not Agent capabilities.
 - Power/session actions remain explicit user UI actions with confirmation.
 - Agent trace cards expose execution events, not private chain-of-thought.
 
@@ -111,6 +99,6 @@ KNOWN LIMITATIONS
 - Jump Lists are not implemented.
 - Desktop icon free-position persistence is not implemented yet.
 - Wallpaper slideshow/per-monitor independent wallpaper behavior still needs deeper implementation.
-- Full native Explorer context-menu extension hosting is not implemented yet.
+- Full native third-party Explorer context-menu extension hosting is not implemented yet; v0.10 provides the common Windows desktop operations directly in TuringDesk.
 - Full-screen games and unusual exclusive-mode applications still need VM/real-device testing.
 - This is unsigned developer software, so SmartScreen may warn.
