@@ -33,7 +33,7 @@ async function readJson(req: IncomingMessage): Promise<any> {
 const server = createServer(async (req, res) => {
   try {
     if (req.method === 'GET' && req.url === '/health') {
-      json(res, 200, { ok: true, mode: models.mode, version: '0.3.0', model: models.current })
+      json(res, 200, { ok: true, mode: models.mode, version: '0.4.0', model: models.current })
       return
     }
 
@@ -71,15 +71,20 @@ const server = createServer(async (req, res) => {
       const runId = activity.begin(message)
       try {
         if (models.mode !== 'harness') {
+          activity.step(runId, 'runtime', '正在检查本地桌面意图能力')
           const nativeReply = await desktopAgent.tryRun(message)
           if (nativeReply) {
+            activity.step(runId, 'desktop', '本地桌面能力已完成请求')
             activity.complete(runId, nativeReply)
             json(res, 200, { reply: nativeReply, runId })
             return
           }
         }
 
-        const reply = await models.run(message)
+        activity.step(runId, models.mode === 'harness' ? 'harness' : 'model', models.mode === 'harness'
+          ? '请求交给 DeepSeek Harness Agent Kernel'
+          : '请求交给当前模型')
+        const reply = await models.run(message, (kind, text) => activity.step(runId, kind, text))
         activity.complete(runId, reply)
         json(res, 200, { reply, runId })
         return
