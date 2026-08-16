@@ -23,15 +23,11 @@ function Confirm-TuringDeskLogoff {
     if ($NoLogoff) { return $false }
 
     try {
-        Add-Type -AssemblyName PresentationFramework -ErrorAction Stop
-        $result = [System.Windows.MessageBox]::Show(
-            "TuringDesk Shell 已启用或更新，需要注销当前 Windows 用户后才能完全生效。`n`n现在注销吗？`n`n选择“否”可以稍后手动注销。",
-            "TuringDesk · 需要重新登录",
-            [System.Windows.MessageBoxButton]::YesNo,
-            [System.Windows.MessageBoxImage]::Information,
-            [System.Windows.MessageBoxResult]::No
-        )
-        return $result -eq [System.Windows.MessageBoxResult]::Yes
+        $popup = New-Object -ComObject WScript.Shell
+        $message = "TuringDesk Shell 已启用或更新，需要注销当前 Windows 用户后才能完全生效。`r`n`r`n现在注销吗？`r`n`r`n选择“否”可以稍后手动注销。"
+        # 4 = Yes/No, 64 = information icon. Popup returns 6 for Yes and 7 for No.
+        $result = $popup.Popup($message, 0, "TuringDesk - 需要重新登录", 68)
+        return $result -eq 6
     }
     catch {
         $choice = Read-Host "TuringDesk Shell needs sign-out/sign-in. Sign out now? [y/N]"
