@@ -7,15 +7,15 @@ namespace TuringDesk.Desktop;
 public partial class ShellIcon : UserControl
 {
     public static readonly DependencyProperty KindProperty = DependencyProperty.Register(
-        nameof(Kind),
-        typeof(string),
-        typeof(ShellIcon),
-        new PropertyMetadata("Agent", OnKindChanged));
+        nameof(Kind), typeof(string), typeof(ShellIcon), new PropertyMetadata("Agent", OnKindChanged));
 
     private static readonly IReadOnlyDictionary<string, string> Paths = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
     {
         ["Start"] = "M3,3 L10,3 10,10 3,10 Z M14,3 L21,3 21,10 14,10 Z M3,14 L10,14 10,21 3,21 Z M14,14 L21,14 21,21 14,21 Z",
+        ["Home"] = "M3,11 L12,3 21,11 M6,9 L6,21 18,21 18,9 M10,21 L10,14 14,14 14,21",
         ["Desktop"] = "M3,4 L21,4 21,17 3,17 Z M8,21 L16,21 M12,17 L12,21",
+        ["Workspace"] = "M4,5 L11,5 11,11 4,11 Z M13,5 L20,5 20,11 13,11 Z M4,13 L11,13 11,20 4,20 Z M13,13 L20,13 20,20 13,20 Z",
+        ["Memory"] = "M9,4 C6,3 4,6 5,9 C2,11 3,15 6,16 C5,19 8,21 11,19 M15,4 C18,3 20,6 19,9 C22,11 21,15 18,16 C19,19 16,21 13,19 M12,5 L12,19 M9,9 L15,9 M9,14 L15,14",
         ["Agent"] = "M12,2 L14.2,8.2 20.5,10.5 14.2,12.8 12,19 9.8,12.8 3.5,10.5 9.8,8.2 Z M18.5,3.5 L19.3,5.7 21.5,6.5 19.3,7.3 18.5,9.5 17.7,7.3 15.5,6.5 17.7,5.7 Z",
         ["Tasks"] = "M5,5 L19,5 19,17 5,17 Z M2,8 L5,8 M2,8 L2,20 16,20 M16,17 L16,20",
         ["Network"] = "M3,9 C8,4 16,4 21,9 M6,12 C10,8 14,8 18,12 M9,15 C11,13 13,13 15,15 M12,19 L12,19.1",
@@ -74,10 +74,7 @@ public partial class ShellIcon : UserControl
 
     private static void OnKindChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
     {
-        if (d is ShellIcon icon)
-        {
-            icon.ApplyKind(e.NewValue as string ?? "Agent");
-        }
+        if (d is ShellIcon icon) icon.ApplyKind(e.NewValue as string ?? "Agent");
     }
 
     private void ApplyKind(string kind)
