@@ -70,7 +70,7 @@ public static class DisplayManager
         ?? new DisplayMonitor("fallback", 0, 0, (int)SystemParameters.PrimaryScreenWidth, (int)SystemParameters.PrimaryScreenHeight, 0, 0, (int)SystemParameters.WorkArea.Width, (int)SystemParameters.WorkArea.Height, true);
 
     public static string GetSignature() => string.Join("|", GetMonitors().Select(monitor =>
-        $"{monitor.Id}:{monitor.Left},{monitor.Top},{monitor.Width},{monitor.Height}:{monitor.WorkLeft},{monitor.WorkTop},{monitor.WorkWidth},{monitor.WorkHeight}:{monitor.IsPrimary}"));
+        $"{monitor.Id}:{monitor.Left},{monitor.Top},{monitor.Width},{monitor.Height}:{monitor.IsPrimary}"));
 
     public static void PositionWindow(Window window, DisplayMonitor monitor, bool useWorkArea = false, bool topmost = false)
     {
@@ -103,32 +103,13 @@ public static class DisplayManager
     private delegate bool MonitorEnumProc(IntPtr hMonitor, IntPtr hdcMonitor, IntPtr lprcMonitor, IntPtr dwData);
 
     [StructLayout(LayoutKind.Sequential)]
-    private struct NativeRect
-    {
-        public int Left;
-        public int Top;
-        public int Right;
-        public int Bottom;
-    }
+    private struct NativeRect { public int Left; public int Top; public int Right; public int Bottom; }
 
     [StructLayout(LayoutKind.Sequential)]
-    private struct MonitorInfo
-    {
-        public uint cbSize;
-        public NativeRect rcMonitor;
-        public NativeRect rcWork;
-        public uint dwFlags;
-    }
+    private struct MonitorInfo { public uint cbSize; public NativeRect rcMonitor; public NativeRect rcWork; public uint dwFlags; }
 
-    [DllImport("user32.dll")]
-    private static extern bool EnumDisplayMonitors(IntPtr hdc, IntPtr lprcClip, MonitorEnumProc lpfnEnum, IntPtr dwData);
-
-    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
-    private static extern bool GetMonitorInfo(IntPtr hMonitor, ref MonitorInfo lpmi);
-
-    [DllImport("user32.dll")]
-    private static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int x, int y, int cx, int cy, uint uFlags);
-
-    [DllImport("user32.dll")]
-    private static extern uint GetDpiForWindow(IntPtr hWnd);
+    [DllImport("user32.dll")] private static extern bool EnumDisplayMonitors(IntPtr hdc, IntPtr lprcClip, MonitorEnumProc lpfnEnum, IntPtr dwData);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern bool GetMonitorInfo(IntPtr hMonitor, ref MonitorInfo lpmi);
+    [DllImport("user32.dll")] private static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int x, int y, int cx, int cy, uint uFlags);
+    [DllImport("user32.dll")] private static extern uint GetDpiForWindow(IntPtr hWnd);
 }
