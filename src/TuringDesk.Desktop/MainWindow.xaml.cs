@@ -30,7 +30,7 @@ public partial class MainWindow : Window
 
     private async void OnLoaded(object sender, RoutedEventArgs e)
     {
-        SetAgentState("正在准备桌面能力…", "启动本地能力层、AI Runtime 与常驻语音。", Color.FromRgb(241, 182, 106));
+        SetAgentState("正在准备桌面能力…", "启动本地能力层、AI Runtime、DeepSeek Harness 与常驻语音。", Color.FromRgb(241, 182, 106));
 
         _capabilities = new CapabilityServer(_launcher, _windows, AddActivity);
         try
@@ -42,6 +42,16 @@ public partial class MainWindow : Window
         {
             AddActivity("system", $"Capability server failed: {error.Message}");
             SetAgentState("部分能力不可用", "Windows Capability Server 启动失败，普通应用入口仍可使用。", Color.FromRgb(240, 125, 125));
+        }
+
+        try
+        {
+            await RuntimeHostService.EnsureRunningAsync();
+            AddActivity("system", "TuringDesk Runtime is running. Existing ShellHost-owned runtime is reused when available.");
+        }
+        catch (Exception error)
+        {
+            AddActivity("system", $"Runtime bootstrap failed: {error.Message}");
         }
 
         var health = await _runtime.GetHealthAsync();
@@ -71,12 +81,17 @@ public partial class MainWindow : Window
         }
         UpdateModelStatus();
 
+        // Harness is a desktop background service, not something the user has to
+        // start by opening the WebView. The WebView is only a full-console surface
+        // that attaches to this already-running local service.
+        _ = StartHarnessServiceAsync();
+
         var voiceReady = await _speech.StartAsync();
         if (voiceReady)
         {
             AddActivity("voice", $"Always-on Windows speech recognition ready ({_speech.RecognizerName}, {_speech.RecognizerCulture}). Say “图灵桌面” before a command.");
             VoiceStateText.Text = "已常驻 · 说“图灵桌面”唤醒";
-            SetAgentState("随时可以叫我", "说“图灵桌面”后直接下命令，或继续用鼠标和键盘操作。", Color.FromRgb(84, 214, 138));
+            SetAgentState("随时可以叫我", "快捷对话、轨迹浮卡和 Harness 都已在桌面后台工作。", Color.FromRgb(84, 214, 138));
         }
         else
         {
@@ -84,8 +99,22 @@ public partial class MainWindow : Window
             VoiceStateText.Text = "当前设备不可用 · 可继续键盘输入";
             if (health is not null)
             {
-                SetAgentState("Agent 已就绪", "常驻语音不可用，但文字指令与普通桌面操作不受影响。", Color.FromRgb(84, 214, 138));
+                SetAgentState("Agent 已就绪", "Harness 与文字快捷对话已可用；常驻语音当前设备不可用。", Color.FromRgb(84, 214, 138));
             }
+        }
+    }
+
+    private async Task StartHarnessServiceAsync()
+    {
+        try
+        {
+            var url = await HarnessWebUiService.EnsureRunningAsync();
+            AddActivity("harness", $"DeepSeek Harness background service ready ({url}). WebView may be opened at any time.");
+        }
+        catch (Exception error)
+        {
+            AddActivity("harness", $"DeepSeek Harness background service failed to start: {error.Message}");
+            ShellNotificationService.Publish("DeepSeek Harness 未启动", "快捷桌面能力仍会尽量工作；可在 DIY 中心查看 Harness 状态。", "warning");
         }
     }
 
@@ -217,7 +246,7 @@ public partial class MainWindow : Window
             const string offline = "Runtime is offline or the selected model could not answer.";
             AddActivity("ai", offline);
             SetAgentState("这次没有完成", "AI Runtime 离线或当前模型无法响应。", Color.FromRgb(240, 125, 125));
-            AgentFloatingCardsService.Fail("AI Runtime 离线或当前模型无法响应。你可以在桌面 DIY 中心检查模型与 DeepSeek Harness 设置。");
+            AgentFloatingCardsService.Fail("AI Runtime 离线或当前模型无法响应。你可以在桌面 DIY 中心检查快捷模型连接或 Harness 状态。");
             return;
         }
 
