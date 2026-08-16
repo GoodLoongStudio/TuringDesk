@@ -10,7 +10,20 @@ using TuringDesk.Desktop.Services;
 
 namespace TuringDesk.Desktop;
 
-public sealed record ShellTaskItem(string Handle, string Title, string ShortTitle, ImageSource? Icon, double ActiveOpacity);
+public sealed record ShellTaskItem(
+    string Handle,
+    string Title,
+    string ShortTitle,
+    string ProcessName,
+    string? ProcessPath,
+    ImageSource? Icon,
+    double ActiveOpacity);
+
+public sealed record PinnedShellAppView(
+    string Name,
+    string Target,
+    ImageSource? Icon,
+    string Glyph);
 
 public partial class ShellBarWindow : Window
 {
@@ -25,10 +38,13 @@ public partial class ShellBarWindow : Window
     private const int WmDpiChanged = 0x02E0;
     private const int HotkeyStart = 0x5101;
     private const int HotkeyDesktop = 0x5102;
+    private const int HotkeySwitcher = 0x5103;
+    private const uint ModAlt = 0x0001;
     private const uint ModControl = 0x0002;
     private const uint ModWin = 0x0008;
     private const uint ModNoRepeat = 0x4000;
     private const uint VkEscape = 0x1B;
+    private const uint VkSpace = 0x20;
     private const uint VkD = 0x44;
     private static readonly IntPtr HwndTopmost = new(-1);
     private const uint SwpNoActivate = 0x0010;
@@ -40,21 +56,30 @@ public partial class ShellBarWindow : Window
     private readonly RuntimeClient _runtime = new();
     private readonly AppLauncher _launcher = new();
     private readonly StartMenuWindow _startMenu;
+    private readonly TaskSwitcherWindow _taskSwitcher;
+    private readonly SessionMenuWindow _sessionMenu;
+    private readonly ShellSettingsStore _settingsStore = new();
+    private readonly ShellSettings _settings;
     private readonly DispatcherTimer _refreshTimer;
     private IntPtr _handle;
     private uint _callbackMessage;
     private bool _appBarRegistered;
     private bool _startHotkeyRegistered;
     private bool _desktopHotkeyRegistered;
+    private bool _switcherHotkeyRegistered;
     private HwndSource? _source;
 
+    public ObservableCollection<PinnedShellAppView> PinnedApps { get; } = new();
     public ObservableCollection<ShellTaskItem> Tasks { get; } = new();
 
     public ShellBarWindow(MainWindow controlCenter, DisplayMonitor monitor)
     {
         _controlCenter = controlCenter;
         _monitor = monitor;
+        _settings = _settingsStore.Load();
         _startMenu = new StartMenuWindow(controlCenter, monitor);
+        _taskSwitcher = new TaskSwitcherWindow(monitor);
+        _sessionMenu = new SessionMenuWindow(monitor);
 
         InitializeComponent();
         DataContext = this;
@@ -77,6 +102,7 @@ public partial class ShellBarWindow : Window
 
     private void OnLoaded(object sender, RoutedEventArgs e)
     {
+        RefreshPinnedApps();
         Refresh();
         _refreshTimer.Start();
     }
@@ -84,12 +110,26 @@ public partial class ShellBarWindow : Window
     private void OnClosed(object? sender, EventArgs e)
     {
         _refreshTimer.Stop();
-        if (_startMenu.IsVisible) _startMenu.Hide();
-        _startMenu.Close();
+        CloseOwnedPopup(_startMenu);
+        CloseOwnedPopup(_taskSwitcher);
+        CloseOwnedPopup(_sessionMenu);
         UnregisterShellHotkeys();
         UnregisterAppBar();
         _source?.RemoveHook(WndProc);
         _source = null;
+    }
+
+    private static void CloseOwnedPopup(Window window)
+    {
+        try
+        {
+            if (window.IsVisible) window.Hide();
+            window.Close();
+        }
+        catch
+        {
+            // Shell shutdown should continue even if a popup is already closing.
+        }
     }
 
     private void Refresh()
@@ -116,9 +156,37 @@ public partial class ShellBarWindow : Window
             var shortTitle = window.Title.Length <= 22 ? window.Title : $"{window.Title[..22]}…";
             var active = string.Equals(activeHandle, window.Handle, StringComparison.Ordinal);
             var icon = string.IsNullOrWhiteSpace(window.ProcessPath) ? null : ShellIconService.GetIcon(window.ProcessPath, large: false);
-            Tasks.Add(new ShellTaskItem(window.Handle, window.Title, shortTitle, icon, active ? 1.0 : 0.15));
+            Tasks.Add(new ShellTaskItem(
+                window.Handle,
+                window.Title,
+                shortTitle,
+                window.ProcessName,
+                window.ProcessPath,
+                icon,
+                active ? 1.0 : 0.15));
         }
     }
+
+    private void RefreshPinnedApps()
+    {
+        PinnedApps.Clear();
+        foreach (var app in _settings.PinnedApps.Take(12))
+        {
+            var icon = string.IsNullOrWhiteSpace(app.IconTarget)
+                ? null
+                : ShellIconService.GetIcon(app.IconTarget, large: false);
+            PinnedApps.Add(new PinnedShellAppView(app.Name, app.Target, icon, app.Glyph));
+        }
+    }
+
+    private void SavePins()
+    {
+        _settingsStore.Save(_settings);
+        RefreshPinnedApps();
+    }
+
+    private bool IsPinned(string target) => _settings.PinnedApps.Any(app =>
+        string.Equals(app.Target, target, StringComparison.OrdinalIgnoreCase));
 
     internal void ToggleStartMenu() => _startMenu.Toggle();
 
@@ -132,25 +200,70 @@ public partial class ShellBarWindow : Window
 
     private void Desktop_Click(object sender, RoutedEventArgs e)
     {
-        if (_startMenu.IsVisible) _startMenu.Hide();
+        HidePopups();
         _controlCenter.ShowDesktop(true);
     }
 
     private void Home_Click(object sender, RoutedEventArgs e)
     {
-        if (_startMenu.IsVisible) _startMenu.Hide();
+        HidePopups();
         _controlCenter.ShowControlCenter();
     }
 
-    private async Task LaunchPinnedAsync(string app)
+    private void TaskSwitcher_Click(object sender, RoutedEventArgs e)
     {
         if (_startMenu.IsVisible) _startMenu.Hide();
-        _ = await _launcher.LaunchAsync(app);
+        if (_sessionMenu.IsVisible) _sessionMenu.Hide();
+        _taskSwitcher.Toggle();
     }
 
-    private async void Chrome_Click(object sender, RoutedEventArgs e) => await LaunchPinnedAsync("chrome");
-    private async void VSCode_Click(object sender, RoutedEventArgs e) => await LaunchPinnedAsync("code");
-    private async void Terminal_Click(object sender, RoutedEventArgs e) => await LaunchPinnedAsync("terminal");
+    private void Session_Click(object sender, RoutedEventArgs e)
+    {
+        if (_startMenu.IsVisible) _startMenu.Hide();
+        if (_taskSwitcher.IsVisible) _taskSwitcher.Hide();
+        _sessionMenu.Toggle();
+    }
+
+    private void HidePopups()
+    {
+        if (_startMenu.IsVisible) _startMenu.Hide();
+        if (_taskSwitcher.IsVisible) _taskSwitcher.Hide();
+        if (_sessionMenu.IsVisible) _sessionMenu.Hide();
+    }
+
+    private async void Pinned_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button { Tag: string target }) return;
+        HidePopups();
+        if (target is "chrome" or "code" or "terminal")
+        {
+            _ = await _launcher.LaunchAsync(target);
+        }
+        else
+        {
+            _ = ShellSurfaceCatalog.OpenTarget(target);
+        }
+    }
+
+    private void Pinned_MouseRightButtonUp(object sender, MouseButtonEventArgs e)
+    {
+        if (sender is not Button { Tag: string target }) return;
+        var app = _settings.PinnedApps.FirstOrDefault(candidate =>
+            string.Equals(candidate.Target, target, StringComparison.OrdinalIgnoreCase));
+        if (app is null) return;
+
+        var menu = new ContextMenu();
+        var unpin = new MenuItem { Header = $"从任务栏取消固定 {app.Name}" };
+        unpin.Click += (_, _) =>
+        {
+            _settings.PinnedApps.RemoveAll(candidate =>
+                string.Equals(candidate.Target, app.Target, StringComparison.OrdinalIgnoreCase));
+            SavePins();
+        };
+        menu.Items.Add(unpin);
+        menu.IsOpen = true;
+        e.Handled = true;
+    }
 
     private void Task_Click(object sender, RoutedEventArgs e)
     {
@@ -161,9 +274,31 @@ public partial class ShellBarWindow : Window
         }
     }
 
+    private void Task_MouseRightButtonUp(object sender, MouseButtonEventArgs e)
+    {
+        if (sender is not Button { DataContext: ShellTaskItem item } || string.IsNullOrWhiteSpace(item.ProcessPath)) return;
+
+        var alreadyPinned = IsPinned(item.ProcessPath);
+        var menu = new ContextMenu();
+        var pin = new MenuItem
+        {
+            Header = alreadyPinned ? "已固定到任务栏" : "固定到任务栏",
+            IsEnabled = !alreadyPinned
+        };
+        pin.Click += (_, _) =>
+        {
+            if (alreadyPinned || string.IsNullOrWhiteSpace(item.ProcessPath)) return;
+            _settings.PinnedApps.Add(new PinnedShellApp(item.ProcessName, item.ProcessPath, item.ProcessPath));
+            SavePins();
+        };
+        menu.Items.Add(pin);
+        menu.IsOpen = true;
+        e.Handled = true;
+    }
+
     private void Network_Click(object sender, RoutedEventArgs e) => _ = ShellSurfaceCatalog.OpenTarget("ms-settings:network-status");
     private void Volume_Click(object sender, RoutedEventArgs e) => _ = ShellSurfaceCatalog.OpenTarget("ms-settings:sound");
-    private void Power_Click(object sender, RoutedEventArgs e) => _ = ShellSurfaceCatalog.OpenTarget("ms-settings:powersleep");
+    private void Power_Click(object sender, RoutedEventArgs e) => Session_Click(sender, e);
 
     private async void AgentSend_Click(object sender, RoutedEventArgs e) => await SendAgentCommandAsync();
 
@@ -193,13 +328,6 @@ public partial class ShellBarWindow : Window
         }
     }
 
-    private void RestoreExplorer_Click(object sender, RoutedEventArgs e)
-    {
-        if (_startMenu.IsVisible) _startMenu.Hide();
-        ShellSession.ExitRequested = true;
-        Application.Current.Shutdown(20);
-    }
-
     private IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
     {
         if (msg == WmHotkey && _monitor.IsPrimary)
@@ -218,6 +346,13 @@ public partial class ShellBarWindow : Window
                 handled = true;
                 return IntPtr.Zero;
             }
+
+            if (id == HotkeySwitcher)
+            {
+                _taskSwitcher.Toggle();
+                handled = true;
+                return IntPtr.Zero;
+            }
         }
 
         if ((uint)msg == _callbackMessage || msg is WmSettingChange or WmDisplayChange or WmDpiChanged)
@@ -232,6 +367,7 @@ public partial class ShellBarWindow : Window
         if (!_monitor.IsPrimary || _handle == IntPtr.Zero) return;
         _startHotkeyRegistered = RegisterHotKey(_handle, HotkeyStart, ModControl | ModNoRepeat, VkEscape);
         _desktopHotkeyRegistered = RegisterHotKey(_handle, HotkeyDesktop, ModWin | ModNoRepeat, VkD);
+        _switcherHotkeyRegistered = RegisterHotKey(_handle, HotkeySwitcher, ModControl | ModAlt | ModNoRepeat, VkSpace);
     }
 
     private void UnregisterShellHotkeys()
@@ -239,8 +375,10 @@ public partial class ShellBarWindow : Window
         if (_handle == IntPtr.Zero) return;
         if (_startHotkeyRegistered) _ = UnregisterHotKey(_handle, HotkeyStart);
         if (_desktopHotkeyRegistered) _ = UnregisterHotKey(_handle, HotkeyDesktop);
+        if (_switcherHotkeyRegistered) _ = UnregisterHotKey(_handle, HotkeySwitcher);
         _startHotkeyRegistered = false;
         _desktopHotkeyRegistered = false;
+        _switcherHotkeyRegistered = false;
     }
 
     private void RegisterAppBar()
