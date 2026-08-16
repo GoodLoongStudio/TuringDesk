@@ -12,82 +12,39 @@
         Foreground="{StaticResource TextBrush}"
         FontFamily="Segoe UI Variable, Segoe UI">
     <Grid>
-        <Grid.RowDefinitions>
-            <RowDefinition Height="56"/>
-            <RowDefinition Height="*"/>
-        </Grid.RowDefinitions>
+        <Grid.RowDefinitions><RowDefinition Height="56"/><RowDefinition Height="*"/></Grid.RowDefinitions>
 
         <Border Grid.Row="0" Background="#11141B" BorderBrush="#293142" BorderThickness="0,0,0,1" MouseLeftButtonDown="TitleBar_MouseLeftButtonDown">
             <Grid Margin="16,0,10,0">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*"/>
-                    <ColumnDefinition Width="Auto"/>
-                </Grid.ColumnDefinitions>
+                <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                 <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                    <Border Width="32" Height="32" Background="{StaticResource AccentSoftBrush}" CornerRadius="9" Margin="0,0,10,0">
-                        <local:ShellIcon Kind="Settings" Width="18" Height="18" Foreground="{StaticResource AccentBrush}" HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                    </Border>
-                    <StackPanel>
-                        <TextBlock Text="桌面 DIY 中心" FontSize="15" FontWeight="SemiBold"/>
-                        <TextBlock Text="壁纸 · 主题 · 任务栏 · Agent 浮卡 · 模型" Foreground="{StaticResource MutedBrush}" FontSize="10.5"/>
-                    </StackPanel>
+                    <Border Width="32" Height="32" Background="{StaticResource AccentSoftBrush}" CornerRadius="9" Margin="0,0,10,0"><local:ShellIcon Kind="Settings" Width="18" Height="18" Foreground="{StaticResource AccentBrush}" HorizontalAlignment="Center" VerticalAlignment="Center"/></Border>
+                    <StackPanel><TextBlock Text="桌面 DIY 中心" FontSize="15" FontWeight="SemiBold"/><TextBlock Text="壁纸 · 主题 · 任务栏 · Agent 浮卡 · 模型" Foreground="{StaticResource MutedBrush}" FontSize="10.5"/></StackPanel>
                 </StackPanel>
-                <Button Grid.Column="1" Width="42" Height="38" Padding="0" Content="✕" Click="Close_Click"/>
+                <Button Grid.Column="1" Width="42" Height="38" Padding="0" Click="Close_Click" ToolTip="关闭"><local:ShellIcon Kind="Close" Width="16" Height="16" Foreground="#B7C0D2"/></Button>
             </Grid>
         </Border>
 
         <Grid Grid.Row="1" Margin="18">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="220"/>
-                <ColumnDefinition Width="16"/>
-                <ColumnDefinition Width="*"/>
-                <ColumnDefinition Width="16"/>
-                <ColumnDefinition Width="330"/>
-            </Grid.ColumnDefinitions>
+            <Grid.ColumnDefinitions><ColumnDefinition Width="220"/><ColumnDefinition Width="16"/><ColumnDefinition Width="*"/><ColumnDefinition Width="16"/><ColumnDefinition Width="330"/></Grid.ColumnDefinitions>
 
             <Border Grid.Column="0" Background="#12161E" BorderBrush="#2B3447" BorderThickness="1" CornerRadius="14" Padding="14">
                 <StackPanel>
                     <TextBlock Text="主题预设" FontSize="15" FontWeight="SemiBold" Margin="4,2,0,12"/>
-                    <Button Tag="system" Click="Preset_Click" HorizontalContentAlignment="Stretch" Margin="0,0,0,8" Padding="12">
-                        <StackPanel>
-                            <TextBlock Text="System Fluent" FontWeight="SemiBold"/>
-                            <TextBlock Text="跟随 Windows 壁纸，克制的蓝紫强调色" Foreground="{StaticResource MutedBrush}" TextWrapping="Wrap" FontSize="10.5" Margin="0,4,0,0"/>
-                        </StackPanel>
-                    </Button>
-                    <Button Tag="deep" Click="Preset_Click" HorizontalContentAlignment="Stretch" Margin="0,0,0,8" Padding="12">
-                        <StackPanel>
-                            <TextBlock Text="Deep Space" FontWeight="SemiBold"/>
-                            <TextBlock Text="更深背景与更亮 Agent 浮卡" Foreground="{StaticResource MutedBrush}" TextWrapping="Wrap" FontSize="10.5" Margin="0,4,0,0"/>
-                        </StackPanel>
-                    </Button>
-                    <Button Tag="graphite" Click="Preset_Click" HorizontalContentAlignment="Stretch" Margin="0,0,0,16" Padding="12">
-                        <StackPanel>
-                            <TextBlock Text="Graphite" FontWeight="SemiBold"/>
-                            <TextBlock Text="低饱和桌面，适合长时间工作" Foreground="{StaticResource MutedBrush}" TextWrapping="Wrap" FontSize="10.5" Margin="0,4,0,0"/>
-                        </StackPanel>
-                    </Button>
-
+                    <Button Tag="system" Click="Preset_Click" HorizontalContentAlignment="Stretch" Margin="0,0,0,8" Padding="12"><StackPanel><TextBlock Text="System Fluent" FontWeight="SemiBold"/><TextBlock Text="跟随 Windows 壁纸，克制的蓝紫强调色" Foreground="{StaticResource MutedBrush}" TextWrapping="Wrap" FontSize="10.5" Margin="0,4,0,0"/></StackPanel></Button>
+                    <Button Tag="deep" Click="Preset_Click" HorizontalContentAlignment="Stretch" Margin="0,0,0,8" Padding="12"><StackPanel><TextBlock Text="Deep Space" FontWeight="SemiBold"/><TextBlock Text="更深背景与更亮 Agent 浮卡" Foreground="{StaticResource MutedBrush}" TextWrapping="Wrap" FontSize="10.5" Margin="0,4,0,0"/></StackPanel></Button>
+                    <Button Tag="graphite" Click="Preset_Click" HorizontalContentAlignment="Stretch" Margin="0,0,0,16" Padding="12"><StackPanel><TextBlock Text="Graphite" FontWeight="SemiBold"/><TextBlock Text="低饱和桌面，适合长时间工作" Foreground="{StaticResource MutedBrush}" TextWrapping="Wrap" FontSize="10.5" Margin="0,4,0,0"/></StackPanel></Button>
                     <Separator Margin="0,2,0,14"/>
                     <TextBlock Text="入口" Foreground="{StaticResource MutedBrush}" FontSize="11" Margin="4,0,0,8"/>
-                    <Button Content="模型与 DeepSeek Harness" Click="Model_Click" HorizontalContentAlignment="Left" Margin="0,0,0,8"/>
-                    <Button Content="恢复外观默认值" Click="Reset_Click" HorizontalContentAlignment="Left"/>
+                    <Button Click="Model_Click" HorizontalContentAlignment="Left" Margin="0,0,0,8"><StackPanel Orientation="Horizontal"><local:ShellIcon Kind="Settings" Width="15" Height="15" Foreground="#B8C1D2" Margin="0,0,8,0"/><TextBlock Text="模型与 DeepSeek Harness"/></StackPanel></Button>
+                    <Button Click="Reset_Click" HorizontalContentAlignment="Left"><StackPanel Orientation="Horizontal"><local:ShellIcon Kind="Restart" Width="15" Height="15" Foreground="#B8C1D2" Margin="0,0,8,0"/><TextBlock Text="恢复外观默认值"/></StackPanel></Button>
                 </StackPanel>
             </Border>
 
             <Border Grid.Column="2" Background="#11151D" BorderBrush="#2B3447" BorderThickness="1" CornerRadius="16" Padding="16">
                 <Grid>
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="*"/>
-                    </Grid.RowDefinitions>
-                    <Grid Margin="2,0,2,14">
-                        <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-                        <StackPanel>
-                            <TextBlock Text="实时预览" FontSize="17" FontWeight="SemiBold"/>
-                            <TextBlock Text="修改右侧属性后，桌面会同步更新。" Foreground="{StaticResource MutedBrush}" FontSize="11" Margin="0,4,0,0"/>
-                        </StackPanel>
-                        <Border Grid.Column="1" Background="#183322" CornerRadius="12" Padding="10,5" VerticalAlignment="Center"><TextBlock Text="LIVE" Foreground="{StaticResource SuccessBrush}" FontSize="10" FontWeight="SemiBold"/></Border>
-                    </Grid>
+                    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+                    <Grid Margin="2,0,2,14"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><StackPanel><TextBlock Text="实时预览" FontSize="17" FontWeight="SemiBold"/><TextBlock Text="修改右侧属性后，桌面会同步更新。" Foreground="{StaticResource MutedBrush}" FontSize="11" Margin="0,4,0,0"/></StackPanel><Border Grid.Column="1" Background="#183322" CornerRadius="12" Padding="10,5" VerticalAlignment="Center"><TextBlock Text="LIVE" Foreground="{StaticResource SuccessBrush}" FontSize="10" FontWeight="SemiBold"/></Border></Grid>
 
                     <Border Grid.Row="1" x:Name="PreviewDesktop" Background="#151B28" BorderBrush="#34405A" BorderThickness="1" CornerRadius="14" ClipToBounds="True">
                         <Grid>
@@ -95,28 +52,11 @@
                             <Grid Margin="22">
                                 <Grid.RowDefinitions><RowDefinition Height="*"/><RowDefinition Height="58"/></Grid.RowDefinitions>
                                 <StackPanel Orientation="Horizontal" VerticalAlignment="Top">
-                                    <Border Width="66" Height="72" Background="#251F2B37" BorderBrush="#47526A" BorderThickness="1" CornerRadius="10" Margin="0,0,10,0">
-                                        <StackPanel VerticalAlignment="Center"><local:ShellIcon Kind="Folder" Width="24" Height="24" Foreground="#D6DEEF" HorizontalAlignment="Center"/><TextBlock Text="项目" FontSize="10" HorizontalAlignment="Center" Margin="0,6,0,0"/></StackPanel>
-                                    </Border>
-                                    <Border Width="66" Height="72" Background="#251F2B37" BorderBrush="#47526A" BorderThickness="1" CornerRadius="10">
-                                        <StackPanel VerticalAlignment="Center"><local:ShellIcon Kind="Agent" Width="24" Height="24" Foreground="{StaticResource AccentBrush}" HorizontalAlignment="Center"/><TextBlock Text="图灵" FontSize="10" HorizontalAlignment="Center" Margin="0,6,0,0"/></StackPanel>
-                                    </Border>
+                                    <Border Width="66" Height="72" Background="#251F2B37" BorderBrush="#47526A" BorderThickness="1" CornerRadius="10" Margin="0,0,10,0"><StackPanel VerticalAlignment="Center"><local:ShellIcon Kind="Folder" Width="24" Height="24" Foreground="#D6DEEF" HorizontalAlignment="Center"/><TextBlock Text="项目" FontSize="10" HorizontalAlignment="Center" Margin="0,6,0,0"/></StackPanel></Border>
+                                    <Border Width="66" Height="72" Background="#251F2B37" BorderBrush="#47526A" BorderThickness="1" CornerRadius="10"><StackPanel VerticalAlignment="Center"><local:ShellIcon Kind="Agent" Width="24" Height="24" Foreground="{StaticResource AccentBrush}" HorizontalAlignment="Center"/><TextBlock Text="图灵" FontSize="10" HorizontalAlignment="Center" Margin="0,6,0,0"/></StackPanel></Border>
                                 </StackPanel>
-
-                                <Grid Grid.Row="0" HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="0,0,4,16">
-                                    <StackPanel Orientation="Horizontal">
-                                        <Border x:Name="PreviewTraceCard" Width="190" Height="126" Background="#E51A1E28" BorderBrush="#51617D" BorderThickness="1" CornerRadius="13" Padding="12" Margin="0,0,10,0">
-                                            <StackPanel><TextBlock Text="执行轨迹" FontWeight="SemiBold"/><TextBlock Text="01  理解请求&#x0a;02  调用桌面能力&#x0a;03  整理结果" Foreground="#AAB5C8" FontSize="10.5" Margin="0,8,0,0"/></StackPanel>
-                                        </Border>
-                                        <Border x:Name="PreviewConversationCard" Width="220" Height="126" Background="#EE171B25" BorderBrush="{StaticResource AccentBrush}" BorderThickness="1" CornerRadius="13" Padding="12">
-                                            <StackPanel><TextBlock Text="图灵对话" FontWeight="SemiBold" Foreground="{StaticResource AccentBrush}"/><TextBlock Text="正在处理你的桌面任务…" TextWrapping="Wrap" FontSize="11" Margin="0,8,0,0"/></StackPanel>
-                                        </Border>
-                                    </StackPanel>
-                                </Grid>
-
-                                <Border Grid.Row="1" x:Name="PreviewTaskbar" Background="#EE101319" BorderBrush="#3A465D" BorderThickness="1" CornerRadius="12" VerticalAlignment="Bottom" Height="52" Padding="10,6">
-                                    <Grid><StackPanel Orientation="Horizontal"><local:ShellIcon Kind="Start" Width="18" Height="18" Foreground="{StaticResource AccentBrush}" Margin="4,0,14,0"/><local:ShellIcon Kind="Agent" Width="18" Height="18" Foreground="{StaticResource AccentBrush}" Margin="0,0,14,0"/><local:ShellIcon Kind="Folder" Width="18" Height="18" Foreground="#BFC8D9"/></StackPanel><TextBlock Text="14:29" HorizontalAlignment="Right" VerticalAlignment="Center" Foreground="#D6DDEB" FontSize="11"/></Grid>
-                                </Border>
+                                <Grid Grid.Row="0" HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="0,0,4,16"><StackPanel Orientation="Horizontal"><Border x:Name="PreviewTraceCard" Width="190" Height="126" Background="#E51A1E28" BorderBrush="#51617D" BorderThickness="1" CornerRadius="13" Padding="12" Margin="0,0,10,0"><StackPanel><TextBlock Text="执行轨迹" FontWeight="SemiBold"/><TextBlock Text="01  理解请求&#x0a;02  调用桌面能力&#x0a;03  整理结果" Foreground="#AAB5C8" FontSize="10.5" Margin="0,8,0,0"/></StackPanel></Border><Border x:Name="PreviewConversationCard" Width="220" Height="126" Background="#EE171B25" BorderBrush="{StaticResource AccentBrush}" BorderThickness="1" CornerRadius="13" Padding="12"><StackPanel><TextBlock Text="图灵对话" FontWeight="SemiBold" Foreground="{StaticResource AccentBrush}"/><TextBlock Text="正在处理你的桌面任务…" TextWrapping="Wrap" FontSize="11" Margin="0,8,0,0"/></StackPanel></Border></StackPanel></Grid>
+                                <Border Grid.Row="1" x:Name="PreviewTaskbar" Background="#EE101319" BorderBrush="#3A465D" BorderThickness="1" CornerRadius="12" VerticalAlignment="Bottom" Height="52" Padding="10,6"><Grid><StackPanel Orientation="Horizontal"><local:ShellIcon Kind="Start" Width="18" Height="18" Foreground="{StaticResource AccentBrush}" Margin="4,0,14,0"/><local:ShellIcon Kind="Agent" Width="18" Height="18" Foreground="{StaticResource AccentBrush}" Margin="0,0,14,0"/><local:ShellIcon Kind="Folder" Width="18" Height="18" Foreground="#BFC8D9"/></StackPanel><TextBlock Text="14:29" HorizontalAlignment="Right" VerticalAlignment="Center" Foreground="#D6DDEB" FontSize="11"/></Grid></Border>
                             </Grid>
                         </Grid>
                     </Border>
@@ -126,52 +66,9 @@
             <ScrollViewer Grid.Column="4" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
                 <StackPanel>
                     <TextBlock Text="属性" FontSize="17" FontWeight="SemiBold" Margin="2,0,0,12"/>
-
-                    <Border Style="{StaticResource CardBorderStyle}" Padding="14" Margin="0,0,0,12">
-                        <StackPanel>
-                            <TextBlock Text="壁纸" FontWeight="SemiBold"/>
-                            <TextBlock Text="像 Wallpaper Engine 的属性面板一样直接调整当前桌面。" Foreground="{StaticResource MutedBrush}" TextWrapping="Wrap" FontSize="10.5" Margin="0,4,0,10"/>
-                            <TextBlock Text="来源" Foreground="{StaticResource MutedBrush}" FontSize="10.5"/>
-                            <ComboBox x:Name="WallpaperModeCombo" SelectionChanged="AppearanceChanged" Margin="0,5,0,8">
-                                <ComboBoxItem Tag="system" Content="跟随 Windows"/>
-                                <ComboBoxItem Tag="custom" Content="自定义图片"/>
-                                <ComboBoxItem Tag="solid" Content="纯色深色"/>
-                            </ComboBox>
-                            <Grid Margin="0,0,0,8"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><TextBox x:Name="WallpaperPathBox" TextChanged="AppearanceChanged" ToolTip="自定义壁纸图片路径"/><Button Grid.Column="1" Content="浏览" Click="BrowseWallpaper_Click" Margin="7,0,0,0"/></Grid>
-                            <TextBlock Text="填充" Foreground="{StaticResource MutedBrush}" FontSize="10.5"/>
-                            <ComboBox x:Name="WallpaperFitCombo" SelectionChanged="AppearanceChanged" Margin="0,5,0,0">
-                                <ComboBoxItem Tag="cover" Content="填满 / Cover"/>
-                                <ComboBoxItem Tag="contain" Content="完整显示 / Contain"/>
-                                <ComboBoxItem Tag="stretch" Content="拉伸 / Stretch"/>
-                            </ComboBox>
-                        </StackPanel>
-                    </Border>
-
-                    <Border Style="{StaticResource CardBorderStyle}" Padding="14" Margin="0,0,0,12">
-                        <StackPanel>
-                            <TextBlock Text="主题与任务栏" FontWeight="SemiBold"/>
-                            <TextBlock Text="强调色" Foreground="{StaticResource MutedBrush}" FontSize="10.5" Margin="0,10,0,4"/>
-                            <TextBox x:Name="AccentBox" TextChanged="AppearanceChanged" ToolTip="#RRGGBB"/>
-                            <TextBlock Text="任务栏透明度" Foreground="{StaticResource MutedBrush}" FontSize="10.5" Margin="0,10,0,2"/>
-                            <Slider x:Name="TaskbarOpacitySlider" Minimum="0.60" Maximum="1.0" TickFrequency="0.05" ValueChanged="AppearanceChanged"/>
-                        </StackPanel>
-                    </Border>
-
-                    <Border Style="{StaticResource CardBorderStyle}" Padding="14" Margin="0,0,0,12">
-                        <StackPanel>
-                            <TextBlock Text="Agent 动态浮卡" FontWeight="SemiBold"/>
-                            <CheckBox x:Name="AgentCardsEnabledCheck" Content="调用 Agent 时自动弹出对话卡 + 轨迹卡" Checked="AppearanceChanged" Unchecked="AppearanceChanged" Margin="0,10,0,6"/>
-                            <TextBlock Text="浮卡透明度" Foreground="{StaticResource MutedBrush}" FontSize="10.5"/>
-                            <Slider x:Name="AgentCardOpacitySlider" Minimum="0.70" Maximum="1.0" TickFrequency="0.05" ValueChanged="AppearanceChanged" Margin="0,2,0,8"/>
-                            <TextBlock Text="完成后自动收起（秒，0=不自动）" Foreground="{StaticResource MutedBrush}" FontSize="10.5"/>
-                            <Slider x:Name="AgentAutoHideSlider" Minimum="0" Maximum="30" TickFrequency="1" IsSnapToTickEnabled="True" ValueChanged="AppearanceChanged" Margin="0,2,0,8"/>
-                            <TextBlock Text="显示侧" Foreground="{StaticResource MutedBrush}" FontSize="10.5"/>
-                            <ComboBox x:Name="AgentSideCombo" SelectionChanged="AppearanceChanged" Margin="0,5,0,0">
-                                <ComboBoxItem Tag="right" Content="屏幕右侧"/>
-                                <ComboBoxItem Tag="left" Content="屏幕左侧"/>
-                            </ComboBox>
-                        </StackPanel>
-                    </Border>
+                    <Border Style="{StaticResource CardBorderStyle}" Padding="14" Margin="0,0,0,12"><StackPanel><TextBlock Text="壁纸" FontWeight="SemiBold"/><TextBlock Text="像 Wallpaper Engine 的属性面板一样直接调整当前桌面。" Foreground="{StaticResource MutedBrush}" TextWrapping="Wrap" FontSize="10.5" Margin="0,4,0,10"/><TextBlock Text="来源" Foreground="{StaticResource MutedBrush}" FontSize="10.5"/><ComboBox x:Name="WallpaperModeCombo" SelectionChanged="AppearanceChanged" Margin="0,5,0,8"><ComboBoxItem Tag="system" Content="跟随 Windows"/><ComboBoxItem Tag="custom" Content="自定义图片"/><ComboBoxItem Tag="solid" Content="纯色深色"/></ComboBox><Grid Margin="0,0,0,8"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><TextBox x:Name="WallpaperPathBox" TextChanged="AppearanceChanged" ToolTip="自定义壁纸图片路径"/><Button Grid.Column="1" Content="浏览" Click="BrowseWallpaper_Click" Margin="7,0,0,0"/></Grid><TextBlock Text="填充" Foreground="{StaticResource MutedBrush}" FontSize="10.5"/><ComboBox x:Name="WallpaperFitCombo" SelectionChanged="AppearanceChanged" Margin="0,5,0,0"><ComboBoxItem Tag="cover" Content="填满 / Cover"/><ComboBoxItem Tag="contain" Content="完整显示 / Contain"/><ComboBoxItem Tag="stretch" Content="拉伸 / Stretch"/></ComboBox></StackPanel></Border>
+                    <Border Style="{StaticResource CardBorderStyle}" Padding="14" Margin="0,0,0,12"><StackPanel><TextBlock Text="主题与任务栏" FontWeight="SemiBold"/><TextBlock Text="强调色" Foreground="{StaticResource MutedBrush}" FontSize="10.5" Margin="0,10,0,4"/><TextBox x:Name="AccentBox" TextChanged="AppearanceChanged" ToolTip="#RRGGBB"/><TextBlock Text="任务栏透明度" Foreground="{StaticResource MutedBrush}" FontSize="10.5" Margin="0,10,0,2"/><Slider x:Name="TaskbarOpacitySlider" Minimum="0.60" Maximum="1.0" TickFrequency="0.05" ValueChanged="AppearanceChanged"/></StackPanel></Border>
+                    <Border Style="{StaticResource CardBorderStyle}" Padding="14" Margin="0,0,0,12"><StackPanel><TextBlock Text="Agent 动态浮卡" FontWeight="SemiBold"/><CheckBox x:Name="AgentCardsEnabledCheck" Content="调用 Agent 时自动弹出对话卡 + 轨迹卡" Checked="AppearanceChanged" Unchecked="AppearanceChanged" Margin="0,10,0,6"/><TextBlock Text="浮卡透明度" Foreground="{StaticResource MutedBrush}" FontSize="10.5"/><Slider x:Name="AgentCardOpacitySlider" Minimum="0.70" Maximum="1.0" TickFrequency="0.05" ValueChanged="AppearanceChanged" Margin="0,2,0,8"/><TextBlock Text="完成后自动收起（秒，0=不自动）" Foreground="{StaticResource MutedBrush}" FontSize="10.5"/><Slider x:Name="AgentAutoHideSlider" Minimum="0" Maximum="30" TickFrequency="1" IsSnapToTickEnabled="True" ValueChanged="AppearanceChanged" Margin="0,2,0,8"/><TextBlock Text="显示侧" Foreground="{StaticResource MutedBrush}" FontSize="10.5"/><ComboBox x:Name="AgentSideCombo" SelectionChanged="AppearanceChanged" Margin="0,5,0,0"><ComboBoxItem Tag="right" Content="屏幕右侧"/><ComboBoxItem Tag="left" Content="屏幕左侧"/></ComboBox></StackPanel></Border>
                 </StackPanel>
             </ScrollViewer>
         </Grid>
