@@ -18,7 +18,13 @@ const fakeDesktop = createServer(async (request, response) => {
 
   const result = body.name === 'window.list'
     ? [{ handle: '42', title: 'Smoke Window', processId: 123, processName: 'smoke', x: 0, y: 0, width: 800, height: 600 }]
-    : { accepted: true }
+    : body.name === 'desktop.snapshot'
+      ? {
+          foregroundHandle: '42',
+          monitors: [{ id: 'primary', left: 0, top: 0, width: 1920, height: 1080, isPrimary: true }],
+          windows: [{ handle: '42', title: 'Smoke Window', processName: 'smoke' }]
+        }
+      : { accepted: true }
 
   response.writeHead(200, { 'content-type': 'application/json' })
   response.end(JSON.stringify({ ok: true, result, error: null }))
@@ -42,16 +48,23 @@ const transport = new StdioClientTransport({
   stderr: 'pipe'
 })
 
-const client = new Client({ name: 'turingdesk-mcp-smoke', version: '0.2.0' }, { capabilities: {} })
+const client = new Client({ name: 'turingdesk-mcp-smoke', version: '0.3.0' }, { capabilities: {} })
 
 try {
   await client.connect(transport)
   const listed = await client.listTools()
   const names = listed.tools.map(tool => tool.name)
 
-  for (const expected of ['app_launch', 'window_list', 'window_find', 'window_focus', 'window_move', 'window_resize', 'window_tile']) {
+  for (const expected of ['desktop_snapshot', 'app_launch', 'window_list', 'window_find', 'window_focus', 'window_move', 'window_resize', 'window_tile']) {
     assert(names.includes(expected), `Missing MCP tool: ${expected}`)
   }
+
+  const snapshot = await client.callTool({ name: 'desktop_snapshot', arguments: {} })
+  assert.equal(snapshot.isError, undefined)
+  assert.equal(calls.at(-1)?.name, 'desktop.snapshot')
+  const snapshotContent = snapshot.content as Array<{ type?: string; text?: string }>
+  assert(snapshotContent[0]?.text?.includes('foregroundHandle'))
+  assert(snapshotContent[0]?.text?.includes('Smoke Window'))
 
   const result = await client.callTool({ name: 'window_list', arguments: {} })
   assert.equal(result.isError, undefined)
