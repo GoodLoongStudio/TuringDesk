@@ -109,6 +109,8 @@ public partial class ShellBarWindow : Window
     {
         ShellSettingsStore.SettingsChanged += OnShellSettingsChanged;
         ShellNotificationService.Changed += OnNotificationsChanged;
+        ShellThemeService.Apply(_settings.Appearance);
+        ApplyAppearance();
         RefreshPinnedApps();
         Refresh();
         _refreshTimer.Start();
@@ -152,8 +154,15 @@ public partial class ShellBarWindow : Window
         Dispatcher.BeginInvoke(new Action(() =>
         {
             _settings = _settingsStore.Load();
+            ShellThemeService.Apply(_settings.Appearance);
+            ApplyAppearance();
             RefreshPinnedApps();
         }), DispatcherPriority.Background);
+    }
+
+    private void ApplyAppearance()
+    {
+        Opacity = Math.Clamp(_settings.Appearance.TaskbarOpacity, 0.60, 1.0);
     }
 
     private void OnNotificationsChanged() => Dispatcher.BeginInvoke(new Action(RefreshNotificationIndicator), DispatcherPriority.Background);
@@ -234,6 +243,12 @@ public partial class ShellBarWindow : Window
     {
         HidePopups();
         _controlCenter.ShowControlCenter();
+    }
+
+    private void Settings_Click(object sender, RoutedEventArgs e)
+    {
+        HidePopups();
+        _controlCenter.ShowDiyCenter();
     }
 
     private void TaskSwitcher_Click(object sender, RoutedEventArgs e)
@@ -398,6 +413,7 @@ public partial class ShellBarWindow : Window
         if (string.IsNullOrWhiteSpace(text)) return;
 
         AgentBox.IsEnabled = false;
+        AgentFloatingCardsService.Begin(_monitor, text);
         try
         {
             AgentBox.Clear();
@@ -407,12 +423,18 @@ public partial class ShellBarWindow : Window
             {
                 var preview = reply.Length <= 140 ? reply : $"{reply[..140]}…";
                 ShellNotificationService.Publish("图灵已完成", preview, "agent");
+                AgentFloatingCardsService.Complete(reply);
+            }
+            else
+            {
+                AgentFloatingCardsService.Fail("Agent 暂时没有返回结果。请检查 Runtime 或模型设置。");
             }
         }
         catch (Exception ex)
         {
             AgentBox.ToolTip = "Agent 请求失败";
             ShellNotificationService.Publish("图灵执行失败", ex.Message, "error");
+            AgentFloatingCardsService.Fail(ex.Message);
         }
         finally
         {
