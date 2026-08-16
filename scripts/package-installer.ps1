@@ -49,6 +49,16 @@ if (-not (Test-Path $PayloadRoot)) {
     throw "Installer payload is missing: $PayloadRoot"
 }
 
+# WiX's <Files> harvesting creates a Component for each payload file. MSI has a
+# hard limit of 65,536 Components. Keep enough headroom for shortcuts, registry
+# values and future installer metadata, and fail before spending many minutes in
+# the WiX binder if a dependency layout regresses into a huge virtual store.
+$PayloadFileCount = @(Get-ChildItem $PayloadRoot -Recurse -File -Force).Count
+Write-Host "Installer payload file count: $PayloadFileCount" -ForegroundColor Cyan
+if ($PayloadFileCount -gt 60000) {
+    throw "Installer payload has $PayloadFileCount files. This exceeds the safe MSI component budget (60,000). Use a flattened/hoisted production dependency layout."
+}
+
 if (Test-Path $InstallerBuildRoot) {
     Remove-Item $InstallerBuildRoot -Recurse -Force
 }
