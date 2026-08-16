@@ -92,6 +92,11 @@ public sealed record ChatResponse(string Reply, int? RunId = null);
 public sealed record ModelTestResponse(bool Ok, string Reply);
 public sealed record RuntimeModelSettings(string ProviderId, string Mode, string BaseUrl, string Model, string? Credential = null);
 
+public sealed record AgentTraceItem(
+    DateTimeOffset At,
+    string Kind,
+    string Text);
+
 public sealed record AgentRunHistory(
     int Id,
     string Prompt,
@@ -99,7 +104,8 @@ public sealed record AgentRunHistory(
     DateTimeOffset StartedAt,
     DateTimeOffset? FinishedAt,
     string? ReplyPreview,
-    string? Error);
+    string? Error,
+    IReadOnlyList<AgentTraceItem> Trace);
 
 public sealed record AgentActivityState(
     string Phase,
@@ -110,5 +116,6 @@ public sealed record AgentActivityState(
     DateTimeOffset? FinishedAt,
     string? ReplyPreview,
     string? Error,
+    IReadOnlyList<AgentTraceItem> Trace,
     IReadOnlyList<AgentRunHistory> History,
     string Mode);
