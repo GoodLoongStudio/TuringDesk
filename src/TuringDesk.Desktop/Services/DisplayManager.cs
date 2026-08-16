@@ -85,7 +85,16 @@ public static class DisplayManager
         _ = SetWindowPos(handle, topmost ? HwndTopmost : IntPtr.Zero, x, y, Math.Max(1, width), Math.Max(1, height), SwpNoActivate | SwpShowWindow);
     }
 
-    public static void PositionPopupBottomCenter(Window window, DisplayMonitor monitor, int marginPixels = 10)
+    public static void PositionPopupBottomCenter(Window window, DisplayMonitor monitor, int marginPixels = 10) =>
+        PositionPopup(window, monitor, PopupHorizontal.Center, PopupVertical.Bottom, marginPixels);
+
+    public static void PositionPopupBottomRight(Window window, DisplayMonitor monitor, int marginPixels = 10) =>
+        PositionPopup(window, monitor, PopupHorizontal.Right, PopupVertical.Bottom, marginPixels);
+
+    public static void PositionPopupCenter(Window window, DisplayMonitor monitor, int marginPixels = 10) =>
+        PositionPopup(window, monitor, PopupHorizontal.Center, PopupVertical.Center, marginPixels);
+
+    private static void PositionPopup(Window window, DisplayMonitor monitor, PopupHorizontal horizontal, PopupVertical vertical, int marginPixels)
     {
         var handle = new WindowInteropHelper(window).Handle;
         if (handle == IntPtr.Zero) return;
@@ -94,11 +103,27 @@ public static class DisplayManager
         var scale = dpi / 96d;
         var width = (int)Math.Round(window.Width * scale);
         var height = (int)Math.Round(window.Height * scale);
-        var x = monitor.WorkLeft + Math.Max(marginPixels, (monitor.WorkWidth - width) / 2);
-        var y = Math.Max(monitor.WorkTop + marginPixels, monitor.WorkBottom - height - marginPixels);
+
+        var x = horizontal switch
+        {
+            PopupHorizontal.Right => monitor.WorkRight - width - marginPixels,
+            _ => monitor.WorkLeft + (monitor.WorkWidth - width) / 2
+        };
+
+        var y = vertical switch
+        {
+            PopupVertical.Bottom => monitor.WorkBottom - height - marginPixels,
+            _ => monitor.WorkTop + (monitor.WorkHeight - height) / 2
+        };
+
+        x = Math.Max(monitor.WorkLeft + marginPixels, x);
+        y = Math.Max(monitor.WorkTop + marginPixels, y);
 
         _ = SetWindowPos(handle, HwndTopmost, x, y, Math.Max(1, width), Math.Max(1, height), SwpNoActivate | SwpShowWindow);
     }
+
+    private enum PopupHorizontal { Center, Right }
+    private enum PopupVertical { Center, Bottom }
 
     private delegate bool MonitorEnumProc(IntPtr hMonitor, IntPtr hdcMonitor, IntPtr lprcMonitor, IntPtr dwData);
 
