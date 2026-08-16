@@ -5,7 +5,7 @@ using TuringDesk.Desktop.Services;
 
 namespace TuringDesk.Desktop;
 
-public sealed record ShellNotificationView(string Title, string Message, string Kind, string TimeText);
+public sealed record ShellNotificationView(string Title, string Message, string Kind, string IconKind, string TimeText);
 
 public partial class NotificationCenterWindow : Window
 {
@@ -54,6 +54,18 @@ public partial class NotificationCenterWindow : Window
         Refresh();
     }
 
+    private static string ResolveIconKind(string kind)
+    {
+        var value = kind?.Trim().ToLowerInvariant() ?? string.Empty;
+        if (value.Contains("agent")) return "Agent";
+        if (value.Contains("error") || value.Contains("fail")) return "Error";
+        if (value.Contains("warn")) return "Warning";
+        if (value.Contains("success") || value.Contains("done")) return "Success";
+        if (value.Contains("file") || value.Contains("desktop")) return "File";
+        if (value.Contains("shell")) return "Desktop";
+        return "Info";
+    }
+
     private void Refresh()
     {
         var items = ShellNotificationService.Snapshot();
@@ -64,6 +76,7 @@ public partial class NotificationCenterWindow : Window
                 item.Title,
                 item.Message,
                 item.Kind,
+                ResolveIconKind(item.Kind),
                 item.Timestamp.LocalDateTime.ToString("HH:mm")));
         }
         CountText.Text = $"{Notifications.Count} 条通知";

@@ -1,6 +1,7 @@
 <Window x:Class="TuringDesk.Desktop.NotificationCenterWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="clr-namespace:TuringDesk.Desktop"
         Title="TuringDesk Notifications"
         Width="420" Height="520"
         WindowStyle="None"
@@ -21,11 +22,18 @@
 
             <Grid Grid.Row="0" Margin="0,0,0,12">
                 <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-                <StackPanel>
-                    <TextBlock Text="通知中心" FontSize="20" FontWeight="SemiBold"/>
-                    <TextBlock Text="TuringDesk、Agent 与 Shell 活动" Foreground="#8F9AB0" FontSize="10.5" Margin="0,3,0,0"/>
+                <StackPanel Orientation="Horizontal">
+                    <Border Width="34" Height="34" CornerRadius="10" Background="#232A3A" Margin="0,0,10,0">
+                        <local:ShellIcon Kind="Notification" Width="18" Height="18" Foreground="#9DAAFF" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                    </Border>
+                    <StackPanel>
+                        <TextBlock Text="通知中心" FontSize="20" FontWeight="SemiBold"/>
+                        <TextBlock Text="TuringDesk、Agent 与 Shell 活动" Foreground="#8F9AB0" FontSize="10.5" Margin="0,3,0,0"/>
+                    </StackPanel>
                 </StackPanel>
-                <Button Grid.Column="1" Content="✕" Width="36" Height="36" Padding="0" Click="Close_Click"/>
+                <Button Grid.Column="1" Width="36" Height="36" Padding="0" Click="Close_Click" ToolTip="关闭">
+                    <local:ShellIcon Kind="Close" Width="16" Height="16" Foreground="#B7C0D2"/>
+                </Button>
             </Grid>
 
             <ListBox Grid.Row="1" ItemsSource="{Binding Notifications}" Background="Transparent" BorderThickness="0" ScrollViewer.VerticalScrollBarVisibility="Auto">
@@ -42,8 +50,10 @@
                     <DataTemplate>
                         <Border Background="#1A1F2B" BorderBrush="#30394F" BorderThickness="1" CornerRadius="11" Padding="12">
                             <Grid>
-                                <Grid.ColumnDefinitions><ColumnDefinition Width="30"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
-                                <TextBlock Text="●" Foreground="#8E9CFF" VerticalAlignment="Top" Margin="2,2,0,0"/>
+                                <Grid.ColumnDefinitions><ColumnDefinition Width="36"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                                <Border Width="28" Height="28" CornerRadius="9" Background="#242B3B" VerticalAlignment="Top">
+                                    <local:ShellIcon Kind="{Binding IconKind}" Width="15" Height="15" Foreground="#9DAAFF" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                </Border>
                                 <StackPanel Grid.Column="1">
                                     <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                                         <TextBlock Text="{Binding Title}" FontWeight="SemiBold" FontSize="12"/>
@@ -60,7 +70,9 @@
             <Grid Grid.Row="2" Margin="0,10,0,0">
                 <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                 <TextBlock x:Name="CountText" Text="0 条通知" Foreground="#7F8AA0" FontSize="10" VerticalAlignment="Center"/>
-                <Button Grid.Column="1" Content="清除全部" Height="34" Padding="12,0" Click="Clear_Click"/>
+                <Button Grid.Column="1" Height="34" Padding="12,0" Click="Clear_Click">
+                    <StackPanel Orientation="Horizontal"><local:ShellIcon Kind="Clear" Width="14" Height="14" Foreground="#B7C0D2" Margin="0,0,6,0"/><TextBlock Text="清除全部" VerticalAlignment="Center"/></StackPanel>
+                </Button>
             </Grid>
         </Grid>
     </Border>

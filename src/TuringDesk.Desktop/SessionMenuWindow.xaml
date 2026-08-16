@@ -1,6 +1,7 @@
 <Window x:Class="TuringDesk.Desktop.SessionMenuWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="clr-namespace:TuringDesk.Desktop"
         Title="TuringDesk Session"
         Width="330" Height="390"
         WindowStyle="None"
@@ -20,12 +21,22 @@
             </StackPanel>
 
             <StackPanel Grid.Row="1">
-                <Button Height="44" Margin="0,0,0,7" Click="Lock_Click" Content="🔒  锁定电脑" HorizontalContentAlignment="Left" Padding="14,0"/>
-                <Button Height="44" Margin="0,0,0,7" Click="SignOut_Click" Content="⇥  注销当前用户" HorizontalContentAlignment="Left" Padding="14,0"/>
-                <Button Height="44" Margin="0,0,0,7" Click="Restart_Click" Content="↻  重新启动 Windows" HorizontalContentAlignment="Left" Padding="14,0"/>
-                <Button Height="44" Margin="0,0,0,7" Click="Shutdown_Click" Content="⏻  关闭 Windows" HorizontalContentAlignment="Left" Padding="14,0"/>
+                <Button Height="44" Margin="0,0,0,7" Click="Lock_Click" HorizontalContentAlignment="Left" Padding="14,0">
+                    <StackPanel Orientation="Horizontal"><local:ShellIcon Kind="Lock" Width="18" Height="18" Foreground="#B8C3D6" Margin="0,0,10,0"/><TextBlock Text="锁定电脑" VerticalAlignment="Center"/></StackPanel>
+                </Button>
+                <Button Height="44" Margin="0,0,0,7" Click="SignOut_Click" HorizontalContentAlignment="Left" Padding="14,0">
+                    <StackPanel Orientation="Horizontal"><local:ShellIcon Kind="SignOut" Width="18" Height="18" Foreground="#B8C3D6" Margin="0,0,10,0"/><TextBlock Text="注销当前用户" VerticalAlignment="Center"/></StackPanel>
+                </Button>
+                <Button Height="44" Margin="0,0,0,7" Click="Restart_Click" HorizontalContentAlignment="Left" Padding="14,0">
+                    <StackPanel Orientation="Horizontal"><local:ShellIcon Kind="Restart" Width="18" Height="18" Foreground="#B8C3D6" Margin="0,0,10,0"/><TextBlock Text="重新启动 Windows" VerticalAlignment="Center"/></StackPanel>
+                </Button>
+                <Button Height="44" Margin="0,0,0,7" Click="Shutdown_Click" HorizontalContentAlignment="Left" Padding="14,0">
+                    <StackPanel Orientation="Horizontal"><local:ShellIcon Kind="Power" Width="18" Height="18" Foreground="#D7A96F" Margin="0,0,10,0"/><TextBlock Text="关闭 Windows" VerticalAlignment="Center"/></StackPanel>
+                </Button>
                 <Separator Margin="0,6"/>
-                <Button Height="44" Click="RestoreExplorer_Click" Content="↩  恢复 Explorer 桌面" HorizontalContentAlignment="Left" Padding="14,0"/>
+                <Button Height="44" Click="RestoreExplorer_Click" HorizontalContentAlignment="Left" Padding="14,0">
+                    <StackPanel Orientation="Horizontal"><local:ShellIcon Kind="RestoreExplorer" Width="18" Height="18" Foreground="#9DAAFF" Margin="0,0,10,0"/><TextBlock Text="恢复 Explorer 桌面" VerticalAlignment="Center"/></StackPanel>
+                </Button>
             </StackPanel>
 
             <TextBlock Grid.Row="2" Text="Esc 关闭" Foreground="#7F8AA0" FontSize="10" Margin="2,12,0,0"/>

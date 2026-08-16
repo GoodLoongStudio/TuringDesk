@@ -30,7 +30,7 @@
                         <TextBlock x:Name="KernelText" Text="DeepSeek Harness" Foreground="{StaticResource MutedBrush}" FontSize="10.5"/>
                     </StackPanel>
                 </StackPanel>
-                <Button Grid.Column="1" Width="32" Height="30" Padding="0" Content="✕" Click="Close_Click"/>
+                <Button Grid.Column="1" Width="32" Height="30" Padding="0" Click="Close_Click" ToolTip="关闭"><local:ShellIcon Kind="Close" Width="14" Height="14" Foreground="#B7C0D2"/></Button>
             </Grid>
 
             <Border Grid.Row="1" Background="#9A202631" CornerRadius="9" Padding="9,6" Margin="0,12,0,8">
@@ -42,8 +42,8 @@
             <Grid Grid.Row="3" Margin="0,10,0,0">
                 <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                 <TextBlock Text="真实 Harness / MCP 事件会逐步刷新" Foreground="#758197" FontSize="9.5" VerticalAlignment="Center"/>
-                <Button Grid.Column="1" Content="粘贴" Padding="10,5" Margin="0,0,6,0" Click="Paste_Click"/>
-                <Button Grid.Column="2" Content="复制" Padding="10,5" Click="Copy_Click"/>
+                <Button Grid.Column="1" Padding="10,5" Margin="0,0,6,0" Click="Paste_Click"><StackPanel Orientation="Horizontal"><local:ShellIcon Kind="Paste" Width="13" Height="13" Foreground="#B7C0D2" Margin="0,0,5,0"/><TextBlock Text="粘贴"/></StackPanel></Button>
+                <Button Grid.Column="2" Padding="10,5" Click="Copy_Click"><StackPanel Orientation="Horizontal"><local:ShellIcon Kind="Copy" Width="13" Height="13" Foreground="#B7C0D2" Margin="0,0,5,0"/><TextBlock Text="复制"/></StackPanel></Button>
             </Grid>
         </Grid>
     </Border>
