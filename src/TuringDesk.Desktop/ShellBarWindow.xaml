@@ -50,7 +50,7 @@
                                 PreviewMouseMove="Pinned_PreviewMouseMove"
                                 Drop="Pinned_Drop"
                                 AllowDrop="True"
-                                Width="40" Height="42" Padding="0" Margin="0,0,3,0" ToolTip="{Binding Name} · 可拖动排序">
+                                Width="40" Height="42" Padding="0" Margin="0,0,3,0" ToolTip="{Binding Name}">
                             <Grid>
                                 <Image Source="{Binding Icon}" Width="22" Height="22" Stretch="Uniform" RenderOptions.BitmapScalingMode="HighQuality"/>
                                 <TextBlock Text="{Binding Glyph}" FontSize="15" HorizontalAlignment="Center" VerticalAlignment="Center" Foreground="#AAB4C8">
