@@ -1,0 +1,154 @@
+<Window x:Class="TuringDesk.Desktop.StartMenuWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="TuringDesk Start"
+        Width="650" Height="690"
+        WindowStyle="None"
+        ResizeMode="NoResize"
+        ShowInTaskbar="False"
+        Topmost="True"
+        Background="#11141B"
+        Foreground="{StaticResource TextBrush}"
+        FontFamily="Segoe UI Variable, Segoe UI"
+        KeyDown="Window_KeyDown">
+    <Border Background="#11141B" BorderBrush="#35405B" BorderThickness="1" CornerRadius="16" Padding="18">
+        <Grid>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+
+            <Grid Grid.Row="0" Margin="0,0,0,14">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <StackPanel>
+                    <TextBlock Text="开始" FontSize="24" FontWeight="SemiBold"/>
+                    <TextBlock Text="应用、文件入口和图灵控制中心都从这里开始。" Foreground="#8F9AB0" FontSize="11" Margin="0,4,0,0"/>
+                </StackPanel>
+                <Button Grid.Column="1" Width="38" Height="38" Padding="0" Click="Close_Click" Content="✕" ToolTip="关闭"/>
+            </Grid>
+
+            <Border Grid.Row="1" Height="44" Background="#1A1F2B" BorderBrush="#36405A" BorderThickness="1" CornerRadius="10" Margin="0,0,0,18">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="38"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Text="⌕" FontSize="18" Foreground="#9DAAFF" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                    <TextBox Grid.Column="1"
+                             x:Name="SearchBox"
+                             BorderThickness="0"
+                             Background="Transparent"
+                             FontSize="13"
+                             Padding="3,10"
+                             VerticalContentAlignment="Center"
+                             TextChanged="SearchBox_TextChanged"
+                             ToolTip="搜索开始菜单应用"/>
+                </Grid>
+            </Border>
+
+            <StackPanel Grid.Row="2" Margin="0,0,0,18">
+                <Grid Margin="0,0,0,9">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Text="固定" FontSize="13" FontWeight="SemiBold"/>
+                    <TextBlock Grid.Column="1" Text="TuringDesk 快捷入口" Foreground="#7F8AA0" FontSize="10"/>
+                </Grid>
+                <UniformGrid Rows="1" Columns="5">
+                    <Button Height="76" Margin="0,0,7,0" Click="Chrome_Click">
+                        <StackPanel><TextBlock Text="◉" FontSize="23" Foreground="#9DAAFF" HorizontalAlignment="Center"/><TextBlock Text="Chrome" FontSize="10" Margin="0,6,0,0" HorizontalAlignment="Center"/></StackPanel>
+                    </Button>
+                    <Button Height="76" Margin="0,0,7,0" Click="VSCode_Click">
+                        <StackPanel><TextBlock Text="⌘" FontSize="23" Foreground="#9DAAFF" HorizontalAlignment="Center"/><TextBlock Text="VS Code" FontSize="10" Margin="0,6,0,0" HorizontalAlignment="Center"/></StackPanel>
+                    </Button>
+                    <Button Height="76" Margin="0,0,7,0" Click="Terminal_Click">
+                        <StackPanel><TextBlock Text=">_" FontSize="20" Foreground="#9DAAFF" HorizontalAlignment="Center"/><TextBlock Text="Terminal" FontSize="10" Margin="0,7,0,0" HorizontalAlignment="Center"/></StackPanel>
+                    </Button>
+                    <Button Height="76" Margin="0,0,7,0" Click="Files_Click">
+                        <StackPanel><TextBlock Text="▣" FontSize="23" Foreground="#9DAAFF" HorizontalAlignment="Center"/><TextBlock Text="文件" FontSize="10" Margin="0,6,0,0" HorizontalAlignment="Center"/></StackPanel>
+                    </Button>
+                    <Button Height="76" Click="Turing_Click">
+                        <StackPanel><TextBlock Text="✦" FontSize="23" Foreground="#9DAAFF" HorizontalAlignment="Center"/><TextBlock Text="图灵" FontSize="10" Margin="0,6,0,0" HorizontalAlignment="Center"/></StackPanel>
+                    </Button>
+                </UniformGrid>
+            </StackPanel>
+
+            <Grid Grid.Row="3">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                </Grid.RowDefinitions>
+                <Grid Margin="0,0,0,8">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Text="所有应用" FontSize="13" FontWeight="SemiBold"/>
+                    <TextBlock Grid.Column="1" x:Name="AppCountText" Text="正在建立应用索引…" Foreground="#7F8AA0" FontSize="10"/>
+                </Grid>
+
+                <ListBox Grid.Row="1"
+                         x:Name="AppsList"
+                         ItemsSource="{Binding VisibleApps}"
+                         Background="Transparent"
+                         BorderThickness="0"
+                         ScrollViewer.VerticalScrollBarVisibility="Auto"
+                         MouseDoubleClick="AppsList_MouseDoubleClick">
+                    <ListBox.ItemContainerStyle>
+                        <Style TargetType="ListBoxItem">
+                            <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+                            <Setter Property="Margin" Value="0,0,0,4"/>
+                            <Setter Property="Padding" Value="0"/>
+                            <Setter Property="Background" Value="Transparent"/>
+                            <Setter Property="BorderThickness" Value="0"/>
+                        </Style>
+                    </ListBox.ItemContainerStyle>
+                    <ListBox.ItemTemplate>
+                        <DataTemplate>
+                            <Button Tag="{Binding Target}" Click="App_Click" Height="48" HorizontalContentAlignment="Stretch" Padding="10,0">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="38"/>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <Border Width="30" Height="30" CornerRadius="8" Background="#20283A" VerticalAlignment="Center">
+                                        <TextBlock Text="{Binding Glyph}" Foreground="#A8B3FF" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                    </Border>
+                                    <TextBlock Grid.Column="1" Text="{Binding Name}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" FontSize="12"/>
+                                    <TextBlock Grid.Column="2" Text="{Binding Category}" VerticalAlignment="Center" Foreground="#7E899F" FontSize="9.5" Margin="10,0,2,0"/>
+                                </Grid>
+                            </Button>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+            </Grid>
+
+            <Grid Grid.Row="4" Margin="0,14,0,0">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                    <Border Width="30" Height="30" CornerRadius="15" Background="#28324C" Margin="0,0,9,0">
+                        <TextBlock Text="●" FontSize="10" Foreground="#9DAAFF" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                    </Border>
+                    <StackPanel>
+                        <TextBlock x:Name="UserNameText" Text="Windows 用户" FontSize="11.5" FontWeight="SemiBold"/>
+                        <TextBlock Text="当前 Shell 会话" Foreground="#7F8AA0" FontSize="9.5"/>
+                    </StackPanel>
+                </StackPanel>
+                <Button Grid.Column="1" Height="36" Padding="12,0" Margin="0,0,7,0" Click="Settings_Click" Content="⚙  设置"/>
+                <Button Grid.Column="2" Height="36" Padding="12,0" Click="Desktop_Click" Content="▱  桌面"/>
+            </Grid>
+        </Grid>
+    </Border>
+</Window>
