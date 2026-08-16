@@ -29,9 +29,9 @@ public static class AgentFloatingCardsService
         _conversation!.SetPrompt(prompt);
         _trace!.SetState(null);
         ApplySettings(settings);
-        Position(settings);
         _conversation.ShowAnimated(settings.AgentCardOpacity);
         _trace.ShowAnimated(settings.AgentCardOpacity);
+        Position(settings);
         StartPolling();
         _ = RefreshAsync(_generation);
     }
@@ -143,17 +143,17 @@ public static class AgentFloatingCardsService
     {
         if (_monitor is null || _conversation is null || _trace is null) return;
 
+        var side = string.Equals(settings.AgentCardSide, "left", StringComparison.OrdinalIgnoreCase) ? "left" : "right";
+        if (_monitor.WorkWidth < 940)
+        {
+            DisplayManager.PositionAgentCard(_conversation, _monitor, side, 0, 0);
+            DisplayManager.PositionAgentCard(_trace, _monitor, side, 0, 304);
+            return;
+        }
+
         const int gap = 12;
-        var conversationWidthPixels = 410 + gap;
-        if (string.Equals(settings.AgentCardSide, "left", StringComparison.OrdinalIgnoreCase))
-        {
-            DisplayManager.PositionAgentCard(_conversation, _monitor, "left", 0);
-            DisplayManager.PositionAgentCard(_trace, _monitor, "left", conversationWidthPixels);
-        }
-        else
-        {
-            DisplayManager.PositionAgentCard(_conversation, _monitor, "right", 0);
-            DisplayManager.PositionAgentCard(_trace, _monitor, "right", conversationWidthPixels);
-        }
+        var conversationWidth = 410 + gap;
+        DisplayManager.PositionAgentCard(_conversation, _monitor, side, 0);
+        DisplayManager.PositionAgentCard(_trace, _monitor, side, conversationWidth);
     }
 }
