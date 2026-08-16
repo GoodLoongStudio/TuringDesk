@@ -9,7 +9,7 @@ using TuringDesk.Desktop.Services;
 
 namespace TuringDesk.Desktop;
 
-public sealed record ShellTaskItem(string Handle, string Title, string ShortTitle);
+public sealed record ShellTaskItem(string Handle, string Title, string ShortTitle, double ActiveOpacity);
 
 public partial class ShellBarWindow : Window
 {
@@ -20,31 +20,43 @@ public partial class ShellBarWindow : Window
     private const uint AbeBottom = 3;
     private const int SmCxScreen = 0;
     private const int SmCyScreen = 1;
+    private const int WmSettingChange = 0x001A;
+    private const int WmDisplayChange = 0x007E;
+    private const int WmDpiChanged = 0x02E0;
 
+    private readonly MainWindow _controlCenter;
     private readonly WindowManager _windows = new();
     private readonly RuntimeClient _runtime = new();
+    private readonly AppLauncher _launcher = new();
+    private readonly StartMenuWindow _startMenu;
     private readonly DispatcherTimer _refreshTimer;
     private IntPtr _handle;
     private uint _callbackMessage;
     private bool _appBarRegistered;
+    private HwndSource? _source;
 
     public ObservableCollection<ShellTaskItem> Tasks { get; } = new();
 
-    public ShellBarWindow()
+    public ShellBarWindow(MainWindow controlCenter)
     {
+        _controlCenter = controlCenter;
+        _startMenu = new StartMenuWindow(controlCenter);
+
         InitializeComponent();
         DataContext = this;
         SourceInitialized += OnSourceInitialized;
         Loaded += OnLoaded;
         Closed += OnClosed;
 
-        _refreshTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1.5) };
+        _refreshTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1.2) };
         _refreshTimer.Tick += (_, _) => Refresh();
     }
 
     private void OnSourceInitialized(object? sender, EventArgs e)
     {
         _handle = new WindowInteropHelper(this).Handle;
+        _source = HwndSource.FromHwnd(_handle);
+        _source?.AddHook(WndProc);
         RegisterAppBar();
     }
 
@@ -57,7 +69,11 @@ public partial class ShellBarWindow : Window
     private void OnClosed(object? sender, EventArgs e)
     {
         _refreshTimer.Stop();
+        if (_startMenu.IsVisible) _startMenu.Hide();
+        _startMenu.Close();
         UnregisterAppBar();
+        _source?.RemoveHook(WndProc);
+        _source = null;
     }
 
     private void Refresh()
@@ -65,35 +81,48 @@ public partial class ShellBarWindow : Window
         ClockText.Text = DateTime.Now.ToString("HH:mm");
         DateText.Text = DateTime.Now.ToString("yyyy/MM/dd");
 
-        var snapshots = _windows.ListWindows()
-            .Where(window => !string.Equals(window.ProcessName, "explorer", StringComparison.OrdinalIgnoreCase))
-            .Take(10)
-            .ToArray();
+        var activeHandle = _windows.GetForegroundHandle();
+        var snapshots = _windows.ListWindows().Take(16).ToArray();
 
         Tasks.Clear();
         foreach (var window in snapshots)
         {
             var shortTitle = window.Title.Length <= 24 ? window.Title : $"{window.Title[..24]}…";
-            Tasks.Add(new ShellTaskItem(window.Handle, window.Title, shortTitle));
+            var active = string.Equals(activeHandle, window.Handle, StringComparison.Ordinal);
+            Tasks.Add(new ShellTaskItem(window.Handle, window.Title, shortTitle, active ? 1.0 : 0.15));
         }
+    }
+
+    private void Start_Click(object sender, RoutedEventArgs e) => _startMenu.Toggle();
+
+    private void Desktop_Click(object sender, RoutedEventArgs e)
+    {
+        if (_startMenu.IsVisible) _startMenu.Hide();
+        _controlCenter.ShowDesktop(true);
     }
 
     private void Home_Click(object sender, RoutedEventArgs e)
     {
-        var main = Application.Current.MainWindow;
-        if (main is null) return;
-        main.WindowState = WindowState.Maximized;
-        main.Show();
-        main.Activate();
+        if (_startMenu.IsVisible) _startMenu.Hide();
+        _controlCenter.ShowControlCenter();
     }
 
-    private void Apps_Click(object sender, RoutedEventArgs e) => Home_Click(sender, e);
+    private async Task LaunchPinnedAsync(string app)
+    {
+        if (_startMenu.IsVisible) _startMenu.Hide();
+        _ = await _launcher.LaunchAsync(app);
+    }
+
+    private async void Chrome_Click(object sender, RoutedEventArgs e) => await LaunchPinnedAsync("chrome");
+    private async void VSCode_Click(object sender, RoutedEventArgs e) => await LaunchPinnedAsync("code");
+    private async void Terminal_Click(object sender, RoutedEventArgs e) => await LaunchPinnedAsync("terminal");
 
     private void Task_Click(object sender, RoutedEventArgs e)
     {
         if (sender is Button { Tag: string handle })
         {
-            _windows.Focus(handle);
+            _ = _windows.ToggleTask(handle);
+            Refresh();
         }
     }
 
@@ -129,8 +158,18 @@ public partial class ShellBarWindow : Window
 
     private void RestoreExplorer_Click(object sender, RoutedEventArgs e)
     {
+        if (_startMenu.IsVisible) _startMenu.Hide();
         ShellSession.ExitRequested = true;
         Application.Current.Shutdown(20);
+    }
+
+    private IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
+    {
+        if ((uint)msg == _callbackMessage || msg is WmSettingChange or WmDisplayChange or WmDpiChanged)
+        {
+            Dispatcher.BeginInvoke(new Action(PositionAppBar), DispatcherPriority.Background);
+        }
+        return IntPtr.Zero;
     }
 
     private void RegisterAppBar()
@@ -154,7 +193,7 @@ public partial class ShellBarWindow : Window
         var scale = dpi / 96d;
         var screenWidth = GetSystemMetrics(SmCxScreen);
         var screenHeight = GetSystemMetrics(SmCyScreen);
-        var heightPixels = (int)Math.Round(58 * scale);
+        var heightPixels = (int)Math.Round(60 * scale);
 
         var data = CreateAppBarData();
         data.uEdge = AbeBottom;
