@@ -2,125 +2,190 @@
 
 ## Product boundary
 
-TuringDesk is a **Windows AI Desktop**, not a Windows kernel replacement. Windows remains the compatibility, driver and application layer. TuringDesk becomes the user's primary desktop/intent surface.
+TuringDesk is a **Windows AI Desktop**, not a Windows kernel replacement.
+
+Windows remains the compatibility, driver, application and security foundation. TuringDesk sits above Windows as the user's primary desktop / intent surface and optional current-user replacement Shell.
 
 ```text
 User
  │
  ▼
-TuringDesk Desktop
- ├─ AI Workspace
- ├─ App Surfaces
- ├─ Window Manager
- └─ Permission UX
+TuringDesk Desktop / Shell
+ ├─ Desktop Surface
+ ├─ Start / Taskbar / Window Surfaces
+ ├─ Desktop DIY / Theme
+ ├─ Voice + Quick Agent Input
+ ├─ Conversation Card
+ ├─ Execution Trace Card
+ └─ Harness WebView2 Console (optional UI)
  │
  ▼
-TuringDesk Runtime API   ← stable product boundary
+TuringDesk Runtime / Capability API
  │
  ├─ Agent Gateway
  ├─ Capability Registry
- ├─ Policy Broker
- └─ Context/Memory
+ ├─ Policy Boundary
+ └─ Agent Activity / Trace Projection
  │
  ▼
-Harness JSON-RPC Gateway ← thin compatibility boundary
+DeepSeek Harness                 ← always-on while TuringDesk is running
+ │
+ ├─ official Agent runtime
+ ├─ official sessions
+ └─ official WebUI (:4319, opened on demand through WebView2)
  │
  ▼
-DeepSeek Harness         ← replaceable upstream runtime
+TuringDesk Windows MCP
  │
  ▼
-Models / Agents / Tools
+Win32 / Windows Apps
 ```
 
-## Why Harness is isolated
+## Core rule: Harness service != Harness WebView
 
-DeepSeek Harness is still rapidly evolving. TuringDesk must not spread imports of Harness packages throughout UI and Windows code. All Harness-specific behavior belongs behind `runtime/src/harness-gateway.ts` (and later dedicated plugin packages).
+The DeepSeek Harness process is part of the TuringDesk runtime lifecycle.
 
-v0.1 talks to Harness through its documented newline-delimited stdio JSON-RPC protocol (`initialize`, `session/prompt`, `session.event`, `session.status`, `shutdown`). TuringDesk therefore does not need to import Harness internals or depend on the current npm client distribution.
+When TuringDesk starts, it starts/ensures the bundled Harness service in the background. The user does **not** need to open the Harness WebUI first.
+
+The official Harness WebUI is only a full-console presentation surface. TuringDesk wraps it with WebView2 so it behaves like a native desktop panel instead of exposing a browser address bar or tabs.
+
+Closing the WebView window does not disable the Agent kernel.
+
+Quick text input, voice commands, Conversation Cards and Execution Trace Cards remain TuringDesk-native surfaces and continue to work independently of the WebView window.
+
+## Why Harness stays isolated
+
+DeepSeek Harness is an upstream runtime and will continue to evolve. TuringDesk must not spread Harness implementation details through shell, UI and Win32 code.
 
 Rules:
 
-1. Never modify Harness Core for normal TuringDesk features.
-2. Pin a known-good Harness runtime checkout/version.
+1. Do not modify Harness Core for normal TuringDesk features.
+2. Pin and test a known-good Harness runtime family.
 3. Keep Windows capabilities owned by TuringDesk contracts.
-4. Add compatibility tests before upgrading Harness.
-5. Fork Harness only when a required capability cannot be implemented through a documented extension seam.
+4. Keep the Harness WebUI upstream instead of rebuilding it in TuringDesk.
+5. Add compatibility/smoke tests before upgrading Harness.
+6. Fork Harness only when a required capability cannot be implemented through supported extension seams.
+
+v0.11 pins the bundled runtime family to `0.1.0-rc.6`.
 
 ## Process model
 
-### Desktop process
-
-`TuringDesk.Desktop.exe`
+### `TuringDesk.Desktop.exe`
 
 Responsibilities:
 
-- render the desktop shell
-- launch Windows applications
+- render the desktop shell and control surfaces
+- launch Windows applications through reviewed desktop paths
 - discover/focus/layout top-level windows
-- show permission prompts
-- present AI/runtime activity
+- host the Capability Server boundary
+- own always-on speech UX
+- show quick Agent input
+- show Conversation / Execution Trace Cards
+- host the official Harness WebUI inside WebView2 when requested
+- start/ensure Harness during application startup without blocking desktop presentation
 
-It should not own model credentials or execute privileged system mutations directly.
+The Desktop process should not expose unrestricted administrator shell access to the model.
 
-### Runtime process
+### `TuringDesk.ShellHost.exe`
 
-Node/TypeScript service on loopback only.
+ShellHost is the resilient replacement-shell supervisor.
 
 Responsibilities:
 
-- own the TuringDesk-side agent session identity
-- launch and communicate with DeepSeek Harness over stdio JSON-RPC
-- route model requests
-- translate agent actions into TuringDesk capability calls
-- maintain AI-specific context
+- start TuringDesk Desktop in replacement-shell mode
+- monitor repeated early exits
+- preserve shell recovery state
+- restore Explorer rather than entering a shell crash loop
 
-In v0.1 this is a small HTTP process between the WPF UI and Harness. Later the Desktop↔Runtime boundary can move to named pipes/JSON-RPC without changing the desktop capability contract.
+ShellHost is intentionally small and separate from the visible desktop UI.
 
-### Harness process
+### TuringDesk Runtime
 
-In developer-preview Harness mode, TuringDesk launches an external Node-based Harness JSON-RPC runtime. The launch command/config lives outside TuringDesk so the upstream runtime can be upgraded independently.
+Node/TypeScript runtime bound to local machine interfaces only.
 
-The gateway keeps one stable Harness session id for desktop chat turns and waits for the protocol's durable inbox receipt plus the next `session.status=idle` transition before returning the last assistant text.
+Responsibilities:
 
-### Privileged broker (planned)
+- own TuringDesk-side agent execution state
+- integrate with DeepSeek Harness
+- expose the reviewed Windows MCP bridge
+- route structured capability requests
+- project product-visible execution activity to the desktop
+- keep model/runtime logic outside WPF view code
 
-A separate signed Windows service will own capabilities that require elevation. The LLM will never receive a raw unrestricted administrator shell by default.
+### DeepSeek Harness
+
+Harness is the Agent reasoning/execution kernel of the desktop.
+
+TuringDesk packages and supervises the upstream runtime. It uses the official Harness Web profile for the full WebUI and a TuringDesk-owned Cordis/MCP integration layer for Windows capabilities.
+
+The important boundary is:
+
+```text
+Harness
+  -> TuringDesk MCP
+    -> TuringDesk Capability API
+      -> reviewed Win32 / Windows operation
+```
+
+Harness does not receive unrestricted raw Windows administration by default.
+
+## UI ownership
+
+TuringDesk owns the desktop-native UX even though the full Harness console is upstream.
+
+TuringDesk-owned surfaces include:
+
+- Desktop Surface
+- Start Menu
+- Taskbar / AppBar
+- Desktop DIY Center
+- quick Agent text input
+- voice controls
+- Conversation Card
+- Execution Trace Card
+- approval / recovery UX
+
+Harness-owned UI:
+
+- the full official Harness WebUI presented inside a WebView2 shell
+
+This avoids maintaining two competing full Agent frontends while preserving the product's AI-native desktop experience.
+
+## Icon ownership
+
+Icon resolution follows this priority:
+
+```text
+real Windows file/app Shell icon
+        ↓
+Windows Stock Icon
+        ↓
+TuringDesk vector fallback
+```
+
+The TuringDesk executables and installer use the TuringDesk brand Application Icon.
 
 ## Capability model
 
-Planned stable names:
+Stable capability naming should remain independent of the underlying implementation.
+
+Current reviewed surface includes the window/app family such as:
 
 ```text
-app.list
 app.launch
-app.close
-
 window.list
+window.find
 window.focus
 window.move
 window.resize
 window.tile
-
-file.search
-file.open
-file.move
-file.copy
-file.delete
-
-system.status
-system.volume.set
-system.power.shutdown
-
-ui.inspect
-ui.invoke
-ui.input
 ```
 
-The implementation can change (Win32, UI Automation, Windows App SDK, PowerShell, etc.) without changing the agent-facing capability name.
+Future families may include safe file, UI Automation, browser and system capabilities, but they should be added behind policy rather than by exposing a generic unrestricted shell.
 
 ## Automation priority
 
-When TuringDesk needs to operate another app, prefer:
+When TuringDesk needs to operate another application, prefer:
 
 1. native API / app integration
 2. Windows UI Automation
@@ -128,4 +193,16 @@ When TuringDesk needs to operate another app, prefer:
 4. computer vision
 5. synthetic mouse/keyboard input
 
-This keeps automation reliable and auditable.
+This keeps automation more reliable, observable and auditable.
+
+## Installation boundary
+
+v0.11 formalizes the Windows product lifecycle through MSI.
+
+- MSI owns Program Files application files.
+- MSI provides Start menu / repair / upgrade / uninstall lifecycle.
+- replacement-shell activation is an explicit post-install user action.
+- shell activation changes only the current-user policy.
+- real uninstall restores Explorer before installed shell files are removed.
+
+TuringDesk does not overwrite the machine-wide Winlogon Shell value.
