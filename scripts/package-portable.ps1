@@ -28,19 +28,40 @@ Write-Host "Runtime architecture: $RuntimeIdentifier / Node $NodeArchitecture" -
 if (Test-Path $PackageRoot) {
     Remove-Item $PackageRoot -Recurse -Force
 }
-New-Item -ItemType Directory -Force -Path $DesktopDir, $ShellHostDir, $RuntimeAppDir, $RuntimeNodeDir | Out-Null
+New-Item -ItemType Directory -Force -Path $DesktopDir, $ShellHostDir, $RuntimeNodeDir | Out-Null
 
-Write-Host "Building TypeScript runtime..." -ForegroundColor Cyan
-Push-Location (Join-Path $Root "runtime")
+Write-Host "Building TypeScript runtime and reviewed Harness native dependencies..." -ForegroundColor Cyan
+$RuntimeRoot = Join-Path $Root "runtime"
+Push-Location $RuntimeRoot
 try {
     corepack enable
+    if ($LASTEXITCODE -ne 0) { throw "corepack enable failed with exit code $LASTEXITCODE" }
+
     pnpm install --no-frozen-lockfile
+    if ($LASTEXITCODE -ne 0) { throw "pnpm install failed with exit code $LASTEXITCODE" }
+
     pnpm build
+    if ($LASTEXITCODE -ne 0) { throw "Runtime build failed with exit code $LASTEXITCODE" }
+
     pnpm test:harness
+    if ($LASTEXITCODE -ne 0) { throw "Harness integration smoke failed with exit code $LASTEXITCODE" }
+
+    # pnpm deploy creates an isolated, portable production node_modules tree.
+    # --legacy allows deploy for this single-package workspace without requiring
+    # inject-workspace-packages=true. It reuses the dependency tree already
+    # installed and whose native lifecycle scripts were explicitly approved.
+    pnpm --filter @turingdesk/runtime --prod deploy --legacy $RuntimeAppDir
+    if ($LASTEXITCODE -ne 0) { throw "pnpm deploy failed with exit code $LASTEXITCODE" }
 }
 finally {
     Pop-Location
 }
+
+# The repository intentionally ignores dist/, so explicitly place the compiled
+# runtime into the deployed production package after pnpm deploy.
+Write-Host "Copying compiled runtime and Harness integration profile..." -ForegroundColor Cyan
+Copy-Item (Join-Path $RuntimeRoot "dist\*") $RuntimeAppDir -Recurse -Force
+Copy-Item (Join-Path $RuntimeRoot "harness") (Join-Path $RuntimeAppDir "harness") -Recurse -Force
 
 Write-Host "Publishing self-contained Windows desktop for $RuntimeIdentifier..." -ForegroundColor Cyan
 $DesktopProject = Join-Path $Root "src\TuringDesk.Desktop\TuringDesk.Desktop.csproj"
@@ -70,23 +91,6 @@ Write-Host "Generating installer/shortcut application icon..." -ForegroundColor 
 & (Join-Path $Root "scripts\generate-brand-icon.ps1") -OutputPath $BrandIcon
 if ($LASTEXITCODE -ne 0 -or -not (Test-Path $BrandIcon)) {
     throw "Failed to generate TuringDesk.ico"
-}
-
-Write-Host "Copying runtime and Harness profile..." -ForegroundColor Cyan
-Copy-Item (Join-Path $Root "runtime\dist\*") $RuntimeAppDir -Recurse -Force
-Copy-Item (Join-Path $Root "runtime\package.json") $RuntimeAppDir -Force
-Copy-Item (Join-Path $Root "runtime\harness") (Join-Path $RuntimeAppDir "harness") -Recurse -Force
-
-Write-Host "Installing portable Runtime + official DeepSeek Harness production dependencies..." -ForegroundColor Cyan
-Push-Location $RuntimeAppDir
-try {
-    # Do not suppress lifecycle scripts here. The official Harness web surface
-    # includes reviewed native dependencies such as node-pty; the final installed
-    # tree must contain the same usable native runtime that CI validated.
-    npm install --omit=dev --package-lock=false
-}
-finally {
-    Pop-Location
 }
 
 Write-Host "Downloading embedded Node.js $NodeVersion for Windows $NodeArchitecture..." -ForegroundColor Cyan
