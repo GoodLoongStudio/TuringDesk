@@ -67,6 +67,22 @@ jobs:
             }
           }
 
+      - name: Validate installed shell script with Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          $file = "packaging/shell/Enable-TuringDeskShell.ps1"
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $file), [ref]$tokens, [ref]$errors) | Out-Null
+          if ($errors.Count -gt 0) {
+            $errors | ForEach-Object { Write-Error "${file}: $($_.Message)" }
+            throw "Windows PowerShell 5.1 parser rejected $file"
+          }
+          $nonAscii = [System.IO.File]::ReadAllBytes((Resolve-Path $file)) | Where-Object { $_ -gt 127 }
+          if ($nonAscii.Count -gt 0) {
+            throw "$file must remain ASCII-safe because the MSI invokes it with Windows PowerShell 5.1."
+          }
+
       - name: Build Desktop and ShellHost with embedded application icons
         shell: pwsh
         run: |
