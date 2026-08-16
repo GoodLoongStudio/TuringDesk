@@ -156,6 +156,51 @@ public static class ShellSurfaceCatalog
         }
     }
 
+    public static bool OpenContainingFolder(string target)
+    {
+        if (string.IsNullOrWhiteSpace(target)) return false;
+        try
+        {
+            if (Directory.Exists(target))
+            {
+                var parent = Directory.GetParent(target)?.FullName ?? target;
+                return OpenTarget(parent);
+            }
+
+            if (!File.Exists(target)) return false;
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = "explorer.exe",
+                Arguments = $"/select,\"{target}\"",
+                UseShellExecute = true
+            });
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    public static bool ShowProperties(string target)
+    {
+        if (string.IsNullOrWhiteSpace(target) || (!File.Exists(target) && !Directory.Exists(target))) return false;
+        try
+        {
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = target,
+                Verb = "properties",
+                UseShellExecute = true
+            });
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
     private static bool ShouldHide(string path)
     {
         try
