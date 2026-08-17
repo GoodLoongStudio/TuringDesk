@@ -1,0 +1,106 @@
+<Window x:Class="TuringDesk.Desktop.SceneEditorWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="clr-namespace:TuringDesk.Desktop"
+        Title="TuringDesk Scene Editor"
+        Width="1360" Height="850"
+        MinWidth="1120" MinHeight="720"
+        WindowStartupLocation="CenterScreen"
+        WindowStyle="None"
+        ResizeMode="CanResize"
+        Background="#090C12"
+        Foreground="#EEF2F8"
+        FontFamily="Segoe UI Variable, Segoe UI">
+    <Grid>
+        <Grid.RowDefinitions><RowDefinition Height="58"/><RowDefinition Height="*"/><RowDefinition Height="36"/></Grid.RowDefinitions>
+
+        <Border Grid.Row="0" Background="#10141C" BorderBrush="#293246" BorderThickness="0,0,0,1" MouseLeftButtonDown="TitleBar_MouseLeftButtonDown">
+            <Grid Margin="16,0,10,0">
+                <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                    <Border Width="30" Height="30" CornerRadius="8" Background="#253052" Margin="0,0,10,0"><local:ShellIcon Kind="Edit" Width="16" Height="16" Foreground="#9EAAFF" HorizontalAlignment="Center" VerticalAlignment="Center"/></Border>
+                    <StackPanel><TextBlock x:Name="TitleText" Text="Scene Editor" FontSize="14" FontWeight="SemiBold"/><TextBlock x:Name="SceneIdText" Foreground="#818DA2" FontSize="9.5"/></StackPanel>
+                </StackPanel>
+                <Button Grid.Column="1" Content="保存" Click="Save_Click" Padding="14,6" Margin="0,0,7,0" VerticalAlignment="Center"/>
+                <Button Grid.Column="2" Content="保存并应用" Click="SaveApply_Click" Padding="14,6" Margin="0,0,7,0" VerticalAlignment="Center" Background="#6575EE" BorderBrush="#7D8AFF" Foreground="White"/>
+                <Button Grid.Column="3" Width="38" Height="34" Background="Transparent" BorderThickness="0" Click="Close_Click"><local:ShellIcon Kind="Close" Width="15" Height="15" Foreground="#9EA8BB"/></Button>
+            </Grid>
+        </Border>
+
+        <Grid Grid.Row="1">
+            <Grid.ColumnDefinitions><ColumnDefinition Width="250"/><ColumnDefinition Width="1"/><ColumnDefinition Width="*"/><ColumnDefinition Width="1"/><ColumnDefinition Width="330"/></Grid.ColumnDefinitions>
+
+            <!-- Layers -->
+            <Border Grid.Column="0" Background="#0E131B" Padding="12">
+                <Grid>
+                    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+                    <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><TextBlock Text="图层" FontSize="15" FontWeight="SemiBold" VerticalAlignment="Center"/><Button Grid.Column="1" Content="＋" Width="30" Height="28" Click="AddLayer_Click"/></Grid>
+                    <ListBox Grid.Row="1" x:Name="LayerList" Margin="0,10,0,8" SelectionChanged="LayerList_SelectionChanged" DisplayMemberPath="Name"/>
+                    <Grid Grid.Row="2"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><Button Content="↑" Click="LayerUp_Click" Margin="0,0,5,0"/><Button Grid.Column="1" Content="↓" Click="LayerDown_Click" Margin="0,0,5,0"/><Button Grid.Column="2" Content="删除" Click="DeleteLayer_Click"/></Grid>
+                </Grid>
+            </Border>
+            <Border Grid.Column="1" Background="#293246"/>
+
+            <!-- Real renderer preview -->
+            <Grid Grid.Column="2" Background="#05070B">
+                <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="174"/></Grid.RowDefinitions>
+                <Grid Margin="14,10"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><StackPanel><TextBlock Text="实时运行预览" FontSize="14" FontWeight="SemiBold"/><TextBlock Text="这里使用和桌面完全相同的 Renderer，不是假的编辑器预览。" Foreground="#7F8A9E" FontSize="9.5"/></StackPanel><StackPanel Grid.Column="1" Orientation="Horizontal"><Button Content="添加图片" Click="AddImage_Click" Padding="11,5" Margin="0,0,6,0"/><Button Content="添加文字" Click="AddText_Click" Padding="11,5" Margin="0,0,6,0"/><Button Content="添加粒子" Click="AddParticles_Click" Padding="11,5"/></StackPanel></Grid>
+                <Border Grid.Row="1" Margin="14,0,14,10" BorderBrush="#354158" BorderThickness="1" Background="#070A10" ClipToBounds="True">
+                    <Viewbox Stretch="Uniform"><Grid Width="1920" Height="1080"><local:SceneRendererControl x:Name="PreviewRenderer" Width="1920" Height="1080"/></Grid></Viewbox>
+                </Border>
+
+                <Border Grid.Row="2" Background="#0C1118" BorderBrush="#293246" BorderThickness="0,1,0,0" Padding="12">
+                    <Grid>
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="240"/><ColumnDefinition Width="12"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                        <StackPanel>
+                            <TextBlock Text="时间轴" FontSize="13" FontWeight="SemiBold"/>
+                            <TextBlock Text="给选中图层快速添加一条动画轨道" Foreground="#7F8A9E" FontSize="9.5" Margin="0,3,0,8"/>
+                            <ComboBox x:Name="TimelinePropertyCombo"><ComboBoxItem Content="opacity" IsSelected="True"/><ComboBoxItem Content="x"/><ComboBoxItem Content="y"/><ComboBoxItem Content="rotation"/><ComboBoxItem Content="scale"/></ComboBox>
+                        </StackPanel>
+                        <Grid Grid.Column="2" VerticalAlignment="Bottom"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="8"/><ColumnDefinition Width="*"/><ColumnDefinition Width="8"/><ColumnDefinition Width="*"/><ColumnDefinition Width="8"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                            <StackPanel><TextBlock Text="开始值" Foreground="#8995A9" FontSize="9.5"/><TextBox x:Name="TimelineFromBox" Text="0" Margin="0,4,0,0"/></StackPanel>
+                            <StackPanel Grid.Column="2"><TextBlock Text="结束值" Foreground="#8995A9" FontSize="9.5"/><TextBox x:Name="TimelineToBox" Text="1" Margin="0,4,0,0"/></StackPanel>
+                            <StackPanel Grid.Column="4"><TextBlock Text="秒" Foreground="#8995A9" FontSize="9.5"/><TextBox x:Name="TimelineSecondsBox" Text="4" Margin="0,4,0,0"/></StackPanel>
+                            <Button Grid.Column="6" Content="添加动画" Click="AddTimeline_Click" Padding="12,6" VerticalAlignment="Bottom"/>
+                        </Grid>
+                    </Grid>
+                </Border>
+            </Grid>
+            <Border Grid.Column="3" Background="#293246"/>
+
+            <!-- Inspector -->
+            <ScrollViewer Grid.Column="4" Background="#0E131B" VerticalScrollBarVisibility="Auto">
+                <StackPanel Margin="14">
+                    <TextBlock Text="属性" FontSize="15" FontWeight="SemiBold"/>
+                    <TextBlock x:Name="InspectorHint" Text="选择一个图层" Foreground="#7F8A9E" FontSize="10" Margin="0,4,0,12"/>
+
+                    <StackPanel x:Name="LayerInspector" IsEnabled="False">
+                        <TextBlock Text="名称" Foreground="#8995A9" FontSize="10"/><TextBox x:Name="LayerNameBox" TextChanged="LayerProperty_Changed" Margin="0,4,0,9"/>
+                        <UniformGrid Columns="2" Rows="1"><StackPanel Margin="0,0,5,0"><TextBlock Text="X (0-1)" Foreground="#8995A9" FontSize="10"/><TextBox x:Name="LayerXBox" TextChanged="LayerProperty_Changed" Margin="0,4,0,9"/></StackPanel><StackPanel Margin="5,0,0,0"><TextBlock Text="Y (0-1)" Foreground="#8995A9" FontSize="10"/><TextBox x:Name="LayerYBox" TextChanged="LayerProperty_Changed" Margin="0,4,0,9"/></StackPanel></UniformGrid>
+                        <UniformGrid Columns="2" Rows="1"><StackPanel Margin="0,0,5,0"><TextBlock Text="宽 (0-1)" Foreground="#8995A9" FontSize="10"/><TextBox x:Name="LayerWidthBox" TextChanged="LayerProperty_Changed" Margin="0,4,0,9"/></StackPanel><StackPanel Margin="5,0,0,0"><TextBlock Text="高 (0-1)" Foreground="#8995A9" FontSize="10"/><TextBox x:Name="LayerHeightBox" TextChanged="LayerProperty_Changed" Margin="0,4,0,9"/></StackPanel></UniformGrid>
+                        <UniformGrid Columns="2" Rows="1"><StackPanel Margin="0,0,5,0"><TextBlock Text="缩放" Foreground="#8995A9" FontSize="10"/><TextBox x:Name="LayerScaleBox" TextChanged="LayerProperty_Changed" Margin="0,4,0,9"/></StackPanel><StackPanel Margin="5,0,0,0"><TextBlock Text="旋转°" Foreground="#8995A9" FontSize="10"/><TextBox x:Name="LayerRotationBox" TextChanged="LayerProperty_Changed" Margin="0,4,0,9"/></StackPanel></UniformGrid>
+                        <TextBlock Text="透明度" Foreground="#8995A9" FontSize="10"/><Slider x:Name="LayerOpacitySlider" Minimum="0" Maximum="1" ValueChanged="LayerProperty_Changed" Margin="0,4,0,9"/>
+                        <CheckBox x:Name="LayerParallaxCheck" Content="鼠标视差" Checked="LayerProperty_Changed" Unchecked="LayerProperty_Changed"/>
+                        <TextBlock Text="视差强度" Foreground="#8995A9" FontSize="10" Margin="0,6,0,0"/><Slider x:Name="LayerParallaxSlider" Minimum="-0.15" Maximum="0.15" ValueChanged="LayerProperty_Changed" Margin="0,4,0,10"/>
+
+                        <Separator Margin="0,4,0,10"/>
+                        <TextBlock Text="效果" FontWeight="SemiBold"/>
+                        <CheckBox x:Name="BlurCheck" Content="Blur" Checked="LayerProperty_Changed" Unchecked="LayerProperty_Changed" Margin="0,8,0,0"/>
+                        <Slider x:Name="BlurRadiusSlider" Minimum="0" Maximum="60" ValueChanged="LayerProperty_Changed" Margin="0,4,0,7"/>
+                        <CheckBox x:Name="GlowCheck" Content="Glow" Checked="LayerProperty_Changed" Unchecked="LayerProperty_Changed"/>
+                        <Slider x:Name="GlowRadiusSlider" Minimum="0" Maximum="80" ValueChanged="LayerProperty_Changed" Margin="0,4,0,10"/>
+
+                        <Separator Margin="0,4,0,10"/>
+                        <TextBlock Text="场景脚本" FontWeight="SemiBold"/>
+                        <TextBlock Text="高级场景可绑定脚本文件；普通用户不需要。" Foreground="#7F8A9E" FontSize="9.5" TextWrapping="Wrap" Margin="0,3,0,6"/>
+                        <StackPanel Orientation="Horizontal"><TextBox x:Name="ScriptPathBox" Width="220" IsReadOnly="True"/><Button Content="选择 JS" Click="ChooseScript_Click" Margin="6,0,0,0"/></StackPanel>
+                    </StackPanel>
+                </StackPanel>
+            </ScrollViewer>
+        </Grid>
+
+        <Border Grid.Row="2" Background="#0E1219" BorderBrush="#293246" BorderThickness="0,1,0,0">
+            <Grid Margin="12,0"><TextBlock x:Name="StatusText" Text="就绪" Foreground="#8793A8" FontSize="9.5" VerticalAlignment="Center"/></Grid>
+        </Border>
+    </Grid>
+</Window>
