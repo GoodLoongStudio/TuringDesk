@@ -47,7 +47,7 @@
                     <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                     <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                         <Ellipse Width="7" Height="7" Fill="#63E6BE" Margin="0,0,8,0"/>
-                        <TextBlock Text="TURING DESK" Foreground="#AEB9CE" FontWeight="SemiBold" FontSize="10" LetterSpacing="1"/>
+                        <TextBlock Text="TURING DESK" Foreground="#AEB9CE" FontWeight="SemiBold" FontSize="10"/>
                         <TextBlock x:Name="HotkeyHint" Text="  ALT + SPACE" Foreground="#66738B" FontSize="9.5"/>
                     </StackPanel>
                     <Button Grid.Column="1" Width="26" Height="24" Padding="0" Background="Transparent" BorderThickness="0" Click="Collapse_Click" ToolTip="收起">
