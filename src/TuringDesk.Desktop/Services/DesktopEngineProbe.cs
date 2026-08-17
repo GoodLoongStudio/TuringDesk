@@ -7,6 +7,7 @@ internal static class DesktopEngineProbe
 {
     private static readonly object Gate = new();
     private static readonly Dictionary<string, DesktopEngineProbeState> States = new(StringComparer.OrdinalIgnoreCase);
+    private static readonly Dictionary<string, string> Signatures = new(StringComparer.OrdinalIgnoreCase);
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
     private static readonly string StatusPath = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
@@ -15,15 +16,22 @@ internal static class DesktopEngineProbe
 
     public static void Report(DisplayMonitor monitor, bool attached, string attachment, string? sceneId)
     {
+        var state = new DesktopEngineProbeState(
+            monitor.Id,
+            monitor.IsPrimary,
+            attached,
+            attachment,
+            sceneId,
+            DateTimeOffset.UtcNow);
+        var signature = $"{attached}|{attachment}|{sceneId}";
+        var changed = false;
+
         lock (Gate)
         {
-            States[monitor.Id] = new DesktopEngineProbeState(
-                monitor.Id,
-                monitor.IsPrimary,
-                attached,
-                attachment,
-                sceneId,
-                DateTimeOffset.UtcNow);
+            States[monitor.Id] = state;
+            changed = !Signatures.TryGetValue(monitor.Id, out var previous) ||
+                      !string.Equals(previous, signature, StringComparison.Ordinal);
+            Signatures[monitor.Id] = signature;
 
             try
             {
@@ -33,11 +41,20 @@ internal static class DesktopEngineProbe
                 File.WriteAllText(temp, JsonSerializer.Serialize(States.Values.OrderByDescending(item => item.IsPrimary), JsonOptions));
                 File.Move(temp, StatusPath, true);
             }
-            catch
+            catch (Exception error)
             {
-                // Diagnostics must never affect desktop availability.
+                SceneEngineTrace.Error("probe.status-file", $"failed path={StatusPath}", error);
             }
         }
+
+        if (!changed) return;
+
+        SceneEngineTrace.Info(
+            "probe.state",
+            $"monitor={monitor.Id} primary={monitor.IsPrimary} attached={attached} scene={sceneId ?? "<null>"} attachment={attachment}");
+
+        ExplorerDesktopDiagnostics.Capture(
+            $"probe-change monitor={monitor.Id} attached={attached} scene={sceneId ?? "<null>"}");
     }
 }
 
