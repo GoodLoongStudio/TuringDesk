@@ -9,6 +9,12 @@ public partial class App : Application
     {
         base.OnStartup(e);
 
+        // Desktop settings and the Harness console are utility surfaces, not
+        // full-screen application pages. Size them after per-monitor DPI is known
+        // and keep them inside the Windows work area so the taskbar is never
+        // covered on 125%/150% scaled desktops.
+        CompactToolWindowService.Install();
+
         // Harness is a core desktop service, not an advanced-console feature.
         // Start its process before constructing MainWindow so the Agent kernel,
         // Models page and Windows MCP boot in parallel with the visible desktop.
