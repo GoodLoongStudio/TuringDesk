@@ -86,14 +86,14 @@ public partial class SceneRendererControl
     private FrameworkElement? BuildImageLayer(SceneManifest scene, SceneLayerDefinition layer)
     {
         if (string.IsNullOrWhiteSpace(layer.Source) || string.IsNullOrWhiteSpace(scene.PackageRoot)) return null;
-        var path = Path.GetFullPath(Path.Combine(scene.PackageRoot, layer.Source));
-        if (!File.Exists(path)) return null;
+        var path = System.IO.Path.GetFullPath(System.IO.Path.Combine(scene.PackageRoot, layer.Source));
+        if (!System.IO.File.Exists(path)) return null;
         try
         {
             var image = new BitmapImage();
             image.BeginInit();
             image.CacheOption = BitmapCacheOption.OnLoad;
-            image.UriSource = new Uri(path, UriKind.Absolute);
+            image.UriSource = new System.Uri(path, System.UriKind.Absolute);
             image.EndInit();
             image.Freeze();
             return new Image
