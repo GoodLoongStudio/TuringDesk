@@ -81,6 +81,8 @@ public partial class ModelSettingsWindow : Window
         {
             var settings = BuildSettings();
             var key = ApiKeyBox.Password;
+            StatusText.Text = "正在同步 TuringDesk 与 DeepSeek Harness…";
+
             var applied = await _runtime.ConfigureModelAsync(settings, key);
             if (applied is null)
             {
@@ -89,7 +91,19 @@ public partial class ModelSettingsWindow : Window
             }
 
             await _store.SaveAsync(settings, key);
-            SavedSettings = settings with { HasApiKey = !string.IsNullOrWhiteSpace(key) };
+            var normalized = settings with { HasApiKey = !string.IsNullOrWhiteSpace(key) };
+            SavedSettings = normalized;
+
+            try
+            {
+                await HarnessWebUiService.ApplyModelSettingsAsync(normalized, key);
+            }
+            catch (Exception error)
+            {
+                StatusText.Text = $"配置已经保存并写入 Harness；后台 Harness 重启失败：{error.Message}";
+                return;
+            }
+
             DialogResult = true;
         }
         catch (Exception error)
