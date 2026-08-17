@@ -7,8 +7,7 @@ namespace TuringDesk.Desktop;
 
 public partial class FirstRunSetupWindow : Window
 {
-    private readonly RuntimeClient _runtime;
-    private readonly ModelSettingsStore _modelStore;
+    private readonly UnifiedModelConfigurationService _modelConfiguration;
     private readonly ShellSettingsStore _shellStore = new();
     private readonly OnboardingStateStore _onboardingStore = new();
     private string _selectedSceneId = "builtin:aurora";
@@ -16,8 +15,7 @@ public partial class FirstRunSetupWindow : Window
 
     public FirstRunSetupWindow(RuntimeClient runtime, ModelSettingsStore modelStore)
     {
-        _runtime = runtime;
-        _modelStore = modelStore;
+        _modelConfiguration = new UnifiedModelConfigurationService(runtime, modelStore);
         InitializeComponent();
         Loaded += (_, _) => ApplyProviderUi("deepseek");
     }
@@ -116,30 +114,16 @@ public partial class FirstRunSetupWindow : Window
             }
 
             var settings = new ModelSettings(providerId, preset.Mode, baseUrl, model, !string.IsNullOrWhiteSpace(apiKey));
-            await _modelStore.SaveAsync(settings, apiKey);
-            var normalized = settings with { HasApiKey = !string.IsNullOrWhiteSpace(apiKey) };
-
-            var applied = await _runtime.ConfigureModelAsync(normalized, apiKey);
-            if (applied is null)
-            {
-                StatusText.Text = "AI 暂时没有连通。请检查 Key / 本地模型是否已启动；桌面可以先正常使用。";
-                return;
-            }
-
-            try
-            {
-                await HarnessWebUiService.ApplyModelSettingsAsync(normalized, apiKey);
-            }
-            catch (Exception error)
-            {
-                StatusText.Text = $"模型已经保存，但 Harness 后台同步未完成：{error.Message}";
-                return;
-            }
+            _ = await _modelConfiguration.ApplyAndSaveAsync(settings, apiKey);
 
             _onboardingStore.Complete();
-            StatusText.Text = "完成。直接使用屏幕上方搜索框，或按 Alt + Space 聚焦。";
+            StatusText.Text = "完成。TuringDesk 与 Harness 已使用同一模型配置。";
             DialogResult = true;
             Close();
+        }
+        catch (Exception error)
+        {
+            StatusText.Text = $"AI 配置未完成：{error.Message}";
         }
         finally
         {
