@@ -50,6 +50,10 @@ public partial class SceneRendererControl : UserControl
                 LoadScene(scene, appearance);
                 break;
         }
+
+        // Scene-specific FPS/volume/mute/user properties are independent from
+        // the global desktop profile and survive scene switching/import/export.
+        await ApplyUserPropertiesAsync();
     }
 
     public void Pause()
