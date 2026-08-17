@@ -99,6 +99,8 @@ public partial class SceneRendererControl : UserControl
     {
         _paused = false;
         _stopped = true;
+        ReleaseAudioBridge();
+        _webAudioListenerRequested = false;
         StopBuiltInAnimations();
         StopSceneGraph();
         GpuSurface.Visibility = Visibility.Collapsed;
@@ -264,6 +266,7 @@ public partial class SceneRendererControl : UserControl
         WebPlayer.Visibility = Visibility.Visible;
 
         await WebPlayer.EnsureCoreWebView2Async();
+        await InstallWebAudioCompatibilityBridgeAsync();
         cancellationToken.ThrowIfCancellationRequested();
         WebPlayer.CoreWebView2.Settings.AreDefaultContextMenusEnabled = false;
         WebPlayer.CoreWebView2.Settings.AreDevToolsEnabled = false;
