@@ -1,7 +1,7 @@
 param(
     [string]$Configuration = "Release",
     [string]$RuntimeIdentifier = "win-arm64",
-    [string]$Version = "v0.12.0",
+    [string]$Version = "v0.14.0",
     [string]$NodeVersion = "22.19.0"
 )
 
@@ -165,8 +165,6 @@ if ($DetectedNodeArch -ne $NodeArchitecture) {
 }
 
 # Fail the build if Windows cannot extract an associated icon from either EXE.
-# This catches the previous regression where UI glyphs changed but the executable
-# still shipped without an application icon resource.
 Add-Type -AssemblyName System.Drawing
 foreach ($Exe in @(
     (Join-Path $DesktopDir "TuringDesk.Desktop.exe"),
@@ -195,6 +193,11 @@ DeepSeek Harness: 0.1.0-rc.6
 Harness UI: official DeepSeek Harness WebUI wrapped by TuringDesk WebView2
 Harness WebUI: packaged and boot-smoke verified
 Default desktop mode: Explorer Desktop Enhancement (WorkerW/Progman scene host)
+Primary desktop UX: top-center AI search/conversation bar; no legacy Orb/Home dashboard
+Search shortcut: Alt+Space focuses the same desktop search box
+Desktop settings: search-bar design button opens Desktop Library / integrated settings
+Model configuration: one TuringDesk model setting synchronized into official Harness settings; API key remains outside YAML
+Desktop icon avoidance: reserved search-bar region with safe best-effort Explorer icon relocation
 Advanced desktop mode: explicit current-user Replacement Shell
 Install flow: standard Windows Installer (MSI)
 Install ownership: Windows Installer / Program Files
