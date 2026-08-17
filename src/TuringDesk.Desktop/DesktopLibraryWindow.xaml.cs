@@ -89,15 +89,22 @@ public partial class DesktopLibraryWindow : Window
     private void ApplyScene_Click(object sender, RoutedEventArgs e)
     {
         if (SceneList.SelectedItem is not SceneManifest scene) return;
+
+        // A direct scene selection must win over a previously active playlist or
+        // multi-monitor profile. Persist those overrides first so the wallpaper
+        // host sees the cleared policy when ShellSettingsChanged fires. The host
+        // also polls these files once per second, so this remains deterministic
+        // when the Library is opened from a second TuringDesk process.
+        _playback.ActivePlaylistId = null;
+        _playback.ActiveProfileId = null;
+        _playbackStore.Save(_playback);
+
         var shell = _shellStore.Load();
         shell.Appearance.SceneId = scene.Id;
         _shellStore.Save(shell);
 
-        _playback.ActivePlaylistId = null;
-        _playback.ActiveProfileId = null;
-        _playbackStore.Save(_playback);
         CurrentSceneText.Text = scene.Title;
-        ShellNotificationService.Publish("桌面已切换", scene.Title, "shell");
+        ShellNotificationService.Publish("桌面场景已应用", $"{scene.Title} · 最迟 1 秒同步到桌面", "shell");
     }
 
     private void Import_Click(object sender, RoutedEventArgs e)
