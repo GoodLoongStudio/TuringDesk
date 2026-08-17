@@ -92,6 +92,7 @@ public partial class SceneRendererControl : UserControl
     {
         _paused = false;
         _stopped = true;
+        StopBuiltInAnimations();
         try { VideoPlayer.Stop(); } catch { }
         VideoPlayer.Source = null;
         VideoPlayer.Visibility = Visibility.Collapsed;
@@ -124,10 +125,46 @@ public partial class SceneRendererControl : UserControl
         VideoPlayer.Visibility = Visibility.Collapsed;
         WebPlayer.Visibility = Visibility.Collapsed;
 
+        // Imported image scenes use the image as the base layer and retain the
+        // lightweight effect/particle layer above it. Future scene packages can
+        // replace this WPF renderer with the Direct3D scene graph without changing
+        // the manifest or library model.
+        if (!scene.IsBuiltIn)
+        {
+            var entry = scene.ResolveEntryPath();
+            if (!string.IsNullOrWhiteSpace(entry) && File.Exists(entry))
+            {
+                try
+                {
+                    var image = new BitmapImage();
+                    image.BeginInit();
+                    image.CacheOption = BitmapCacheOption.OnLoad;
+                    image.UriSource = new Uri(entry, UriKind.Absolute);
+                    image.EndInit();
+                    image.Freeze();
+                    StaticBackground.Background = new ImageBrush(image)
+                    {
+                        Stretch = scene.Fit switch
+                        {
+                            SceneFit.Contain => Stretch.Uniform,
+                            SceneFit.Stretch => Stretch.Fill,
+                            _ => Stretch.UniformToFill
+                        },
+                        AlignmentX = AlignmentX.Center,
+                        AlignmentY = AlignmentY.Center
+                    };
+                }
+                catch (Exception error)
+                {
+                    PlaybackError?.Invoke($"Image scene could not be loaded: {error.Message}");
+                }
+            }
+        }
+
         var tag = scene.Tags.FirstOrDefault(tag => tag is "aurora" or "neon" or "orbit") ?? "aurora";
         GridLayer.Visibility = tag == "neon" ? Visibility.Visible : Visibility.Collapsed;
         var intensity = Math.Clamp(appearance.SceneIntensity, 0.2, 1.0);
-        AuroraLayer.Opacity = intensity;
+        AuroraLayer.Opacity = scene.IsBuiltIn ? intensity : Math.Min(0.42, intensity * 0.45);
 
         switch (tag)
         {
@@ -144,7 +181,7 @@ public partial class SceneRendererControl : UserControl
             default:
                 GlowAColor.Color = Color.FromRgb(100, 119, 255);
                 GlowBColor.Color = Color.FromRgb(84, 217, 196);
-                CreateParticles(42, 1.1, 3.8);
+                CreateParticles(scene.IsBuiltIn ? 42 : 24, 1.1, 3.8);
                 break;
         }
 
@@ -198,7 +235,32 @@ public partial class SceneRendererControl : UserControl
         WebPlayer.CoreWebView2.Settings.AreDevToolsEnabled = false;
         WebPlayer.CoreWebView2.Settings.IsZoomControlEnabled = false;
         WebPlayer.CoreWebView2.Settings.AreBrowserAcceleratorKeysEnabled = false;
+        WebPlayer.NavigationCompleted -= WebPlayer_NavigationCompleted;
+        WebPlayer.NavigationCompleted += WebPlayer_NavigationCompleted;
         WebPlayer.Source = new Uri(entry, UriKind.Absolute);
+    }
+
+    private async void WebPlayer_NavigationCompleted(object? sender, Microsoft.Web.WebView2.Core.CoreWebView2NavigationCompletedEventArgs e)
+    {
+        if (!e.IsSuccess || WebPlayer.CoreWebView2 is null) return;
+        try
+        {
+            // Compatibility bridge for beginner web wallpapers. Existing web
+            // projects can listen to TuringDesk events, while Wallpaper-Engine-
+            // style projects can expose wallpaperPropertyListener and receive a
+            // normal initial property callback.
+            await WebPlayer.CoreWebView2.ExecuteScriptAsync("""
+                (() => {
+                  window.turingDesk = window.turingDesk || {};
+                  window.turingDesk.version = 1;
+                  window.dispatchEvent(new CustomEvent('turingdesk-ready'));
+                  if (window.wallpaperPropertyListener && typeof window.wallpaperPropertyListener.applyUserProperties === 'function') {
+                    window.wallpaperPropertyListener.applyUserProperties({});
+                  }
+                })();
+                """);
+        }
+        catch { }
     }
 
     private void VideoPlayer_MediaEnded(object sender, RoutedEventArgs e)
@@ -264,18 +326,33 @@ public partial class SceneRendererControl : UserControl
 
     private void PauseBuiltInAnimations()
     {
-        GlowA.BeginAnimation(OpacityProperty, null);
-        GlowB.BeginAnimation(OpacityProperty, null);
-        BuiltInScene.IsEnabled = false;
+        StopBuiltInAnimations();
     }
 
     private void ResumeBuiltInAnimations()
     {
-        BuiltInScene.IsEnabled = true;
         var appearance = new ShellSettingsStore().Load().Appearance;
         if (!appearance.SceneMotionEnabled) return;
         StartGlowAnimation(GlowA, 24, 18, 11);
         StartGlowAnimation(GlowB, -20, -14, 13);
+    }
+
+    private void StopBuiltInAnimations()
+    {
+        if (GlowA.RenderTransform is TranslateTransform a)
+        {
+            a.BeginAnimation(TranslateTransform.XProperty, null);
+            a.BeginAnimation(TranslateTransform.YProperty, null);
+        }
+        if (GlowB.RenderTransform is TranslateTransform b)
+        {
+            b.BeginAnimation(TranslateTransform.XProperty, null);
+            b.BeginAnimation(TranslateTransform.YProperty, null);
+        }
+        foreach (var dot in ParticleCanvas.Children.OfType<Ellipse>())
+        {
+            dot.BeginAnimation(Canvas.TopProperty, null);
+        }
     }
 
     private async Task SetWebPlaybackStateAsync(bool paused)
