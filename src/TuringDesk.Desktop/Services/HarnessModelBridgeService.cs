@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 
@@ -140,8 +141,6 @@ llm-pi-ai:
                 skipping = false;
                 kept.Add(line);
             }
-            // Indented lines and blank/comment lines immediately following the
-            // managed namespace belong to that namespace and are replaced.
         }
 
         return string.Join(Environment.NewLine, kept).TrimEnd();
