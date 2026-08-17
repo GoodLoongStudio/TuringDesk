@@ -82,7 +82,7 @@ public partial class FirstRunSetupWindow : Window
     private async void Finish_Click(object sender, RoutedEventArgs e)
     {
         FinishButton.IsEnabled = false;
-        StatusText.Text = "正在连接 AI…";
+        StatusText.Text = "正在连接 AI，并同步 DeepSeek Harness…";
         try
         {
             ApplyScene();
@@ -117,15 +117,27 @@ public partial class FirstRunSetupWindow : Window
 
             var settings = new ModelSettings(providerId, preset.Mode, baseUrl, model, !string.IsNullOrWhiteSpace(apiKey));
             await _modelStore.SaveAsync(settings, apiKey);
-            var applied = await _runtime.ConfigureModelAsync(settings, apiKey);
+            var normalized = settings with { HasApiKey = !string.IsNullOrWhiteSpace(apiKey) };
+
+            var applied = await _runtime.ConfigureModelAsync(normalized, apiKey);
             if (applied is null)
             {
                 StatusText.Text = "AI 暂时没有连通。请检查 Key / 本地模型是否已启动；桌面可以先正常使用。";
                 return;
             }
 
+            try
+            {
+                await HarnessWebUiService.ApplyModelSettingsAsync(normalized, apiKey);
+            }
+            catch (Exception error)
+            {
+                StatusText.Text = $"模型已经保存，但 Harness 后台同步未完成：{error.Message}";
+                return;
+            }
+
             _onboardingStore.Complete();
-            StatusText.Text = "完成。以后按 Alt + Space 直接叫出 AI。";
+            StatusText.Text = "完成。直接使用屏幕上方搜索框，或按 Alt + Space 聚焦。";
             DialogResult = true;
             Close();
         }
@@ -156,7 +168,7 @@ public partial class FirstRunSetupWindow : Window
         var settings = _shellStore.Load();
         settings.Appearance.SceneId = _selectedSceneId;
         settings.Appearance.SceneMotionEnabled = true;
-        settings.Appearance.AgentOrbEnabled = true;
+        settings.Appearance.AgentOrbEnabled = false;
         settings.Appearance.AgentCardsEnabled = true;
         _shellStore.Save(settings);
     }
