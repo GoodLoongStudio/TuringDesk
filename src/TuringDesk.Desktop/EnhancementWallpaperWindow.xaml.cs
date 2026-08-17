@@ -66,6 +66,7 @@ public partial class EnhancementWallpaperWindow : Window
             Hide();
         }
 
+        ReportProbe();
         _ = RefreshBaseSceneAsync(force: true);
         _hostHealthTimer.Start();
     }
@@ -98,7 +99,7 @@ public partial class EnhancementWallpaperWindow : Window
         // Static SettingsChanged events do not cross process boundaries, so the
         // desktop host must also observe the persisted settings. This makes an
         // "Apply to desktop" action deterministic even when a background instance
-        // owns the WorkerW wallpaper window.
+        // owns the Explorer wallpaper window.
         var latestSettings = _settingsStore.Load();
         var appearanceChanged = AppearanceRequiresReload(_settings.Appearance, latestSettings.Appearance);
         _settings = latestSettings;
@@ -121,6 +122,7 @@ public partial class EnhancementWallpaperWindow : Window
 
         if (ExplorerDesktopHost.IsAttached(_windowHandle))
         {
+            _attached = true;
             _ = ExplorerDesktopHost.ResizeToDesktopRect(_windowHandle, _monitor.Left, _monitor.Top, _monitor.Width, _monitor.Height);
             return;
         }
@@ -131,6 +133,7 @@ public partial class EnhancementWallpaperWindow : Window
             Show();
             Opacity = 1;
         }
+        ReportProbe();
     }
 
     private async Task ApplyPlaybackPolicyAsync(bool forceProfileRefresh)
@@ -197,10 +200,12 @@ public partial class EnhancementWallpaperWindow : Window
             if (version != _sceneLoadVersion) return;
             _loadedSceneId = scene.Id;
             Renderer.SetVolume(_playbackSettings.GlobalVolume, scene.Muted || _playbackSettings.GlobalVolume <= 0);
+            ReportProbe();
         }
         catch (Exception error)
         {
             if (version != _sceneLoadVersion) return;
+            ReportProbe();
             ShellNotificationService.Publish("无法加载桌面场景", $"{MonitorLabel}: {error.Message}", "warning");
         }
     }
@@ -253,5 +258,14 @@ public partial class EnhancementWallpaperWindow : Window
         {
             await LoadSceneByIdAsync(assignment.SceneId, force);
         }
+    }
+
+    private void ReportProbe()
+    {
+        DesktopEngineProbe.Report(
+            _monitor,
+            _attached,
+            ExplorerDesktopHost.DescribeAttachment(_windowHandle),
+            _loadedSceneId ?? _settings.Appearance.SceneId);
     }
 }
