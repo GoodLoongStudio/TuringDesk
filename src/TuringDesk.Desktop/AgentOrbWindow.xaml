@@ -74,11 +74,11 @@
                 <Grid Grid.Row="2">
                     <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                     <StackPanel Orientation="Horizontal">
-                        <Button Height="27" Padding="9,0" Margin="0,0,6,0" Click="ControlCenter_Click" Background="#151B25" BorderBrush="#2D384D" Foreground="#AEB8CB" ToolTip="控制中心">
-                            <StackPanel Orientation="Horizontal"><local:ShellIcon Kind="Window" Width="13" Height="13" Foreground="#AEB8CB" Margin="0,0,5,0"/><TextBlock Text="控制中心" FontSize="10.5"/></StackPanel>
+                        <Button Height="27" Padding="9,0" Margin="0,0,6,0" Click="Diy_Click" Background="#151B25" BorderBrush="#2D384D" Foreground="#AEB8CB" ToolTip="动态桌面、播放列表和性能设置">
+                            <StackPanel Orientation="Horizontal"><local:ShellIcon Kind="Settings" Width="13" Height="13" Foreground="#AEB8CB" Margin="0,0,5,0"/><TextBlock Text="桌面库" FontSize="10.5"/></StackPanel>
                         </Button>
-                        <Button Height="27" Padding="9,0" Margin="0,0,6,0" Click="Diy_Click" Background="#151B25" BorderBrush="#2D384D" Foreground="#AEB8CB" ToolTip="桌面主题">
-                            <StackPanel Orientation="Horizontal"><local:ShellIcon Kind="Settings" Width="13" Height="13" Foreground="#AEB8CB" Margin="0,0,5,0"/><TextBlock Text="Scene" FontSize="10.5"/></StackPanel>
+                        <Button Height="27" Padding="9,0" Margin="0,0,6,0" Click="ControlCenter_Click" Background="#151B25" BorderBrush="#2D384D" Foreground="#7F8B9F" ToolTip="高级控制中心">
+                            <StackPanel Orientation="Horizontal"><local:ShellIcon Kind="Window" Width="13" Height="13" Foreground="#7F8B9F" Margin="0,0,5,0"/><TextBlock Text="高级" FontSize="10.5"/></StackPanel>
                         </Button>
                         <Button Height="27" Padding="8,0" Click="Exit_Click" Background="#151B25" BorderBrush="#2D384D" Foreground="#78849A" ToolTip="退出 TuringDesk">
                             <local:ShellIcon Kind="Power" Width="13" Height="13" Foreground="#78849A"/>
