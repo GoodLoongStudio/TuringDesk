@@ -129,6 +129,30 @@ jobs:
             throw "Harness must begin startup before MainWindow construction"
           }
 
+      - name: Verify scene application and vivid built-in scenes
+        shell: pwsh
+        run: |
+          $catalog = Get-Content "src/TuringDesk.Desktop/Services/SceneEngine/SceneCatalogService.cs" -Raw
+          foreach ($id in @("builtin:aurora", "builtin:neon", "builtin:orbit")) {
+            if ($catalog -notmatch [regex]::Escape($id)) { throw "Missing built-in scene: $id" }
+          }
+
+          $library = Get-Content "src/TuringDesk.Desktop/DesktopLibraryWindow.xaml.cs" -Raw
+          $playlistIndex = $library.IndexOf("_playback.ActivePlaylistId = null")
+          $profileIndex = $library.IndexOf("_playback.ActiveProfileId = null")
+          $sceneSaveIndex = $library.IndexOf("_shellStore.Save(shell)")
+          if ($playlistIndex -lt 0 -or $profileIndex -lt 0 -or $sceneSaveIndex -lt 0) { throw "Scene apply pipeline is incomplete" }
+          if ($playlistIndex -gt $sceneSaveIndex -or $profileIndex -gt $sceneSaveIndex) { throw "Scene apply must clear playlist/profile before saving SceneId" }
+
+          $host = Get-Content "src/TuringDesk.Desktop/EnhancementWallpaperWindow.xaml.cs" -Raw
+          if ($host -notmatch "latestSettings = _settingsStore.Load\(\)") { throw "Wallpaper host does not poll persisted SceneId across processes" }
+          if ($host -notmatch "AppearanceRequiresReload") { throw "Wallpaper host does not force reload when SceneId changes" }
+
+          $renderer = Get-Content "src/TuringDesk.Desktop/SceneRendererControl.xaml.cs" -Raw
+          foreach ($marker in @("GlowC", "255, 54, 209", "255, 184, 72", "255, 92, 184")) {
+            if ($renderer -notmatch [regex]::Escape($marker)) { throw "Built-in vivid scene renderer marker missing: $marker" }
+          }
+
       - name: Build Desktop and ShellHost with embedded application icons
         shell: pwsh
         run: |
@@ -145,12 +169,12 @@ jobs:
 
       - name: Build and verify native ARM64 MSI
         shell: pwsh
-        run: ./scripts/package-installer.ps1 -Version "v0.14.2" -RuntimeIdentifier "win-arm64"
+        run: ./scripts/package-installer.ps1 -Version "v0.14.3" -RuntimeIdentifier "win-arm64"
 
       - name: Verify MSI artifact
         shell: pwsh
         run: |
-          $msi = Resolve-Path "artifacts/TuringDesk-v0.14.2-win-arm64.msi"
+          $msi = Resolve-Path "artifacts/TuringDesk-v0.14.3-win-arm64.msi"
           $size = (Get-Item $msi).Length
           Write-Host "MSI: $msi"
           Write-Host "Size: $size bytes"
@@ -159,9 +183,9 @@ jobs:
       - name: Upload native ARM64 Windows installer
         uses: actions/upload-artifact@v4
         with:
-          name: TuringDesk-v0.14.2-win-arm64-installer
+          name: TuringDesk-v0.14.3-win-arm64-installer
           path: |
-            artifacts/TuringDesk-v0.14.2-win-arm64.msi
-            artifacts/TuringDesk-v0.14.2-win-arm64/BUILD-INFO.txt
+            artifacts/TuringDesk-v0.14.3-win-arm64.msi
+            artifacts/TuringDesk-v0.14.3-win-arm64/BUILD-INFO.txt
           if-no-files-found: error
           retention-days: 30
