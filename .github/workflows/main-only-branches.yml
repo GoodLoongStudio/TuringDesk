@@ -1,0 +1,36 @@
+name: Enforce main-only branches
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete every remote branch except main
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t branches < <(gh api --paginate "repos/${REPOSITORY}/branches?per_page=100" --jq '.[].name')
+          for branch in "${branches[@]}"; do
+            if [[ "$branch" == "main" ]]; then
+              continue
+            fi
+            echo "Deleting branch: $branch"
+            gh api --method DELETE "repos/${REPOSITORY}/git/refs/heads/${branch}"
+          done
+
+          remaining=$(gh api --paginate "repos/${REPOSITORY}/branches?per_page=100" --jq '.[].name' | tr '\n' ' ')
+          echo "Remaining branches: ${remaining}"
+          if [[ "${remaining}" != "main " && "${remaining}" != "main" ]]; then
+            echo "Unexpected branches remain after cleanup."
+            exit 1
+          fi
