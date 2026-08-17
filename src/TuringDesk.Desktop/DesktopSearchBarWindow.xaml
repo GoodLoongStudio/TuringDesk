@@ -3,7 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:local="clr-namespace:TuringDesk.Desktop"
         Title="TuringDesk Search"
-        Width="920" Height="78"
+        Width="980" Height="78"
         WindowStyle="None"
         ResizeMode="NoResize"
         AllowsTransparency="True"
@@ -12,83 +12,155 @@
         ShowActivated="False"
         Topmost="False"
         FontFamily="Segoe UI Variable, Segoe UI">
-    <Grid Margin="10">
+    <Grid Margin="8">
         <Border x:Name="SearchShell"
                 VerticalAlignment="Top"
-                CornerRadius="22"
-                Background="#F2181C25"
-                BorderBrush="#66748FFF"
+                CornerRadius="20"
+                Background="#FAFFFFFF"
+                BorderBrush="#CCD4E0"
                 BorderThickness="1"
-                Padding="10,8">
+                Padding="8,7">
             <Border.Effect>
-                <DropShadowEffect BlurRadius="30" ShadowDepth="6" Opacity="0.42" Color="#000000"/>
+                <DropShadowEffect BlurRadius="24" ShadowDepth="5" Opacity="0.20" Color="#000000"/>
             </Border.Effect>
             <Grid>
                 <Grid.RowDefinitions>
-                    <RowDefinition Height="42"/>
+                    <RowDefinition Height="46"/>
                     <RowDefinition x:Name="SearchResultsRow" Height="0"/>
                     <RowDefinition x:Name="ReplyRow" Height="0"/>
                 </Grid.RowDefinitions>
 
                 <Grid Grid.Row="0">
                     <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="154"/>
+                        <ColumnDefinition Width="228"/>
                         <ColumnDefinition Width="34"/>
                         <ColumnDefinition Width="*"/>
-                        <ColumnDefinition Width="38"/>
-                        <ColumnDefinition Width="38"/>
+                        <ColumnDefinition Width="72"/>
+                        <ColumnDefinition Width="72"/>
                     </Grid.ColumnDefinitions>
 
-                    <ComboBox Grid.Column="0"
-                              x:Name="ModelSelector"
-                              Height="32"
-                              Margin="0,0,6,0"
-                              Padding="9,2"
-                              VerticalContentAlignment="Center"
-                              Foreground="#DCE3FF"
-                              Background="#20283B"
-                              BorderBrush="#445176"
-                              BorderThickness="1"
-                              FontSize="11.5"
-                              ToolTip="选择顶部 AI 搜索使用的模型"
-                              SelectionChanged="ModelSelector_SelectionChanged"/>
+                    <!-- Keep the model control self-explanatory even when the selected
+                         provider/model name is long. The blue AI badge communicates the
+                         function; the native light ComboBox remains familiar to Windows users. -->
+                    <Border Grid.Column="0"
+                            Height="38"
+                            Margin="0,4,8,4"
+                            CornerRadius="11"
+                            Background="#EEF4FF"
+                            BorderBrush="#C8D8FF"
+                            BorderThickness="1">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="42"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <Border Grid.Column="0"
+                                    Width="30" Height="26"
+                                    Margin="6,0,4,0"
+                                    CornerRadius="8"
+                                    Background="#2563EB"
+                                    HorizontalAlignment="Left"
+                                    VerticalAlignment="Center">
+                                <TextBlock Text="AI"
+                                           Foreground="White"
+                                           FontSize="11"
+                                           FontWeight="Bold"
+                                           HorizontalAlignment="Center"
+                                           VerticalAlignment="Center"/>
+                            </Border>
+                            <Grid Grid.Column="1" Margin="0,1,5,1">
+                                <TextBlock Text="AI 模型"
+                                           Margin="5,-13,0,0"
+                                           Foreground="#64748B"
+                                           FontSize="9.5"
+                                           VerticalAlignment="Center"
+                                           IsHitTestVisible="False"
+                                           Panel.ZIndex="2"/>
+                                <ComboBox x:Name="ModelSelector"
+                                          Height="34"
+                                          Margin="0,0,0,0"
+                                          Padding="5,8,4,0"
+                                          VerticalContentAlignment="Center"
+                                          Foreground="#111827"
+                                          Background="White"
+                                          BorderBrush="Transparent"
+                                          BorderThickness="0"
+                                          FontSize="11.5"
+                                          FontWeight="SemiBold"
+                                          DisplayMemberPath="DisplayName"
+                                          ToolTip="选择顶部 AI 搜索使用的模型"
+                                          SelectionChanged="ModelSelector_SelectionChanged"/>
+                            </Grid>
+                        </Grid>
+                    </Border>
 
-                    <local:ShellIcon Grid.Column="1" Kind="Search" Width="18" Height="18" Foreground="#AEB9FF" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                    <local:ShellIcon Grid.Column="1"
+                                     Kind="Search"
+                                     Width="18" Height="18"
+                                     Foreground="#475569"
+                                     HorizontalAlignment="Center"
+                                     VerticalAlignment="Center"/>
 
-                    <Grid Grid.Column="2" Margin="2,0,8,0">
+                    <Grid Grid.Column="2" Margin="4,0,10,0">
                         <TextBox x:Name="SearchBox"
                                  Background="Transparent"
                                  BorderThickness="0"
-                                 Foreground="#F6F8FC"
-                                 CaretBrush="#AEB9FF"
+                                 Foreground="#111827"
+                                 CaretBrush="#2563EB"
                                  FontSize="15.5"
                                  Padding="2,0"
                                  VerticalContentAlignment="Center"
                                  KeyDown="SearchBox_KeyDown"
                                  TextChanged="SearchBox_TextChanged"/>
                         <TextBlock x:Name="PlaceholderText"
-                                   Text="搜索应用、文本文件，或直接问 AI…"
-                                   Foreground="#7E899E"
+                                   Text="搜索应用、文件，或直接问 AI…"
+                                   Foreground="#7B8798"
                                    FontSize="14.5"
                                    VerticalAlignment="Center"
                                    IsHitTestVisible="False"/>
                     </Grid>
 
-                    <Button Grid.Column="3" x:Name="MicButton" Width="34" Height="34" Padding="0" Click="Mic_Click" ToolTip="语音输入">
+                    <Button Grid.Column="3"
+                            x:Name="MicButton"
+                            Height="34"
+                            Margin="2,6,2,6"
+                            Padding="0"
+                            Click="Mic_Click"
+                            ToolTip="语音输入">
                         <Button.Template>
                             <ControlTemplate TargetType="Button">
-                                <Border CornerRadius="11" Background="#10151E" BorderBrush="#2E394C" BorderThickness="1">
-                                    <local:ShellIcon Kind="Microphone" Width="16" Height="16" Foreground="#AAB5CA" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                <Border CornerRadius="10"
+                                        Background="#F1F5F9"
+                                        BorderBrush="#D7DEE8"
+                                        BorderThickness="1">
+                                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center">
+                                        <local:ShellIcon Kind="Microphone" Width="14" Height="14" Foreground="#475569" Margin="0,0,5,0"/>
+                                        <TextBlock Text="语音" Foreground="#334155" FontSize="11.5" FontWeight="SemiBold"/>
+                                    </StackPanel>
                                 </Border>
                             </ControlTemplate>
                         </Button.Template>
                     </Button>
 
-                    <Button Grid.Column="4" x:Name="SettingsButton" Width="34" Height="34" Padding="0" Margin="4,0,0,0" Click="Settings_Click" ToolTip="桌面与 AI 设置">
+                    <Button Grid.Column="4"
+                            x:Name="SettingsButton"
+                            Height="34"
+                            Margin="2,6,0,6"
+                            Padding="0"
+                            Click="Settings_Click"
+                            ToolTip="桌面与 AI 设置">
                         <Button.Template>
                             <ControlTemplate TargetType="Button">
-                                <Border CornerRadius="11" Background="#252D49" BorderBrush="#6474D8" BorderThickness="1">
-                                    <local:ShellIcon Kind="Settings" Width="17" Height="17" Foreground="#C5CCFF" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                <Border CornerRadius="10"
+                                        Background="#E8F0FF"
+                                        BorderBrush="#BFD0FF"
+                                        BorderThickness="1">
+                                    <TextBlock Text="设置"
+                                               Foreground="#1D4ED8"
+                                               FontSize="11.5"
+                                               FontWeight="SemiBold"
+                                               HorizontalAlignment="Center"
+                                               VerticalAlignment="Center"/>
                                 </Border>
                             </ControlTemplate>
                         </Button.Template>
@@ -100,14 +172,14 @@
                         Visibility="Collapsed"
                         Margin="8,8,8,2"
                         Padding="6"
-                        CornerRadius="14"
-                        Background="#F20D1119"
-                        BorderBrush="#313B51"
+                        CornerRadius="13"
+                        Background="#FCFFFFFF"
+                        BorderBrush="#D8DEE8"
                         BorderThickness="1">
                     <ListBox x:Name="SearchResultsList"
                              Background="Transparent"
                              BorderThickness="0"
-                             Foreground="#EEF2FA"
+                             Foreground="#111827"
                              ScrollViewer.VerticalScrollBarVisibility="Auto"
                              MouseLeftButtonUp="SearchResultsList_MouseLeftButtonUp">
                         <ListBox.ItemContainerStyle>
@@ -123,33 +195,33 @@
                             <DataTemplate>
                                 <Grid>
                                     <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="48"/>
+                                        <ColumnDefinition Width="50"/>
                                         <ColumnDefinition Width="*"/>
                                     </Grid.ColumnDefinitions>
                                     <Border Grid.Column="0"
-                                            Width="38" Height="24"
+                                            Width="40" Height="24"
                                             HorizontalAlignment="Left"
                                             VerticalAlignment="Center"
-                                            CornerRadius="8"
-                                            Background="#202A40"
-                                            BorderBrush="#3E4B70"
+                                            CornerRadius="7"
+                                            Background="#E8F0FF"
+                                            BorderBrush="#C8D8FF"
                                             BorderThickness="1">
                                         <TextBlock Text="{Binding KindLabel}"
                                                    HorizontalAlignment="Center"
                                                    VerticalAlignment="Center"
-                                                   Foreground="#AEB9FF"
+                                                   Foreground="#1D4ED8"
                                                    FontSize="10.5"
                                                    FontWeight="SemiBold"/>
                                     </Border>
                                     <StackPanel Grid.Column="1">
                                         <TextBlock Text="{Binding Name}"
-                                                   Foreground="#F2F5FB"
+                                                   Foreground="#111827"
                                                    FontSize="12.5"
                                                    FontWeight="SemiBold"
                                                    TextTrimming="CharacterEllipsis"/>
                                         <TextBlock Text="{Binding Subtitle}"
                                                    Margin="0,2,0,0"
-                                                   Foreground="#8996AB"
+                                                   Foreground="#64748B"
                                                    FontSize="10.5"
                                                    TextTrimming="CharacterEllipsis"/>
                                     </StackPanel>
@@ -165,8 +237,8 @@
                         Margin="8,8,8,2"
                         Padding="12,10"
                         CornerRadius="13"
-                        Background="#D90E121A"
-                        BorderBrush="#2F394C"
+                        Background="#FCFFFFFF"
+                        BorderBrush="#D8DEE8"
                         BorderThickness="1">
                     <Grid>
                         <Grid.RowDefinitions>
@@ -174,13 +246,13 @@
                             <RowDefinition Height="Auto"/>
                         </Grid.RowDefinitions>
                         <StackPanel Orientation="Horizontal">
-                            <Ellipse x:Name="ReplyDot" Width="7" Height="7" Fill="#7F8FFF" Margin="0,0,8,0" VerticalAlignment="Center"/>
-                            <TextBlock x:Name="ReplyTitle" Text="图灵" Foreground="#AEB9CE" FontSize="10.5" FontWeight="SemiBold"/>
+                            <Ellipse x:Name="ReplyDot" Width="7" Height="7" Fill="#2563EB" Margin="0,0,8,0" VerticalAlignment="Center"/>
+                            <TextBlock x:Name="ReplyTitle" Text="图灵" Foreground="#475569" FontSize="10.5" FontWeight="SemiBold"/>
                         </StackPanel>
                         <TextBlock x:Name="ReplyText"
                                    Grid.Row="1"
                                    Margin="0,7,0,0"
-                                   Foreground="#E9EDF6"
+                                   Foreground="#111827"
                                    FontSize="12.5"
                                    TextWrapping="Wrap"
                                    MaxHeight="116"/>
