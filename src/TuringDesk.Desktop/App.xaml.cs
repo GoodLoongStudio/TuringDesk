@@ -9,6 +9,11 @@ public partial class App : Application
     {
         base.OnStartup(e);
 
+        // Start Harness at the earliest safe application bootstrap point. It no
+        // longer waits for MainWindow construction, Loaded, or the WebView console.
+        // ModelSettingsWindow restarts it after a saved credential/config change.
+        _ = StartHarnessAsync();
+
         var shellMode = e.Args.Any(arg => string.Equals(arg, "--shell", StringComparison.OrdinalIgnoreCase));
         var controlOnly = e.Args.Any(arg => string.Equals(arg, "--control-only", StringComparison.OrdinalIgnoreCase));
         var window = new MainWindow();
@@ -28,14 +33,6 @@ public partial class App : Application
         }
 
         window.Show();
-
-        // Harness is part of the TuringDesk desktop runtime, not something the
-        // user has to launch by opening the WebView console. Start the official
-        // DeepSeek Harness web profile as soon as the desktop is running. The
-        // WebView is only a native-looking window onto the already-running UI.
-        // Quick chat, voice commands, conversation cards and trace cards remain
-        // native TuringDesk surfaces and do not depend on that WebView being open.
-        _ = StartHarnessAsync();
     }
 
     private static async Task StartHarnessAsync()
