@@ -42,6 +42,7 @@ public partial class SceneRendererControl
         else if (_scene.Kind == SceneKind.Scene)
         {
             ApplySceneParallax(input);
+            ApplySceneGraphParallax(input);
         }
 
         _lastInput = input;
@@ -49,6 +50,7 @@ public partial class SceneRendererControl
 
     private void ApplySceneParallax(DesktopInputSnapshot input)
     {
+        if (_scene is { Layers.Count: > 0 }) return;
         var x = (input.NormalizedX - 0.5) * -18;
         var y = (input.NormalizedY - 0.5) * -14;
         var transform = AuroraLayer.RenderTransform as TranslateTransform ?? new TranslateTransform();
