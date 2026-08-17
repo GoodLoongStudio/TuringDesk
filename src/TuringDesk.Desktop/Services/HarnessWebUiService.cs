@@ -18,6 +18,11 @@ public static class HarnessWebUiService
 
     public static async Task<Uri> EnsureRunningAsync(CancellationToken cancellationToken = default)
     {
+        var modelStore = new ModelSettingsStore();
+        var model = await modelStore.LoadAsync();
+        var apiKey = modelStore.LoadApiKey();
+        HarnessModelBridgeService.Synchronize(model);
+
         if (await IsReadyAsync(cancellationToken)) return WebUri;
 
         lock (Gate)
@@ -25,11 +30,54 @@ public static class HarnessWebUiService
             if (_process is null || _process.HasExited)
             {
                 _process?.Dispose();
-                _process = StartHarnessWebProcess();
+                _process = StartHarnessWebProcess(model, apiKey);
                 RegisterShutdownHook();
             }
         }
 
+        return await WaitUntilReadyAsync(cancellationToken);
+    }
+
+    /// <summary>
+    /// Called after the beginner model UI saves. The official Harness settings
+    /// document is updated immediately. If TuringDesk owns a running Harness
+    /// process, restart it so environment-backed credentials are refreshed too.
+    /// </summary>
+    public static async Task ApplyModelSettingsAsync(ModelSettings settings, string? apiKey, CancellationToken cancellationToken = default)
+    {
+        HarnessModelBridgeService.Synchronize(settings);
+
+        var shouldRestart = false;
+        lock (Gate)
+        {
+            if (_process is { HasExited: false })
+            {
+                shouldRestart = true;
+                StopOwnedProcessNoLock();
+            }
+        }
+
+        if (!shouldRestart) return;
+
+        // Give Windows a brief moment to release the local listener before
+        // starting the replacement process with the updated credential env.
+        await Task.Delay(180, cancellationToken);
+
+        lock (Gate)
+        {
+            if (_process is null || _process.HasExited)
+            {
+                _process?.Dispose();
+                _process = StartHarnessWebProcess(settings, apiKey);
+                RegisterShutdownHook();
+            }
+        }
+
+        _ = await WaitUntilReadyAsync(cancellationToken);
+    }
+
+    private static async Task<Uri> WaitUntilReadyAsync(CancellationToken cancellationToken)
+    {
         var deadline = DateTime.UtcNow.AddSeconds(20);
         Exception? lastError = null;
         while (DateTime.UtcNow < deadline)
@@ -77,14 +125,12 @@ public static class HarnessWebUiService
         }
     }
 
-    private static Process StartHarnessWebProcess()
+    private static Process StartHarnessWebProcess(ModelSettings model, string? apiKey)
     {
         var layout = ResolveRuntimeLayout();
-        var harnessHome = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "TuringDesk",
-            "Harness");
+        var harnessHome = HarnessModelBridgeService.HarnessHome;
         Directory.CreateDirectory(harnessHome);
+        HarnessModelBridgeService.Synchronize(model);
 
         var patchPath = Path.Combine(harnessHome, "turingdesk-web.patch.yml");
         WriteTuringDeskWebPatch(patchPath);
@@ -106,7 +152,7 @@ public static class HarnessWebUiService
         startInfo.ArgumentList.Add("--port");
         startInfo.ArgumentList.Add(Port.ToString());
 
-        startInfo.Environment["DSH_HOME"] = harnessHome;
+        HarnessModelBridgeService.ApplyEnvironment(startInfo, model, apiKey);
         startInfo.Environment["TURINGDESK_CAPABILITY_URL"] = "http://127.0.0.1:4318";
         startInfo.Environment["TURINGDESK_MCP_NODE"] = layout.NodeExecutable;
         startInfo.Environment["TURINGDESK_MCP_SERVER"] = layout.WindowsMcpServer;
@@ -125,22 +171,24 @@ public static class HarnessWebUiService
 
     private static void StopOwnedProcess()
     {
-        lock (Gate)
+        lock (Gate) StopOwnedProcessNoLock();
+    }
+
+    private static void StopOwnedProcessNoLock()
+    {
+        if (_process is null) return;
+        try
         {
-            if (_process is null) return;
-            try
-            {
-                if (!_process.HasExited) _process.Kill(entireProcessTree: true);
-            }
-            catch
-            {
-                // Windows is already tearing the desktop process down.
-            }
-            finally
-            {
-                _process.Dispose();
-                _process = null;
-            }
+            if (!_process.HasExited) _process.Kill(entireProcessTree: true);
+        }
+        catch
+        {
+            // Windows is already tearing the desktop process down.
+        }
+        finally
+        {
+            _process.Dispose();
+            _process = null;
         }
     }
 
