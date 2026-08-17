@@ -9,7 +9,8 @@
         AllowsTransparency="True"
         Background="Transparent"
         ShowInTaskbar="False"
-        Topmost="True"
+        ShowActivated="False"
+        Topmost="False"
         FontFamily="Segoe UI Variable, Segoe UI">
     <Grid Margin="10">
         <Border x:Name="SearchShell"
