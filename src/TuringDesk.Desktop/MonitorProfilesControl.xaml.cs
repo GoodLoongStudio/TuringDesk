@@ -53,10 +53,10 @@ public partial class MonitorProfilesControl : UserControl
 
             var card = new Border
             {
-                Background = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(15, 21, 31)),
-                BorderBrush = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(43, 53, 72)),
+                Background = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(255, 255, 255)),
+                BorderBrush = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(217, 222, 230)),
                 BorderThickness = new Thickness(1),
-                CornerRadius = new CornerRadius(12),
+                CornerRadius = new CornerRadius(10),
                 Padding = new Thickness(13),
                 Margin = new Thickness(0, 0, 0, 10)
             };
@@ -71,6 +71,7 @@ public partial class MonitorProfilesControl : UserControl
             var title = new TextBlock
             {
                 Text = monitor.IsPrimary ? $"主显示器 · {monitor.Width}×{monitor.Height}" : $"显示器 · {monitor.Width}×{monitor.Height}",
+                Foreground = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(31, 35, 40)),
                 FontWeight = FontWeights.SemiBold,
                 Margin = new Thickness(0, 0, 0, 9)
             };
@@ -89,7 +90,12 @@ public partial class MonitorProfilesControl : UserControl
             Grid.SetColumn(target, 3);
             grid.Children.Add(target);
 
-            var label = new TextBlock { Text = "内容", Foreground = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(142, 154, 175)), VerticalAlignment = VerticalAlignment.Center };
+            var label = new TextBlock
+            {
+                Text = "内容",
+                Foreground = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(102, 112, 133)),
+                VerticalAlignment = VerticalAlignment.Center
+            };
             Grid.SetRow(label, 1);
             Grid.SetColumn(label, 0);
             grid.Children.Add(label);
