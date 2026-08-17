@@ -1,63 +1,16 @@
 <Window x:Class="TuringDesk.Desktop.EnhancementWallpaperWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="TuringDesk Desktop Scene"
+        xmlns:local="clr-namespace:TuringDesk.Desktop"
+        Title="TuringDesk Desktop Engine"
         WindowStyle="None"
         ResizeMode="NoResize"
         ShowInTaskbar="False"
         ShowActivated="False"
         Focusable="False"
         AllowsTransparency="False"
-        Background="#0B0D12">
-    <Grid x:Name="SceneRoot"
-          IsHitTestVisible="False"
-          ClipToBounds="True">
-        <Border x:Name="WallpaperLayer"
-                Background="#0B0D12" />
-
-        <!--
-          v0.12 starts with a deliberately light-weight ambient scene layer.
-          The host boundary is renderer-agnostic so a Direct3D/DirectComposition,
-          video, or WebView renderer can replace this WPF scene later without
-          changing how TuringDesk integrates with Explorer.
-        -->
-        <Grid x:Name="AmbientSceneLayer">
-            <Grid Opacity="0.62">
-                <Grid.Background>
-                    <RadialGradientBrush Center="0.82,0.15"
-                                         GradientOrigin="0.82,0.15"
-                                         RadiusX="0.72"
-                                         RadiusY="0.72">
-                        <GradientStop Color="#553F62FF" Offset="0" />
-                        <GradientStop Color="#182A3C72" Offset="0.46" />
-                        <GradientStop Color="#00000000" Offset="1" />
-                    </RadialGradientBrush>
-                </Grid.Background>
-            </Grid>
-
-            <Grid Opacity="0.46">
-                <Grid.Background>
-                    <RadialGradientBrush Center="0.12,0.88"
-                                         GradientOrigin="0.12,0.88"
-                                         RadiusX="0.78"
-                                         RadiusY="0.78">
-                        <GradientStop Color="#4430A8A4" Offset="0" />
-                        <GradientStop Color="#16215A61" Offset="0.48" />
-                        <GradientStop Color="#00000000" Offset="1" />
-                    </RadialGradientBrush>
-                </Grid.Background>
-            </Grid>
-
-            <Border VerticalAlignment="Top"
-                    Height="110"
-                    Opacity="0.24">
-                <Border.Background>
-                    <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
-                        <GradientStop Color="#24000000" Offset="0" />
-                        <GradientStop Color="#00000000" Offset="1" />
-                    </LinearGradientBrush>
-                </Border.Background>
-            </Border>
-        </Grid>
+        Background="#080A10">
+    <Grid x:Name="SceneRoot" ClipToBounds="True">
+        <local:SceneRendererControl x:Name="Renderer"/>
     </Grid>
 </Window>

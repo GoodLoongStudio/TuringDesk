@@ -85,6 +85,22 @@ public static class DisplayManager
         _ = SetWindowPos(handle, topmost ? HwndTopmost : IntPtr.Zero, x, y, Math.Max(1, width), Math.Max(1, height), SwpNoActivate | SwpShowWindow);
     }
 
+    public static void PositionPopupTopCenter(Window window, DisplayMonitor monitor, int topOffsetPixels = 42, int marginPixels = 10)
+    {
+        var handle = new WindowInteropHelper(window).Handle;
+        if (handle == IntPtr.Zero) return;
+
+        var dpi = Math.Max(96u, GetDpiForWindow(handle));
+        var scale = dpi / 96d;
+        var width = Math.Max(1, (int)Math.Round(window.Width * scale));
+        var height = Math.Max(1, (int)Math.Round(window.Height * scale));
+        var x = monitor.WorkLeft + (monitor.WorkWidth - width) / 2;
+        var y = monitor.WorkTop + Math.Max(marginPixels, topOffsetPixels);
+        x = Math.Max(monitor.WorkLeft + marginPixels, Math.Min(x, monitor.WorkRight - width - marginPixels));
+        y = Math.Max(monitor.WorkTop + marginPixels, Math.Min(y, monitor.WorkBottom - height - marginPixels));
+        _ = SetWindowPos(handle, HwndTopmost, x, y, width, height, SwpNoActivate | SwpShowWindow);
+    }
+
     public static void PositionPopupBottomCenter(Window window, DisplayMonitor monitor, int marginPixels = 10) =>
         PositionPopup(window, monitor, PopupHorizontal.Center, PopupVertical.Bottom, marginPixels, 0, 0);
 

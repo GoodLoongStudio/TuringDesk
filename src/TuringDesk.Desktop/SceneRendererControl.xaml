@@ -1,0 +1,101 @@
+<UserControl x:Class="TuringDesk.Desktop.SceneRendererControl"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:local="clr-namespace:TuringDesk.Desktop"
+             xmlns:wv2="clr-namespace:Microsoft.Web.WebView2.Wpf;assembly=Microsoft.Web.WebView2.Wpf"
+             Background="#080A10"
+             Loaded="Renderer_Loaded"
+             Unloaded="Renderer_Unloaded">
+    <Grid x:Name="Root" ClipToBounds="True" IsHitTestVisible="False">
+        <Border x:Name="StaticBackground" Background="#080A10"/>
+
+        <!-- Actual D3D11 surface. WPF graph remains above it as a compatibility
+             layer while image/effect/particle passes are migrated to shaders. -->
+        <local:GpuSceneSurface x:Name="GpuSurface" Visibility="Collapsed"/>
+
+        <Grid x:Name="BuiltInScene" Visibility="Collapsed">
+            <Grid x:Name="AuroraLayer">
+                <Ellipse x:Name="GlowA"
+                         Width="1040"
+                         Height="1040"
+                         HorizontalAlignment="Right"
+                         VerticalAlignment="Top"
+                         Margin="0,-390,-250,0"
+                         Opacity="0.70">
+                    <Ellipse.Fill>
+                        <RadialGradientBrush>
+                            <GradientStop x:Name="GlowAColor" Color="#B46477FF" Offset="0"/>
+                            <GradientStop Color="#004653A0" Offset="1"/>
+                        </RadialGradientBrush>
+                    </Ellipse.Fill>
+                    <Ellipse.Effect><BlurEffect Radius="92"/></Ellipse.Effect>
+                </Ellipse>
+
+                <Ellipse x:Name="GlowB"
+                         Width="920"
+                         Height="920"
+                         HorizontalAlignment="Left"
+                         VerticalAlignment="Bottom"
+                         Margin="-300,0,0,-370"
+                         Opacity="0.62">
+                    <Ellipse.Fill>
+                        <RadialGradientBrush>
+                            <GradientStop x:Name="GlowBColor" Color="#A454D9C4" Offset="0"/>
+                            <GradientStop Color="#00305F60" Offset="1"/>
+                        </RadialGradientBrush>
+                    </Ellipse.Fill>
+                    <Ellipse.Effect><BlurEffect Radius="96"/></Ellipse.Effect>
+                </Ellipse>
+
+                <Ellipse x:Name="GlowC"
+                         Width="760"
+                         Height="760"
+                         HorizontalAlignment="Center"
+                         VerticalAlignment="Center"
+                         Margin="0,-80,0,0"
+                         Opacity="0.46">
+                    <Ellipse.Fill>
+                        <RadialGradientBrush>
+                            <GradientStop x:Name="GlowCColor" Color="#8CFB6EC8" Offset="0"/>
+                            <GradientStop Color="#002B1B5B" Offset="1"/>
+                        </RadialGradientBrush>
+                    </Ellipse.Fill>
+                    <Ellipse.Effect><BlurEffect Radius="104"/></Ellipse.Effect>
+                </Ellipse>
+
+                <Canvas x:Name="ParticleCanvas" Opacity="0.78"/>
+
+                <Grid x:Name="GridLayer" Visibility="Collapsed" Opacity="0.28">
+                    <Grid.Background>
+                        <DrawingBrush TileMode="Tile" Viewport="0,0,64,64" ViewportUnits="Absolute">
+                            <DrawingBrush.Drawing>
+                                <GeometryDrawing Brush="Transparent">
+                                    <GeometryDrawing.Pen><Pen Brush="#A78BFF" Thickness="0.7"/></GeometryDrawing.Pen>
+                                    <GeometryDrawing.Geometry>
+                                        <GeometryGroup>
+                                            <LineGeometry StartPoint="0,0" EndPoint="64,0"/>
+                                            <LineGeometry StartPoint="0,0" EndPoint="0,64"/>
+                                        </GeometryGroup>
+                                    </GeometryDrawing.Geometry>
+                                </GeometryDrawing>
+                            </DrawingBrush.Drawing>
+                        </DrawingBrush>
+                    </Grid.Background>
+                </Grid>
+            </Grid>
+        </Grid>
+
+        <Canvas x:Name="SceneGraphCanvas" Visibility="Collapsed" ClipToBounds="True"/>
+
+        <MediaElement x:Name="VideoPlayer"
+                      Visibility="Collapsed"
+                      LoadedBehavior="Manual"
+                      UnloadedBehavior="Manual"
+                      Stretch="UniformToFill"
+                      ScrubbingEnabled="False"
+                      MediaEnded="VideoPlayer_MediaEnded"
+                      MediaFailed="VideoPlayer_MediaFailed"/>
+
+        <wv2:WebView2 x:Name="WebPlayer" Visibility="Collapsed"/>
+    </Grid>
+</UserControl>

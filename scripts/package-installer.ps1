@@ -1,7 +1,7 @@
 param(
     [string]$Configuration = "Release",
     [string]$RuntimeIdentifier = "win-arm64",
-    [string]$Version = "v0.12.0",
+    [string]$Version = "v0.14.2",
     [string]$NodeVersion = "22.19.0"
 )
 

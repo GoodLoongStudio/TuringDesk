@@ -1,0 +1,37 @@
+name: Desktop Compile
+
+on:
+  push:
+    branches:
+      - agent/v0.13-visible-product-pass
+  pull_request:
+    paths:
+      - 'src/TuringDesk.Desktop/**'
+      - 'src/TuringDesk.ShellHost/**'
+      - '.github/workflows/desktop-compile.yml'
+
+concurrency:
+  group: desktop-compile-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  desktop:
+    runs-on: windows-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - name: Restore Desktop
+        shell: pwsh
+        run: dotnet restore src/TuringDesk.Desktop/TuringDesk.Desktop.csproj
+      - name: Build Desktop
+        shell: pwsh
+        run: dotnet build src/TuringDesk.Desktop/TuringDesk.Desktop.csproj -c Release --no-restore
+      - name: Restore ShellHost
+        shell: pwsh
+        run: dotnet restore src/TuringDesk.ShellHost/TuringDesk.ShellHost.csproj
+      - name: Build ShellHost
+        shell: pwsh
+        run: dotnet build src/TuringDesk.ShellHost/TuringDesk.ShellHost.csproj -c Release --no-restore

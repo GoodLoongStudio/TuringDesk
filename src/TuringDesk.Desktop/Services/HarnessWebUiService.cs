@@ -12,28 +12,108 @@ public static class HarnessWebUiService
     private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromMilliseconds(700) };
     private static readonly object Gate = new();
     private static Process? _process;
+    private static Task<Uri>? _startupTask;
     private static bool _shutdownHookRegistered;
 
     public static Uri Url => WebUri;
+
+    /// <summary>
+    /// Starts the bundled official Harness process synchronously up to Process.Start
+    /// and returns the readiness task. App.OnStartup calls this before MainWindow is
+    /// constructed, so Harness boot overlaps the desktop UI instead of starting only
+    /// after the user can already interact with TuringDesk.
+    /// </summary>
+    public static Task<Uri> StartEarly()
+    {
+        var modelStore = new ModelSettingsStore();
+        var model = modelStore.Load();
+        var apiKey = modelStore.LoadApiKey();
+        HarnessModelBridgeService.Synchronize(model, apiKey);
+
+        lock (Gate)
+        {
+            if (_process is { HasExited: false } && _startupTask is not null)
+            {
+                return _startupTask;
+            }
+
+            if (_process is null || _process.HasExited)
+            {
+                _process?.Dispose();
+                _process = StartHarnessWebProcess(model);
+                RegisterShutdownHook();
+            }
+
+            _startupTask = WaitUntilReadyAsync(CancellationToken.None);
+            return _startupTask;
+        }
+    }
 
     public static async Task<Uri> EnsureRunningAsync(CancellationToken cancellationToken = default)
     {
         if (await IsReadyAsync(cancellationToken)) return WebUri;
 
-        var store = new ModelSettingsStore();
-        var settings = await store.LoadAsync();
-        var apiKey = store.LoadApiKey();
-
+        Task<Uri> startup;
         lock (Gate)
         {
-            if (_process is null || _process.HasExited)
+            if (_process is { HasExited: false } && _startupTask is not null)
             {
-                _process?.Dispose();
-                _process = StartHarnessWebProcess(settings, apiKey);
-                RegisterShutdownHook();
+                startup = _startupTask;
+            }
+            else
+            {
+                startup = StartEarlyOutsideGate();
             }
         }
 
+        return cancellationToken.CanBeCanceled
+            ? await startup.WaitAsync(cancellationToken)
+            : await startup;
+    }
+
+    /// <summary>
+    /// Called by the single TuringDesk model configuration pipeline. Both settings
+    /// and the API key are written to Harness's own hot-reloaded stores. No process
+    /// restart is required: official settings/credentials providers publish the
+    /// change and LLM adapters resolve credentials on the next request.
+    /// </summary>
+    public static async Task ApplyModelSettingsAsync(ModelSettings settings, string? apiKey, CancellationToken cancellationToken = default)
+    {
+        HarnessModelBridgeService.Synchronize(settings, apiKey);
+
+        if (await IsReadyAsync(cancellationToken))
+        {
+            // Allow the file watchers' write-settle window to publish the update
+            // before a caller immediately submits its next prompt.
+            await Task.Delay(180, cancellationToken);
+            return;
+        }
+
+        _ = await EnsureRunningAsync(cancellationToken);
+    }
+
+    private static Task<Uri> StartEarlyOutsideGate()
+    {
+        // Caller owns Gate. This helper avoids re-entering the same lock while
+        // preserving the synchronous Process.Start behavior of StartEarly().
+        var modelStore = new ModelSettingsStore();
+        var model = modelStore.Load();
+        var apiKey = modelStore.LoadApiKey();
+        HarnessModelBridgeService.Synchronize(model, apiKey);
+
+        if (_process is null || _process.HasExited)
+        {
+            _process?.Dispose();
+            _process = StartHarnessWebProcess(model);
+            RegisterShutdownHook();
+        }
+
+        _startupTask = WaitUntilReadyAsync(CancellationToken.None);
+        return _startupTask;
+    }
+
+    private static async Task<Uri> WaitUntilReadyAsync(CancellationToken cancellationToken)
+    {
         var deadline = DateTime.UtcNow.AddSeconds(20);
         Exception? lastError = null;
         while (DateTime.UtcNow < deadline)
@@ -63,12 +143,6 @@ public static class HarnessWebUiService
         throw new TimeoutException("DeepSeek Harness WebUI did not become ready on 127.0.0.1:4319 within 20 seconds.", lastError);
     }
 
-    public static async Task<Uri> RestartWithSavedConfigurationAsync(CancellationToken cancellationToken = default)
-    {
-        StopOwnedProcess();
-        return await EnsureRunningAsync(cancellationToken);
-    }
-
     private static async Task<bool> IsReadyAsync(CancellationToken cancellationToken)
     {
         try
@@ -87,14 +161,12 @@ public static class HarnessWebUiService
         }
     }
 
-    private static Process StartHarnessWebProcess(ModelSettings settings, string? apiKey)
+    private static Process StartHarnessWebProcess(ModelSettings model)
     {
         var layout = ResolveRuntimeLayout();
-        var harnessHome = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "TuringDesk",
-            "Harness");
+        var harnessHome = HarnessModelBridgeService.HarnessHome;
         Directory.CreateDirectory(harnessHome);
+        HarnessModelBridgeService.Synchronize(model);
 
         var patchPath = Path.Combine(harnessHome, "turingdesk-web.patch.yml");
         WriteTuringDeskWebPatch(patchPath);
@@ -116,50 +188,17 @@ public static class HarnessWebUiService
         startInfo.ArgumentList.Add("--port");
         startInfo.ArgumentList.Add(Port.ToString());
 
-        startInfo.Environment["DSH_HOME"] = harnessHome;
+        // DSH_HOME points at the shared official settings/credential store. API
+        // keys are intentionally absent from the inherited process environment so
+        // the Harness Models page remains writable and reflects the shared store.
+        HarnessModelBridgeService.ApplyEnvironment(startInfo);
         startInfo.Environment["TURINGDESK_CAPABILITY_URL"] = "http://127.0.0.1:4318";
         startInfo.Environment["TURINGDESK_MCP_NODE"] = layout.NodeExecutable;
         startInfo.Environment["TURINGDESK_MCP_SERVER"] = layout.WindowsMcpServer;
-        ApplySavedModelEnvironment(startInfo, settings, apiKey);
 
         var process = Process.Start(startInfo)
             ?? throw new InvalidOperationException("Failed to launch the bundled DeepSeek Harness WebUI process.");
         return process;
-    }
-
-    private static void ApplySavedModelEnvironment(ProcessStartInfo startInfo, ModelSettings settings, string? apiKey)
-    {
-        var normalizedKey = string.IsNullOrWhiteSpace(apiKey) ? null : apiKey.Trim();
-
-        // The TuringDesk setup wizard and model settings window persist one shared
-        // credential in Windows Credential Manager. The Harness process receives
-        // that same credential at spawn time instead of maintaining a second API
-        // key silo. This keeps native Agent calls and the official Harness WebUI
-        // on exactly the same DeepSeek account/configuration.
-        if (settings.ProviderId.Equals("deepseek", StringComparison.OrdinalIgnoreCase))
-        {
-            if (normalizedKey is not null)
-            {
-                startInfo.Environment["DEEPSEEK_API_KEY"] = normalizedKey;
-            }
-
-            if (!string.IsNullOrWhiteSpace(settings.Model))
-            {
-                startInfo.Environment["TURINGDESK_MODEL_ID"] = settings.Model.Trim();
-            }
-        }
-        else if (normalizedKey is not null)
-        {
-            // Keep the shared credential available to compatible Harness adapters.
-            // Provider-specific mapping remains owned by the TuringDesk runtime.
-            startInfo.Environment["TURINGDESK_MODEL_API_KEY"] = normalizedKey;
-        }
-
-        if (!string.IsNullOrWhiteSpace(settings.BaseUrl))
-        {
-            startInfo.Environment["TURINGDESK_MODEL_BASE_URL"] = settings.BaseUrl.Trim();
-        }
-        startInfo.Environment["TURINGDESK_MODEL_PROVIDER"] = settings.ProviderId;
     }
 
     private static void RegisterShutdownHook()
@@ -171,22 +210,25 @@ public static class HarnessWebUiService
 
     private static void StopOwnedProcess()
     {
-        lock (Gate)
+        lock (Gate) StopOwnedProcessNoLock();
+    }
+
+    private static void StopOwnedProcessNoLock()
+    {
+        if (_process is null) return;
+        try
         {
-            if (_process is null) return;
-            try
-            {
-                if (!_process.HasExited) _process.Kill(entireProcessTree: true);
-            }
-            catch
-            {
-                // Windows is already tearing the desktop process down.
-            }
-            finally
-            {
-                _process.Dispose();
-                _process = null;
-            }
+            if (!_process.HasExited) _process.Kill(entireProcessTree: true);
+        }
+        catch
+        {
+            // Windows is already tearing the desktop process down.
+        }
+        finally
+        {
+            _process.Dispose();
+            _process = null;
+            _startupTask = null;
         }
     }
 

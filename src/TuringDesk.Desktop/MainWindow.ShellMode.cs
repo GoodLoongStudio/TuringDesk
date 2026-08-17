@@ -28,7 +28,7 @@ public partial class MainWindow
     {
         ShellSession.IsShellMode = true;
         ShellSession.ExitRequested = false;
-        Title = "TuringDesk Control Center";
+        Title = "TuringDesk Runtime Host";
         ShowInTaskbar = false;
         WindowStartupLocation = WindowStartupLocation.Manual;
         Left = 0;
@@ -40,48 +40,14 @@ public partial class MainWindow
         Closed += ShellMode_Closed;
     }
 
+    /// <summary>
+    /// The legacy MainWindow command center is no longer a user-facing surface.
+    /// All desktop-management entry points now open the Desktop Library, which is
+    /// the product UI for importing, selecting and applying complete desktop scenes.
+    /// </summary>
     internal void ShowControlCenter()
     {
-        if (!ShellSession.IsShellMode)
-        {
-            Show();
-            Activate();
-            return;
-        }
-
-        _shellViewState = ShellViewState.ControlCenter;
-        var transition = ++_shellTransitionVersion;
-
-        foreach (var surface in _desktopSurfaces)
-        {
-            surface.HideFromDesktop(animate: true);
-        }
-
-        BeginAnimation(OpacityProperty, null);
-        if (!IsVisible)
-        {
-            Opacity = 0;
-            Show();
-        }
-
-        WindowState = WindowState.Maximized;
-        Activate();
-        Focus();
-
-        var fade = new DoubleAnimation
-        {
-            From = Math.Clamp(Opacity, 0, 1),
-            To = 1,
-            Duration = new Duration(ShellFadeIn),
-            EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseOut }
-        };
-        fade.Completed += (_, _) =>
-        {
-            if (transition != _shellTransitionVersion || _shellViewState != ShellViewState.ControlCenter) return;
-            BeginAnimation(OpacityProperty, null);
-            Opacity = 1;
-        };
-        BeginAnimation(OpacityProperty, fade, HandoffBehavior.SnapshotAndReplace);
+        ShowDesktopLibrary();
     }
 
     internal void ShowDesktop(bool minimizeWindows)

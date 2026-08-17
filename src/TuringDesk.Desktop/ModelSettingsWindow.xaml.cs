@@ -7,7 +7,7 @@ namespace TuringDesk.Desktop;
 public partial class ModelSettingsWindow : Window
 {
     private readonly RuntimeClient _runtime;
-    private readonly ModelSettingsStore _store;
+    private readonly UnifiedModelConfigurationService _modelConfiguration;
     private bool _initializing = true;
 
     public ModelSettings? SavedSettings { get; private set; }
@@ -16,7 +16,7 @@ public partial class ModelSettingsWindow : Window
     {
         InitializeComponent();
         _runtime = runtime;
-        _store = store;
+        _modelConfiguration = new UnifiedModelConfigurationService(runtime, store);
 
         ProviderBox.ItemsSource = ModelProviderPresets.All;
         ProviderBox.SelectedItem = ModelProviderPresets.Find(initial.ProviderId);
@@ -81,38 +81,14 @@ public partial class ModelSettingsWindow : Window
         {
             var settings = BuildSettings();
             var key = ApiKeyBox.Password;
-            StatusText.Text = "正在保存统一模型配置并同步 DeepSeek Harness…";
+            StatusText.Text = "正在同步 TuringDesk 与 DeepSeek Harness…";
 
-            var applied = await _runtime.ConfigureModelAsync(settings, key);
-            if (applied is null)
-            {
-                StatusText.Text = "Runtime 配置失败，暂未保存。";
-                return;
-            }
-
-            // Persist exactly once. Both the native runtime and bundled Harness
-            // read this same settings file + Windows Credential Manager secret.
-            await _store.SaveAsync(settings, key);
-
-            // Harness may already have started during App bootstrap. Restart the
-            // owned process so the freshly saved shared API key/config becomes
-            // active immediately instead of requiring an application restart.
-            try
-            {
-                await HarnessWebUiService.RestartWithSavedConfigurationAsync();
-            }
-            catch (Exception harnessError)
-            {
-                StatusText.Text = $"模型已保存，但 Harness 重新加载失败：{harnessError.Message}";
-                return;
-            }
-
-            SavedSettings = settings with { HasApiKey = !string.IsNullOrWhiteSpace(key) };
+            SavedSettings = await _modelConfiguration.ApplyAndSaveAsync(settings, key);
             DialogResult = true;
         }
         catch (Exception error)
         {
-            StatusText.Text = error.Message;
+            StatusText.Text = $"配置未完成：{error.Message}";
         }
     }
 

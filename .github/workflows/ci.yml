@@ -5,6 +5,10 @@ on:
     branches: [main]
   pull_request:
 
+concurrency:
+  group: turingdesk-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   runtime:
     runs-on: ubuntu-latest
@@ -83,6 +87,72 @@ jobs:
             throw "$file must remain ASCII-safe because the MSI invokes it with Windows PowerShell 5.1."
           }
 
+      - name: Verify v0.14 desktop UX and Harness contract
+        shell: pwsh
+        run: |
+          if (Test-Path "src/TuringDesk.Desktop/AgentOrbWindow.xaml") { throw "Legacy AgentOrbWindow.xaml must not ship in v0.14" }
+          if (Test-Path "src/TuringDesk.Desktop/AgentOrbWindow.xaml.cs") { throw "Legacy AgentOrbWindow.xaml.cs must not ship in v0.14" }
+          foreach ($required in @(
+            "src/TuringDesk.Desktop/DesktopSearchBarWindow.xaml",
+            "src/TuringDesk.Desktop/DesktopSearchBarWindow.xaml.cs",
+            "src/TuringDesk.Desktop/Services/DesktopSearchReservedArea.cs",
+            "src/TuringDesk.Desktop/Services/DesktopWidgetZOrderService.cs",
+            "src/TuringDesk.Desktop/Services/HarnessModelBridgeService.cs",
+            "src/TuringDesk.Desktop/Services/UnifiedModelConfigurationService.cs",
+            "docs/V0.14-SEARCH-DESKTOP.md"
+          )) {
+            if (-not (Test-Path $required)) { throw "Missing v0.14 UX source: $required" }
+          }
+
+          $mode = Get-Content "src/TuringDesk.Desktop/MainWindow.EnhancementMode.cs" -Raw
+          if ($mode -notmatch "DesktopSearchBarWindow") { throw "Enhancement mode is not wired to DesktopSearchBarWindow" }
+          if ($mode -match "AgentOrbWindow") { throw "Enhancement mode still references legacy AgentOrbWindow" }
+
+          $searchXaml = Get-Content "src/TuringDesk.Desktop/DesktopSearchBarWindow.xaml" -Raw
+          if ($searchXaml -match 'Topmost="True"') { throw "Desktop search must stay below normal application windows" }
+          $searchCode = Get-Content "src/TuringDesk.Desktop/DesktopSearchBarWindow.xaml.cs" -Raw
+          if ($searchCode -notmatch "DesktopWidgetZOrderService") { throw "Desktop search is not pinned to Explorer desktop Z order" }
+
+          $bridge = Get-Content "src/TuringDesk.Desktop/Services/HarnessModelBridgeService.cs" -Raw
+          if ($bridge -notmatch '\.credentials\.yaml') { throw "Harness API key is not synchronized through the official credential store" }
+          if ($bridge -match 'startInfo\.Environment\["DEEPSEEK_API_KEY"\]\s*=') { throw "Harness WebUI API key must not be injected through inherited environment" }
+
+          $firstRun = Get-Content "src/TuringDesk.Desktop/FirstRunSetupWindow.xaml.cs" -Raw
+          $modelDialog = Get-Content "src/TuringDesk.Desktop/ModelSettingsWindow.xaml.cs" -Raw
+          if ($firstRun -notmatch "UnifiedModelConfigurationService") { throw "First-run model setup bypasses the unified model pipeline" }
+          if ($modelDialog -notmatch "UnifiedModelConfigurationService") { throw "Model settings dialog bypasses the unified model pipeline" }
+
+          $app = Get-Content "src/TuringDesk.Desktop/App.xaml.cs" -Raw
+          $harnessIndex = $app.IndexOf("HarnessWebUiService.StartEarly()")
+          $mainIndex = $app.IndexOf("new MainWindow()")
+          if ($harnessIndex -lt 0 -or $mainIndex -lt 0 -or $harnessIndex -gt $mainIndex) {
+            throw "Harness must begin startup before MainWindow construction"
+          }
+
+      - name: Verify scene application and vivid built-in scenes
+        shell: pwsh
+        run: |
+          $catalog = Get-Content "src/TuringDesk.Desktop/Services/SceneEngine/SceneCatalogService.cs" -Raw
+          foreach ($id in @("builtin:aurora", "builtin:neon", "builtin:orbit")) {
+            if ($catalog -notmatch [regex]::Escape($id)) { throw "Missing built-in scene: $id" }
+          }
+
+          $library = Get-Content "src/TuringDesk.Desktop/DesktopLibraryWindow.xaml.cs" -Raw
+          $playlistIndex = $library.IndexOf("_playback.ActivePlaylistId = null")
+          $profileIndex = $library.IndexOf("_playback.ActiveProfileId = null")
+          $sceneSaveIndex = $library.IndexOf("_shellStore.Save(shell)")
+          if ($playlistIndex -lt 0 -or $profileIndex -lt 0 -or $sceneSaveIndex -lt 0) { throw "Scene apply pipeline is incomplete" }
+          if ($playlistIndex -gt $sceneSaveIndex -or $profileIndex -gt $sceneSaveIndex) { throw "Scene apply must clear playlist/profile before saving SceneId" }
+
+          $host = Get-Content "src/TuringDesk.Desktop/EnhancementWallpaperWindow.xaml.cs" -Raw
+          if ($host -notmatch "latestSettings = _settingsStore.Load\(\)") { throw "Wallpaper host does not poll persisted SceneId across processes" }
+          if ($host -notmatch "AppearanceRequiresReload") { throw "Wallpaper host does not force reload when SceneId changes" }
+
+          $renderer = Get-Content "src/TuringDesk.Desktop/SceneRendererControl.xaml.cs" -Raw
+          foreach ($marker in @("GlowC", "255, 54, 209", "255, 184, 72", "255, 92, 184")) {
+            if ($renderer -notmatch [regex]::Escape($marker)) { throw "Built-in vivid scene renderer marker missing: $marker" }
+          }
+
       - name: Build Desktop and ShellHost with embedded application icons
         shell: pwsh
         run: |
@@ -99,12 +169,12 @@ jobs:
 
       - name: Build and verify native ARM64 MSI
         shell: pwsh
-        run: ./scripts/package-installer.ps1 -Version "v0.14.2" -RuntimeIdentifier "win-arm64"
+        run: ./scripts/package-installer.ps1 -Version "v0.14.3" -RuntimeIdentifier "win-arm64"
 
       - name: Verify MSI artifact
         shell: pwsh
         run: |
-          $msi = Resolve-Path "artifacts/TuringDesk-v0.14.2-win-arm64.msi"
+          $msi = Resolve-Path "artifacts/TuringDesk-v0.14.3-win-arm64.msi"
           $size = (Get-Item $msi).Length
           Write-Host "MSI: $msi"
           Write-Host "Size: $size bytes"
@@ -113,9 +183,9 @@ jobs:
       - name: Upload native ARM64 Windows installer
         uses: actions/upload-artifact@v4
         with:
-          name: TuringDesk-v0.14.2-win-arm64-installer
+          name: TuringDesk-v0.14.3-win-arm64-installer
           path: |
-            artifacts/TuringDesk-v0.14.2-win-arm64.msi
-            artifacts/TuringDesk-v0.14.2-win-arm64/BUILD-INFO.txt
+            artifacts/TuringDesk-v0.14.3-win-arm64.msi
+            artifacts/TuringDesk-v0.14.3-win-arm64/BUILD-INFO.txt
           if-no-files-found: error
           retention-days: 30

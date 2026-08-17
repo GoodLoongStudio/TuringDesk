@@ -9,10 +9,20 @@ public partial class App : Application
     {
         base.OnStartup(e);
 
-        // Start Harness at the earliest safe application bootstrap point. It no
-        // longer waits for MainWindow construction, Loaded, or the WebView console.
-        // ModelSettingsWindow restarts it after a saved credential/config change.
-        _ = StartHarnessAsync();
+        // Harness is a core desktop service, not an advanced-console feature.
+        // Start its process before constructing MainWindow so the Agent kernel,
+        // Models page and Windows MCP boot in parallel with the visible desktop.
+        // StartEarly() reaches Process.Start synchronously and returns only the
+        // readiness task, so this does not make the Windows shell wait 20 seconds.
+        Task<Uri> harnessStartup;
+        try
+        {
+            harnessStartup = HarnessWebUiService.StartEarly();
+        }
+        catch (Exception error)
+        {
+            harnessStartup = Task.FromException<Uri>(error);
+        }
 
         var shellMode = e.Args.Any(arg => string.Equals(arg, "--shell", StringComparison.OrdinalIgnoreCase));
         var controlOnly = e.Args.Any(arg => string.Equals(arg, "--control-only", StringComparison.OrdinalIgnoreCase));
@@ -33,18 +43,19 @@ public partial class App : Application
         }
 
         window.Show();
+        _ = ObserveHarnessStartupAsync(harnessStartup);
     }
 
-    private static async Task StartHarnessAsync()
+    private static async Task ObserveHarnessStartupAsync(Task<Uri> startup)
     {
         try
         {
-            await HarnessWebUiService.EnsureRunningAsync();
+            _ = await startup;
         }
         catch (Exception error)
         {
-            // Do not prevent Windows/Explorer from starting or remaining usable
-            // if Harness has a transient startup/configuration problem.
+            // Never block Explorer/TuringDesk desktop availability on a transient
+            // Agent service failure, but surface the actual startup error.
             ShellNotificationService.Publish(
                 "DeepSeek Harness 启动失败",
                 error.Message,

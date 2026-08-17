@@ -12,6 +12,16 @@ public sealed class ShellAppearanceSettings
     public string WallpaperFit { get; set; } = "cover";
     public string AccentHex { get; set; } = "#8796FF";
     public double TaskbarOpacity { get; set; } = 0.96;
+
+    // Desktop Engine state. SceneId can reference a built-in scene or an imported
+    // scene package. Renderer type is resolved from the scene manifest.
+    public string SceneId { get; set; } = "builtin:aurora";
+    public bool SceneMotionEnabled { get; set; } = true;
+    public double SceneIntensity { get; set; } = 0.86;
+    public bool PauseSceneOnFullscreen { get; set; } = true;
+
+    // Lightweight Agent surfaces stay independent from the optional Harness WebUI.
+    public bool AgentOrbEnabled { get; set; } = true;
     public bool AgentCardsEnabled { get; set; } = true;
     public double AgentCardOpacity { get; set; } = 0.96;
     public int AgentCardAutoHideSeconds { get; set; } = 12;
@@ -50,7 +60,7 @@ public sealed class ShellSettingsStore
         }
         catch
         {
-            // A damaged preferences file should never prevent the shell from starting.
+            // A damaged preferences file should never prevent the desktop from starting.
         }
 
         return CreateDefaults();
@@ -68,7 +78,7 @@ public sealed class ShellSettingsStore
         }
         catch
         {
-            // Preferences are best-effort; shell usability must win over persistence.
+            // Preferences are best-effort; Windows desktop usability must win.
         }
     }
 
@@ -87,6 +97,8 @@ public sealed class ShellSettingsStore
         appearance.WallpaperFit = appearance.WallpaperFit is "cover" or "contain" or "stretch" ? appearance.WallpaperFit : "cover";
         appearance.AccentHex = NormalizeHex(appearance.AccentHex, "#8796FF");
         appearance.TaskbarOpacity = Math.Clamp(appearance.TaskbarOpacity, 0.60, 1.0);
+        appearance.SceneId = NormalizeSceneId(appearance.SceneId);
+        appearance.SceneIntensity = Math.Clamp(appearance.SceneIntensity, 0.20, 1.0);
         appearance.AgentCardOpacity = Math.Clamp(appearance.AgentCardOpacity, 0.70, 1.0);
         appearance.AgentCardAutoHideSeconds = Math.Clamp(appearance.AgentCardAutoHideSeconds, 0, 60);
         appearance.AgentCardSide = appearance.AgentCardSide is "left" or "right" ? appearance.AgentCardSide : "right";
@@ -99,6 +111,20 @@ public sealed class ShellSettingsStore
                 .Take(24)
                 .ToList(),
             Appearance = appearance
+        };
+    }
+
+    private static string NormalizeSceneId(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return "builtin:aurora";
+        var id = value.Trim();
+        // Migrate the three v0.13 preview ids without breaking existing settings.
+        return id.ToLowerInvariant() switch
+        {
+            "aurora" => "builtin:aurora",
+            "neon" => "builtin:neon",
+            "orbit" => "builtin:orbit",
+            _ => id
         };
     }
 

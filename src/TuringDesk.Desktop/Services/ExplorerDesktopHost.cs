@@ -3,9 +3,9 @@ using System.Runtime.InteropServices;
 namespace TuringDesk.Desktop.Services;
 
 /// <summary>
-/// Hosts a TuringDesk rendering window inside Explorer's desktop wallpaper layer.
-/// This keeps Explorer responsible for desktop icons, taskbar, tray, context menus
-/// and shell compatibility while TuringDesk owns only the visual scene behind them.
+/// Hosts TuringDesk render windows inside Explorer's wallpaper layer while
+/// Explorer keeps ownership of desktop icons, taskbar, tray and context menus.
+/// Multiple child windows can be attached at monitor-specific desktop rectangles.
 /// </summary>
 internal static class ExplorerDesktopHost
 {
@@ -24,12 +24,23 @@ internal static class ExplorerDesktopHost
     private const uint SwpFrameChanged = 0x0020;
     private const uint SwpShowWindow = 0x0040;
 
+    private const int SmXVirtualScreen = 76;
+    private const int SmYVirtualScreen = 77;
     private const int SmCxVirtualScreen = 78;
     private const int SmCyVirtualScreen = 79;
 
     private static readonly IntPtr HwndBottom = new(1);
 
     public static bool TryAttach(IntPtr windowHandle)
+    {
+        var left = GetSystemMetrics(SmXVirtualScreen);
+        var top = GetSystemMetrics(SmYVirtualScreen);
+        var width = Math.Max(1, GetSystemMetrics(SmCxVirtualScreen));
+        var height = Math.Max(1, GetSystemMetrics(SmCyVirtualScreen));
+        return TryAttach(windowHandle, left, top, width, height);
+    }
+
+    public static bool TryAttach(IntPtr windowHandle, int screenX, int screenY, int width, int height)
     {
         if (windowHandle == IntPtr.Zero || !IsWindow(windowHandle)) return false;
 
@@ -46,26 +57,11 @@ internal static class ExplorerDesktopHost
         exStyle &= ~WsExAppWindow;
         SetWindowStyle(windowHandle, GwlExStyle, exStyle);
 
-        // SetParent legitimately returns NULL when the previous parent was the
-        // desktop. Clear last-error first so a stale Win32 error cannot turn a
-        // successful reparent into a false failure.
         Marshal.SetLastPInvokeError(0);
         _ = SetParent(windowHandle, host);
-        if (Marshal.GetLastPInvokeError() != 0)
-        {
-            return false;
-        }
+        if (Marshal.GetLastPInvokeError() != 0) return false;
 
-        var width = Math.Max(1, GetSystemMetrics(SmCxVirtualScreen));
-        var height = Math.Max(1, GetSystemMetrics(SmCyVirtualScreen));
-        return SetWindowPos(
-            windowHandle,
-            HwndBottom,
-            0,
-            0,
-            width,
-            height,
-            SwpNoActivate | SwpFrameChanged | SwpShowWindow);
+        return PositionInHost(windowHandle, host, screenX, screenY, width, height, frameChanged: true);
     }
 
     public static bool IsAttached(IntPtr windowHandle)
@@ -77,10 +73,44 @@ internal static class ExplorerDesktopHost
 
     public static bool ResizeToVirtualDesktop(IntPtr windowHandle)
     {
-        if (!IsAttached(windowHandle)) return false;
+        var left = GetSystemMetrics(SmXVirtualScreen);
+        var top = GetSystemMetrics(SmYVirtualScreen);
         var width = Math.Max(1, GetSystemMetrics(SmCxVirtualScreen));
         var height = Math.Max(1, GetSystemMetrics(SmCyVirtualScreen));
-        return SetWindowPos(windowHandle, HwndBottom, 0, 0, width, height, SwpNoActivate | SwpShowWindow);
+        return ResizeToDesktopRect(windowHandle, left, top, width, height);
+    }
+
+    public static bool ResizeToDesktopRect(IntPtr windowHandle, int screenX, int screenY, int width, int height)
+    {
+        if (!IsAttached(windowHandle)) return false;
+        var host = GetParent(windowHandle);
+        return PositionInHost(windowHandle, host, screenX, screenY, width, height, frameChanged: false);
+    }
+
+    private static bool PositionInHost(IntPtr windowHandle, IntPtr host, int screenX, int screenY, int width, int height, bool frameChanged)
+    {
+        var hostLeft = 0;
+        var hostTop = 0;
+        if (GetWindowRect(host, out var hostRect))
+        {
+            hostLeft = hostRect.Left;
+            hostTop = hostRect.Top;
+        }
+        else
+        {
+            hostLeft = GetSystemMetrics(SmXVirtualScreen);
+            hostTop = GetSystemMetrics(SmYVirtualScreen);
+        }
+
+        var flags = SwpNoActivate | SwpShowWindow | (frameChanged ? SwpFrameChanged : 0);
+        return SetWindowPos(
+            windowHandle,
+            HwndBottom,
+            screenX - hostLeft,
+            screenY - hostTop,
+            Math.Max(1, width),
+            Math.Max(1, height),
+            flags);
     }
 
     private static IntPtr FindWallpaperHost()
@@ -88,9 +118,6 @@ internal static class ExplorerDesktopHost
         var progman = FindWindow("Progman", null);
         if (progman == IntPtr.Zero) return IntPtr.Zero;
 
-        // Ask Explorer to create the WorkerW wallpaper host when it has not
-        // already done so. Failure is harmless because Progman remains a valid
-        // fallback on Explorer layouts that host SHELLDLL_DefView directly.
         _ = SendMessageTimeout(
             progman,
             0x052C,
@@ -138,6 +165,15 @@ internal static class ExplorerDesktopHost
 
     private delegate bool EnumWindowsProc(IntPtr hwnd, IntPtr lParam);
 
+    [StructLayout(LayoutKind.Sequential)]
+    private struct Rect
+    {
+        public int Left;
+        public int Top;
+        public int Right;
+        public int Bottom;
+    }
+
     [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
     private static extern IntPtr FindWindow(string? className, string? windowName);
 
@@ -158,6 +194,10 @@ internal static class ExplorerDesktopHost
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool IsWindow(IntPtr hwnd);
 
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetWindowRect(IntPtr hwnd, out Rect rect);
+
     [DllImport("user32.dll", SetLastError = true)]
     private static extern int GetWindowLong(IntPtr hwnd, int index);
 
@@ -172,25 +212,11 @@ internal static class ExplorerDesktopHost
 
     [DllImport("user32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool SetWindowPos(
-        IntPtr hwnd,
-        IntPtr insertAfter,
-        int x,
-        int y,
-        int width,
-        int height,
-        uint flags);
+    private static extern bool SetWindowPos(IntPtr hwnd, IntPtr insertAfter, int x, int y, int width, int height, uint flags);
 
     [DllImport("user32.dll")]
     private static extern int GetSystemMetrics(int index);
 
     [DllImport("user32.dll", SetLastError = true)]
-    private static extern IntPtr SendMessageTimeout(
-        IntPtr hwnd,
-        uint message,
-        IntPtr wParam,
-        IntPtr lParam,
-        uint flags,
-        uint timeout,
-        out IntPtr result);
+    private static extern IntPtr SendMessageTimeout(IntPtr hwnd, uint message, IntPtr wParam, IntPtr lParam, uint flags, uint timeout, out IntPtr result);
 }
