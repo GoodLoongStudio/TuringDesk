@@ -95,6 +95,9 @@ jobs:
           foreach ($required in @(
             "src/TuringDesk.Desktop/DesktopSearchBarWindow.xaml",
             "src/TuringDesk.Desktop/DesktopSearchBarWindow.xaml.cs",
+            "src/TuringDesk.Desktop/MainWindow.AgentEntry.cs",
+            "src/TuringDesk.Desktop/Services/DesktopSearchIndexService.cs",
+            "src/TuringDesk.Desktop/Services/DesktopAiModelChoiceService.cs",
             "src/TuringDesk.Desktop/Services/DesktopSearchReservedArea.cs",
             "src/TuringDesk.Desktop/Services/DesktopWidgetZOrderService.cs",
             "src/TuringDesk.Desktop/Services/HarnessModelBridgeService.cs",
@@ -110,8 +113,29 @@ jobs:
 
           $searchXaml = Get-Content "src/TuringDesk.Desktop/DesktopSearchBarWindow.xaml" -Raw
           if ($searchXaml -match 'Topmost="True"') { throw "Desktop search must stay below normal application windows" }
+          if ($searchXaml -notmatch 'x:Name="ModelSelector"') { throw "Desktop search is missing the visible AI model selector" }
+          if ($searchXaml -notmatch 'x:Name="SearchResultsList"') { throw "Desktop search is missing local application/file results" }
+
           $searchCode = Get-Content "src/TuringDesk.Desktop/DesktopSearchBarWindow.xaml.cs" -Raw
           if ($searchCode -notmatch "DesktopWidgetZOrderService") { throw "Desktop search is not pinned to Explorer desktop Z order" }
+          if ($searchCode -notmatch "DesktopSearchIndexService") { throw "Desktop search is not connected to the local index" }
+          if ($searchCode -notmatch "SubmitSearchCommandWithModelAsync") { throw "Desktop search bypasses its visible AI model selection" }
+
+          $agentEntry = Get-Content "src/TuringDesk.Desktop/MainWindow.AgentEntry.cs" -Raw
+          $modelSwitchIndex = $agentEntry.IndexOf("_runtime.ConfigureModelAsync(choice.Settings, choice.Credential)")
+          $chatAfterSwitch = if ($modelSwitchIndex -ge 0) { $agentEntry.IndexOf("return await SubmitSearchCommandAsync(text, cancellationToken)", $modelSwitchIndex) } else { -1 }
+          if ($modelSwitchIndex -lt 0 -or $chatAfterSwitch -lt 0 -or $modelSwitchIndex -gt $chatAfterSwitch) {
+            throw "Desktop model picker does not configure Runtime before sending the AI request"
+          }
+
+          $modelChoices = Get-Content "src/TuringDesk.Desktop/Services/DesktopAiModelChoiceService.cs" -Raw
+          if ($modelChoices -notmatch "deepseek-fallback") { throw "Desktop model picker has no DeepSeek fallback" }
+          if ($modelChoices -notmatch "FirstOrDefault\(choice => choice\.IsAvailable\)") { throw "Desktop model picker does not prefer the first available configured model" }
+          if ($modelChoices -notmatch "未配置 AI") { throw "Desktop model picker has no explicit no-model state" }
+
+          $localIndex = Get-Content "src/TuringDesk.Desktop/Services/DesktopSearchIndexService.cs" -Raw
+          if ($localIndex -notmatch "ShellSurfaceCatalog.LoadStartApps") { throw "Desktop search does not index installed Start Menu applications" }
+          if ($localIndex -notmatch "FileSystemWatcher") { throw "Desktop text-file index is not incrementally refreshed" }
 
           $bridge = Get-Content "src/TuringDesk.Desktop/Services/HarnessModelBridgeService.cs" -Raw
           if ($bridge -notmatch '\.credentials\.yaml') { throw "Harness API key is not synchronized through the official credential store" }
@@ -148,6 +172,12 @@ jobs:
           if ($wallpaperHost -notmatch "latestSettings = _settingsStore.Load\(\)") { throw "Wallpaper host does not poll persisted SceneId across processes" }
           if ($wallpaperHost -notmatch "AppearanceRequiresReload") { throw "Wallpaper host does not force reload when SceneId changes" }
 
+          $desktopHost = Get-Content "src/TuringDesk.Desktop/Services/ExplorerDesktopHost.cs" -Raw
+          foreach ($marker in @("workerw/progman-child", "workerw/classic-sibling", "BringWindowToTop", "VerifyAttachment", "HwndTop")) {
+            if ($desktopHost -notmatch [regex]::Escape($marker)) { throw "Explorer scene host visibility contract missing: $marker" }
+          }
+          if ($desktopHost -match "HwndBottom") { throw "Scene HWND must not be pushed under Explorer's wallpaper child with HWND_BOTTOM" }
+
           $renderer = Get-Content "src/TuringDesk.Desktop/SceneRendererControl.xaml.cs" -Raw
           foreach ($marker in @("GlowC", "255, 54, 209", "255, 184, 72", "255, 92, 184")) {
             if ($renderer -notmatch [regex]::Escape($marker)) { throw "Built-in vivid scene renderer marker missing: $marker" }
@@ -169,12 +199,12 @@ jobs:
 
       - name: Build and verify native ARM64 MSI
         shell: pwsh
-        run: ./scripts/package-installer.ps1 -Version "v0.14.3" -RuntimeIdentifier "win-arm64"
+        run: ./scripts/package-installer.ps1 -Version "v0.14.4" -RuntimeIdentifier "win-arm64"
 
       - name: Verify MSI artifact
         shell: pwsh
         run: |
-          $msi = Resolve-Path "artifacts/TuringDesk-v0.14.3-win-arm64.msi"
+          $msi = Resolve-Path "artifacts/TuringDesk-v0.14.4-win-arm64.msi"
           $size = (Get-Item $msi).Length
           Write-Host "MSI: $msi"
           Write-Host "Size: $size bytes"
@@ -183,9 +213,9 @@ jobs:
       - name: Upload native ARM64 Windows installer
         uses: actions/upload-artifact@v4
         with:
-          name: TuringDesk-v0.14.3-win-arm64-installer
+          name: TuringDesk-v0.14.4-win-arm64-installer
           path: |
-            artifacts/TuringDesk-v0.14.3-win-arm64.msi
-            artifacts/TuringDesk-v0.14.3-win-arm64/BUILD-INFO.txt
+            artifacts/TuringDesk-v0.14.4-win-arm64.msi
+            artifacts/TuringDesk-v0.14.4-win-arm64/BUILD-INFO.txt
           if-no-files-found: error
           retention-days: 30
