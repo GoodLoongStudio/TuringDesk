@@ -169,12 +169,11 @@ public partial class HarnessConsoleWindow : Window
     private void TitleBar_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
         if (e.ChangedButton != MouseButton.Left) return;
-        if (e.ClickCount == 2)
-        {
-            WindowState = WindowState == WindowState.Maximized ? WindowState.Normal : WindowState.Maximized;
-            return;
-        }
 
+        // Harness is an advanced utility surface, not a primary app window.
+        // Keep double-click from turning this borderless window into a giant
+        // full-screen-like surface that can visually collide with the taskbar.
+        if (e.ClickCount > 1) return;
         try { DragMove(); } catch { }
     }
 }
