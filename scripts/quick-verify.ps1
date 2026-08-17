@@ -88,7 +88,7 @@ function Install-LocalNode([string]$Architecture) {
     Write-Host "Node.js $NodeVersion was not found. Bootstrapping local Node.js $Architecture..." -ForegroundColor Yellow
     Write-Host "  $download" -ForegroundColor DarkGray
     if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
-    Invoke-WebRequest $download -OutFile $zipPath -UseBasicParsing
+    Invoke-WebRequest $download -OutFile $zipPath -UseBasicParsing | Out-Null
 
     if (Test-Path $nodeRoot) { Remove-Item $nodeRoot -Recurse -Force }
     Expand-Archive $zipPath -DestinationPath $ToolsRoot -Force
@@ -139,7 +139,7 @@ function Install-LocalPnpm([string]$NpmPath) {
     Write-Host "pnpm $PnpmVersion was not found. Bootstrapping local pnpm..." -ForegroundColor Yellow
     if (Test-Path $pnpmRoot) { Remove-Item $pnpmRoot -Recurse -Force }
     New-Item -ItemType Directory -Force -Path $pnpmRoot | Out-Null
-    & $NpmPath install --global --prefix $pnpmRoot "pnpm@$PnpmVersion" --no-audit --no-fund
+    & $NpmPath install --global --prefix $pnpmRoot "pnpm@$PnpmVersion" --no-audit --no-fund | Out-Host
     if ($LASTEXITCODE -ne 0) { throw "pnpm bootstrap failed with exit code $LASTEXITCODE" }
     if (-not (Test-Path $pnpmCmd)) { throw "pnpm bootstrap did not produce $pnpmCmd" }
     return $pnpmCmd
@@ -166,11 +166,11 @@ function Install-LocalDotnet8([string]$Architecture) {
     New-Item -ItemType Directory -Force -Path $ToolsRoot | Out-Null
     $installer = Join-Path $ToolsRoot "dotnet-install.ps1"
     Write-Host ".NET 8 SDK was not found. Bootstrapping a local SDK ($Architecture)..." -ForegroundColor Yellow
-    Invoke-WebRequest "https://dot.net/v1/dotnet-install.ps1" -OutFile $installer -UseBasicParsing
+    Invoke-WebRequest "https://dot.net/v1/dotnet-install.ps1" -OutFile $installer -UseBasicParsing | Out-Null
 
     if (Test-Path $dotnetRoot) { Remove-Item $dotnetRoot -Recurse -Force }
     $powershell = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
-    & $powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File $installer -Channel 8.0 -Architecture $Architecture -InstallDir $dotnetRoot -NoPath
+    & $powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File $installer -Channel 8.0 -Architecture $Architecture -InstallDir $dotnetRoot -NoPath | Out-Host
     if ($LASTEXITCODE -ne 0) { throw ".NET 8 SDK bootstrap failed with exit code $LASTEXITCODE" }
     if (-not (Test-Dotnet8Sdk $dotnetExe)) { throw "Local .NET bootstrap did not produce a usable .NET 8 SDK." }
     return $dotnetExe
