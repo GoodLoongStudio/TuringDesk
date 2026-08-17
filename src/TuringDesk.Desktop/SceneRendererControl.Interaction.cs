@@ -68,17 +68,18 @@ public partial class SceneRendererControl
         var ny = input.NormalizedY.ToString("0.######", CultureInfo.InvariantCulture);
         var down = input.LeftDown ? "true" : "false";
         var change = buttonChanged ? "true" : "false";
-        var script = $"""
-            (() => {{
-              const nx = {nx}, ny = {ny}, down = {down}, changed = {change};
-              const x = Math.max(0, Math.min(window.innerWidth - 1, nx * window.innerWidth));
-              const y = Math.max(0, Math.min(window.innerHeight - 1, ny * window.innerHeight));
-              const target = document.elementFromPoint(x, y) || document.body || document.documentElement;
-              target.dispatchEvent(new MouseEvent('mousemove', {{clientX:x, clientY:y, bubbles:true, cancelable:true, view:window}}));
-              if (changed) target.dispatchEvent(new MouseEvent(down ? 'mousedown' : 'mouseup', {{clientX:x, clientY:y, button:0, buttons:down ? 1 : 0, bubbles:true, cancelable:true, view:window}}));
-              window.dispatchEvent(new CustomEvent('turingdesk-input', {{detail: {{x, y, normalizedX:nx, normalizedY:ny, leftDown:down}}}}));
-            }})();
-            """;
+
+        var script =
+            "(() => {" +
+            "const nx=" + nx + ",ny=" + ny + ",down=" + down + ",changed=" + change + ";" +
+            "const x=Math.max(0,Math.min(window.innerWidth-1,nx*window.innerWidth));" +
+            "const y=Math.max(0,Math.min(window.innerHeight-1,ny*window.innerHeight));" +
+            "const target=document.elementFromPoint(x,y)||document.body||document.documentElement;" +
+            "target.dispatchEvent(new MouseEvent('mousemove',{clientX:x,clientY:y,bubbles:true,cancelable:true,view:window}));" +
+            "if(changed)target.dispatchEvent(new MouseEvent(down?'mousedown':'mouseup',{clientX:x,clientY:y,button:0,buttons:down?1:0,bubbles:true,cancelable:true,view:window}));" +
+            "window.dispatchEvent(new CustomEvent('turingdesk-input',{detail:{x:x,y:y,normalizedX:nx,normalizedY:ny,leftDown:down}}));" +
+            "})();";
+
         try { await WebPlayer.CoreWebView2.ExecuteScriptAsync(script); } catch { }
     }
 }
