@@ -19,7 +19,7 @@ public partial class DesktopLibraryWindow
 
     private void SceneList_MouseDoubleClick(object sender, MouseButtonEventArgs e)
     {
-        if (SceneList.SelectedItem is SceneManifest scene) OpenSceneEditor(scene);
+        if (SceneList.SelectedItem is SceneManifest scene) OpenSceneProperties(scene);
     }
 
     private void SceneList_ContextMenuOpening(object sender, ContextMenuEventArgs e)
@@ -35,6 +35,10 @@ public partial class DesktopLibraryWindow
         apply.Click += (_, _) => ApplySelectedScene(scene);
         menu.Items.Add(apply);
 
+        var properties = new MenuItem { Header = "桌面属性" };
+        properties.Click += (_, _) => OpenSceneProperties(scene);
+        menu.Items.Add(properties);
+
         var edit = new MenuItem { Header = scene.IsBuiltIn ? "复制并在 Scene Editor 中编辑" : "在 Scene Editor 中编辑" };
         edit.Click += (_, _) => OpenSceneEditor(scene);
         menu.Items.Add(edit);
@@ -47,6 +51,12 @@ public partial class DesktopLibraryWindow
         }
 
         SceneList.ContextMenu = menu;
+    }
+
+    private void OpenSceneProperties(SceneManifest scene)
+    {
+        var dialog = new ScenePropertiesWindow(scene) { Owner = this };
+        dialog.ShowDialog();
     }
 
     private void OpenSceneEditor(SceneManifest scene)
