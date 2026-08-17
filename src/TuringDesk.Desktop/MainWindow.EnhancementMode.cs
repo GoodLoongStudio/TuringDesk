@@ -7,13 +7,15 @@ namespace TuringDesk.Desktop;
 
 public partial class MainWindow
 {
-    private EnhancementWallpaperWindow? _enhancementWallpaper;
+    private readonly List<EnhancementWallpaperWindow> _enhancementWallpapers = [];
     private AgentOrbWindow? _agentOrb;
+    private DispatcherTimer? _enhancementDisplayTimer;
+    private string _enhancementDisplaySignature = string.Empty;
 
     /// <summary>
-    /// Default TuringDesk mode: keep Explorer as the Windows shell and attach
-    /// the desktop engine behind Explorer icons. The control center is secondary;
-    /// normal users enter through the Orb, Alt+Space or voice.
+    /// Default TuringDesk mode: Explorer stays the Windows shell. Each physical
+    /// monitor gets its own wallpaper-engine child window so profiles can assign
+    /// independent scenes/playlists without replacing Explorer.
     /// </summary>
     internal void EnableEnhancementMode()
     {
@@ -29,25 +31,29 @@ public partial class MainWindow
 
     private void EnhancementMode_Loaded(object sender, RoutedEventArgs e)
     {
-        if (!ShellSession.IsEnhancementMode || _enhancementWallpaper is not null) return;
+        if (!ShellSession.IsEnhancementMode || _enhancementWallpapers.Count > 0) return;
 
         Dispatcher.BeginInvoke(new Action(() =>
         {
-            if (!ShellSession.IsEnhancementMode || _enhancementWallpaper is not null) return;
+            if (!ShellSession.IsEnhancementMode || _enhancementWallpapers.Count > 0) return;
 
-            var wallpaper = new EnhancementWallpaperWindow();
-            _enhancementWallpaper = wallpaper;
-            wallpaper.Show();
+            RebuildEnhancementMonitors(force: true);
+            _enhancementDisplayTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(3) };
+            _enhancementDisplayTimer.Tick += (_, _) => RebuildEnhancementMonitors(force: false);
+            _enhancementDisplayTimer.Start();
 
             _agentOrb = new AgentOrbWindow(this);
             _agentOrb.Show();
 
-            if (wallpaper.IsAttached)
+            var attached = _enhancementWallpapers.Count(window => window.IsAttached);
+            if (attached > 0)
             {
-                AddActivity("desktop", "Desktop Engine attached behind Explorer icons; Explorer remains the Windows shell.");
+                AddActivity("desktop", $"Desktop Engine attached on {attached}/{_enhancementWallpapers.Count} monitor(s); Explorer remains the Windows shell.");
                 ShellNotificationService.Publish(
                     "TuringDesk AI Desktop 已就绪",
-                    "按 Alt+Space、点击右下角 Orb 或直接说“图灵桌面”。",
+                    _enhancementWallpapers.Count > 1
+                        ? $"{_enhancementWallpapers.Count} 块显示器已启用独立桌面引擎。按 Alt+Space 直接使用 AI。"
+                        : "按 Alt+Space、点击右下角 Orb 或直接说“图灵桌面”。",
                     "shell");
             }
             else
@@ -66,16 +72,33 @@ public partial class MainWindow
                 setup.ShowDialog();
             }
 
-            // Product default: do not greet users with an engineering console.
             Hide();
         }), DispatcherPriority.ApplicationIdle);
+    }
+
+    private void RebuildEnhancementMonitors(bool force)
+    {
+        var signature = DisplayManager.GetSignature();
+        if (!force && signature == _enhancementDisplaySignature && _enhancementWallpapers.Count > 0) return;
+        _enhancementDisplaySignature = signature;
+
+        foreach (var wallpaper in _enhancementWallpapers.ToArray())
+        {
+            try { wallpaper.Close(); } catch { }
+        }
+        _enhancementWallpapers.Clear();
+
+        foreach (var monitor in DisplayManager.GetMonitors())
+        {
+            var wallpaper = new EnhancementWallpaperWindow(monitor);
+            _enhancementWallpapers.Add(wallpaper);
+            wallpaper.Show();
+        }
     }
 
     private void EnhancementMode_Closing(object? sender, CancelEventArgs e)
     {
         if (!ShellSession.IsEnhancementMode || ShellSession.ExitRequested) return;
-
-        // Closing the control center should not kill the desktop engine.
         e.Cancel = true;
         Hide();
     }
@@ -83,6 +106,8 @@ public partial class MainWindow
     private void EnhancementMode_Closed(object? sender, EventArgs e)
     {
         ShellSession.IsEnhancementMode = false;
+        _enhancementDisplayTimer?.Stop();
+        _enhancementDisplayTimer = null;
 
         if (_agentOrb is not null)
         {
@@ -90,10 +115,10 @@ public partial class MainWindow
             _agentOrb = null;
         }
 
-        if (_enhancementWallpaper is not null)
+        foreach (var wallpaper in _enhancementWallpapers.ToArray())
         {
-            try { _enhancementWallpaper.Close(); } catch { }
-            _enhancementWallpaper = null;
+            try { wallpaper.Close(); } catch { }
         }
+        _enhancementWallpapers.Clear();
     }
 }
