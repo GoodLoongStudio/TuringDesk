@@ -144,9 +144,9 @@ jobs:
           if ($playlistIndex -lt 0 -or $profileIndex -lt 0 -or $sceneSaveIndex -lt 0) { throw "Scene apply pipeline is incomplete" }
           if ($playlistIndex -gt $sceneSaveIndex -or $profileIndex -gt $sceneSaveIndex) { throw "Scene apply must clear playlist/profile before saving SceneId" }
 
-          $host = Get-Content "src/TuringDesk.Desktop/EnhancementWallpaperWindow.xaml.cs" -Raw
-          if ($host -notmatch "latestSettings = _settingsStore.Load\(\)") { throw "Wallpaper host does not poll persisted SceneId across processes" }
-          if ($host -notmatch "AppearanceRequiresReload") { throw "Wallpaper host does not force reload when SceneId changes" }
+          $wallpaperHost = Get-Content "src/TuringDesk.Desktop/EnhancementWallpaperWindow.xaml.cs" -Raw
+          if ($wallpaperHost -notmatch "latestSettings = _settingsStore.Load\(\)") { throw "Wallpaper host does not poll persisted SceneId across processes" }
+          if ($wallpaperHost -notmatch "AppearanceRequiresReload") { throw "Wallpaper host does not force reload when SceneId changes" }
 
           $renderer = Get-Content "src/TuringDesk.Desktop/SceneRendererControl.xaml.cs" -Raw
           foreach ($marker in @("GlowC", "255, 54, 209", "255, 184, 72", "255, 92, 184")) {
