@@ -52,8 +52,6 @@ public partial class SceneRendererControl : UserControl
                 break;
         }
 
-        // Scene-specific FPS/volume/mute/user properties are independent from
-        // the global desktop profile and survive scene switching/import/export.
         await ApplyUserPropertiesAsync();
     }
 
@@ -152,8 +150,6 @@ public partial class SceneRendererControl : UserControl
         VideoPlayer.Visibility = Visibility.Collapsed;
         WebPlayer.Visibility = Visibility.Collapsed;
 
-        // Editable projects take the real scene-graph runtime path. Built-ins and
-        // old single-image imports retain the lightweight compatibility renderer.
         if (LoadSceneGraph(scene))
         {
             BuiltInScene.Visibility = Visibility.Collapsed;
@@ -283,16 +279,7 @@ public partial class SceneRendererControl : UserControl
         if (!e.IsSuccess || WebPlayer.CoreWebView2 is null) return;
         try
         {
-            await WebPlayer.CoreWebView2.ExecuteScriptAsync("""
-                (() => {
-                  window.turingDesk = window.turingDesk || {};
-                  window.turingDesk.version = 1;
-                  window.dispatchEvent(new CustomEvent('turingdesk-ready'));
-                  if (window.wallpaperPropertyListener && typeof window.wallpaperPropertyListener.applyUserProperties === 'function') {
-                    window.wallpaperPropertyListener.applyUserProperties({});
-                  }
-                })();
-                """);
+            await WebPlayer.CoreWebView2.ExecuteScriptAsync("window.turingDesk=window.turingDesk||{};window.turingDesk.version=1;window.dispatchEvent(new CustomEvent('turingdesk-ready'));" );
         }
         catch { }
     }
@@ -395,7 +382,9 @@ public partial class SceneRendererControl : UserControl
         if (WebPlayer.CoreWebView2 is null) return;
         try
         {
-            await WebPlayer.CoreWebView2.ExecuteScriptAsync($"window.dispatchEvent(new CustomEvent('turingdesk-playback', {{detail: {{paused: {paused.ToString().ToLowerInvariant()}}}}}}));");
+            var pausedText = paused ? "true" : "false";
+            var script = "window.dispatchEvent(new CustomEvent('turingdesk-playback',{detail:{paused:" + pausedText + "}}));";
+            await WebPlayer.CoreWebView2.ExecuteScriptAsync(script);
         }
         catch { }
     }
@@ -406,7 +395,7 @@ public partial class SceneRendererControl : UserControl
         try
         {
             var jsVolume = volume.ToString(System.Globalization.CultureInfo.InvariantCulture);
-            await WebPlayer.CoreWebView2.ExecuteScriptAsync($"document.querySelectorAll('audio,video').forEach(x => x.volume = {jsVolume});");
+            await WebPlayer.CoreWebView2.ExecuteScriptAsync("document.querySelectorAll('audio,video').forEach(x=>x.volume=" + jsVolume + ");");
         }
         catch { }
     }
