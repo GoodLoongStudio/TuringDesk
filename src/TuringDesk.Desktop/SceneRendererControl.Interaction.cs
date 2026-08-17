@@ -26,6 +26,7 @@ public partial class SceneRendererControl
     private void Renderer_Unloaded(object sender, RoutedEventArgs e)
     {
         _desktopInputTimer.Stop();
+        ShutdownAudioBridge();
         ShutdownPropertyBridge();
     }
 
