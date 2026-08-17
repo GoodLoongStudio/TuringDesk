@@ -39,9 +39,6 @@
                         <ColumnDefinition Width="72"/>
                     </Grid.ColumnDefinitions>
 
-                    <!-- Keep the model control self-explanatory even when the selected
-                         provider/model name is long. The blue AI badge communicates the
-                         function; the native light ComboBox remains familiar to Windows users. -->
                     <Border Grid.Column="0"
                             Height="38"
                             Margin="0,4,8,4"
@@ -68,29 +65,25 @@
                                            HorizontalAlignment="Center"
                                            VerticalAlignment="Center"/>
                             </Border>
-                            <Grid Grid.Column="1" Margin="0,1,5,1">
+                            <StackPanel Grid.Column="1" Margin="3,3,6,2">
                                 <TextBlock Text="AI 模型"
-                                           Margin="5,-13,0,0"
                                            Foreground="#64748B"
                                            FontSize="9.5"
-                                           VerticalAlignment="Center"
-                                           IsHitTestVisible="False"
-                                           Panel.ZIndex="2"/>
+                                           LineHeight="11"/>
                                 <ComboBox x:Name="ModelSelector"
-                                          Height="34"
-                                          Margin="0,0,0,0"
-                                          Padding="5,8,4,0"
+                                          Height="21"
+                                          Padding="3,0"
                                           VerticalContentAlignment="Center"
                                           Foreground="#111827"
                                           Background="White"
-                                          BorderBrush="Transparent"
-                                          BorderThickness="0"
+                                          BorderBrush="#D5DEEC"
+                                          BorderThickness="1"
                                           FontSize="11.5"
                                           FontWeight="SemiBold"
                                           DisplayMemberPath="DisplayName"
                                           ToolTip="选择顶部 AI 搜索使用的模型"
                                           SelectionChanged="ModelSelector_SelectionChanged"/>
-                            </Grid>
+                            </StackPanel>
                         </Grid>
                     </Border>
 
