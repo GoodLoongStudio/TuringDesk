@@ -62,11 +62,6 @@ public sealed class SceneCatalogService
     public SceneManifest? Find(string? id) =>
         LoadAll().FirstOrDefault(scene => string.Equals(scene.Id, id, StringComparison.OrdinalIgnoreCase));
 
-    /// <summary>
-    /// Beginner import path: users can select an image, video, HTML entry point,
-    /// a .tdscene package, or an advanced project directory. TuringDesk creates
-    /// the scene manifest for simple files automatically.
-    /// </summary>
     public SceneManifest Import(string sourcePath)
     {
         if (string.IsNullOrWhiteSpace(sourcePath)) throw new ArgumentException("Scene source path is required.", nameof(sourcePath));
@@ -132,6 +127,58 @@ public sealed class SceneCatalogService
         return destinationFile;
     }
 
+    public void Save(SceneManifest manifest)
+    {
+        if (manifest.IsBuiltIn) throw new InvalidOperationException("Built-in scenes cannot be overwritten. Duplicate the scene before editing it.");
+        if (string.IsNullOrWhiteSpace(manifest.PackageRoot))
+        {
+            manifest.PackageRoot = Path.Combine(_sceneRoot, SafeId(manifest.Id));
+        }
+        Normalize(manifest);
+        Directory.CreateDirectory(manifest.PackageRoot);
+        Validate(manifest, manifest.PackageRoot);
+        WriteManifest(manifest.PackageRoot, manifest);
+    }
+
+    public SceneManifest CreateProject(string title)
+    {
+        var id = "user:" + Guid.NewGuid().ToString("N");
+        var root = Path.Combine(_sceneRoot, SafeId(id));
+        Directory.CreateDirectory(root);
+        var manifest = new SceneManifest
+        {
+            Id = id,
+            Title = string.IsNullOrWhiteSpace(title) ? "新场景" : title.Trim(),
+            Description = "TuringDesk Scene Editor project",
+            Author = Environment.UserName,
+            Kind = SceneKind.Scene,
+            PreferredFps = 60,
+            Interactive = true,
+            PackageRoot = root,
+            IsBuiltIn = false
+        };
+        WriteManifest(root, manifest);
+        return manifest;
+    }
+
+    public SceneManifest DuplicateForEditing(SceneManifest source)
+    {
+        var id = "user:" + Guid.NewGuid().ToString("N");
+        var destination = Path.Combine(_sceneRoot, SafeId(id));
+        Directory.CreateDirectory(destination);
+        if (!source.IsBuiltIn && Directory.Exists(source.PackageRoot)) CopyDirectory(source.PackageRoot, destination);
+
+        var json = JsonSerializer.Serialize(source, JsonOptions);
+        var copy = JsonSerializer.Deserialize<SceneManifest>(json, JsonOptions) ?? new SceneManifest();
+        copy.Id = id;
+        copy.Title = source.Title + " · 副本";
+        copy.Author = Environment.UserName;
+        copy.PackageRoot = destination;
+        copy.IsBuiltIn = false;
+        WriteManifest(destination, copy);
+        return copy;
+    }
+
     private SceneManifest ImportSimpleFile(string sourcePath, SceneKind kind)
     {
         var id = "user:" + Guid.NewGuid().ToString("N");
@@ -152,7 +199,10 @@ public sealed class SceneCatalogService
             Muted = true,
             Fit = SceneFit.Cover,
             Tags = kind == SceneKind.Video ? ["video", "imported"] : ["scene", "image", "imported"],
-            PackageRoot = package
+            PackageRoot = package,
+            Layers = kind == SceneKind.Scene
+                ? [new SceneLayerDefinition { Name = "背景", Kind = SceneLayerKind.Image, Source = assetName, Width = 1, Height = 1 }]
+                : []
         };
         WriteManifest(package, manifest);
         return manifest;
@@ -201,27 +251,10 @@ public sealed class SceneCatalogService
     private static void WriteManifest(string root, SceneManifest manifest)
     {
         Directory.CreateDirectory(root);
-        var copy = new SceneManifest
-        {
-            SchemaVersion = manifest.SchemaVersion,
-            Id = manifest.Id,
-            Title = manifest.Title,
-            Description = manifest.Description,
-            Author = manifest.Author,
-            Kind = manifest.Kind,
-            Entry = manifest.Entry,
-            Preview = manifest.Preview,
-            Fit = manifest.Fit,
-            PreferredFps = manifest.PreferredFps,
-            Interactive = manifest.Interactive,
-            AudioReactive = manifest.AudioReactive,
-            MediaIntegration = manifest.MediaIntegration,
-            Muted = manifest.Muted,
-            Tags = manifest.Tags,
-            Properties = manifest.Properties,
-            Defaults = manifest.Defaults
-        };
-        File.WriteAllText(Path.Combine(root, ManifestFileName), JsonSerializer.Serialize(copy, JsonOptions));
+        // PackageRoot and IsBuiltIn are [JsonIgnore], so serializing the manifest
+        // directly is both safe and future-proof: layer/effect/particle/timeline/
+        // script fields cannot silently disappear when the schema grows.
+        File.WriteAllText(Path.Combine(root, ManifestFileName), JsonSerializer.Serialize(manifest, JsonOptions));
     }
 
     private static void Validate(SceneManifest manifest, string root)
@@ -232,14 +265,26 @@ public sealed class SceneCatalogService
 
         if (!string.IsNullOrWhiteSpace(manifest.Entry))
         {
-            var entry = Path.GetFullPath(Path.Combine(root, manifest.Entry));
-            if (!entry.StartsWith(Path.GetFullPath(root), StringComparison.OrdinalIgnoreCase) || !File.Exists(entry))
-                throw new InvalidDataException("Scene entry file is missing or outside the package directory.");
+            ValidateAssetPath(root, manifest.Entry, "Scene entry");
         }
         else if (manifest.Kind is SceneKind.Video or SceneKind.Web)
         {
             throw new InvalidDataException($"{manifest.Kind} scenes require an entry file.");
         }
+
+        foreach (var layer in manifest.Layers.Where(layer => !string.IsNullOrWhiteSpace(layer.Source)))
+        {
+            ValidateAssetPath(root, layer.Source!, $"Layer '{layer.Name}' source");
+        }
+        if (!string.IsNullOrWhiteSpace(manifest.Script)) ValidateAssetPath(root, manifest.Script!, "Scene script");
+    }
+
+    private static void ValidateAssetPath(string root, string relativePath, string label)
+    {
+        var fullRoot = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        var full = Path.GetFullPath(Path.Combine(root, relativePath));
+        if (!full.StartsWith(fullRoot, StringComparison.OrdinalIgnoreCase) || !File.Exists(full))
+            throw new InvalidDataException($"{label} is missing or outside the package directory: {relativePath}");
     }
 
     private static void ValidateWebProjectSize(string root)
@@ -265,11 +310,21 @@ public sealed class SceneCatalogService
         manifest.Tags ??= [];
         manifest.Properties ??= [];
         manifest.Defaults ??= new(StringComparer.OrdinalIgnoreCase);
+        manifest.Layers ??= [];
+        manifest.Timeline ??= [];
         foreach (var property in manifest.Properties)
         {
             property.Key = property.Key?.Trim() ?? string.Empty;
             property.Label = string.IsNullOrWhiteSpace(property.Label) ? property.Key : property.Label.Trim();
             property.Options ??= [];
+        }
+        foreach (var layer in manifest.Layers)
+        {
+            if (string.IsNullOrWhiteSpace(layer.Id)) layer.Id = Guid.NewGuid().ToString("N");
+            layer.Name = string.IsNullOrWhiteSpace(layer.Name) ? layer.Kind.ToString() : layer.Name.Trim();
+            layer.Opacity = Math.Clamp(layer.Opacity, 0, 1);
+            layer.Scale = Math.Clamp(layer.Scale, 0.01, 100);
+            layer.Effects ??= [];
         }
     }
 
