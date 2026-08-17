@@ -8,56 +8,196 @@
         ShowActivated="False"
         Focusable="False"
         AllowsTransparency="False"
-        Background="#0B0D12">
-    <Grid x:Name="SceneRoot"
-          IsHitTestVisible="False"
-          ClipToBounds="True">
-        <Border x:Name="WallpaperLayer"
-                Background="#0B0D12" />
+        Background="#070A10">
+    <Window.Resources>
+        <!-- v0.13 visible-product pass. These Storyboards are the first renderer.
+             The scene contract is intentionally renderer-agnostic so Direct3D /
+             DirectComposition can replace the visual implementation later. -->
+        <Storyboard x:Key="AuroraMotion" RepeatBehavior="Forever" AutoReverse="True">
+            <DoubleAnimation Storyboard.TargetName="AuroraGlowOneTransform" Storyboard.TargetProperty="X" From="-80" To="160" Duration="0:0:12"/>
+            <DoubleAnimation Storyboard.TargetName="AuroraGlowOneTransform" Storyboard.TargetProperty="Y" From="40" To="-100" Duration="0:0:15"/>
+            <DoubleAnimation Storyboard.TargetName="AuroraGlowTwoTransform" Storyboard.TargetProperty="X" From="100" To="-180" Duration="0:0:17"/>
+            <DoubleAnimation Storyboard.TargetName="AuroraGlowTwoTransform" Storyboard.TargetProperty="Y" From="-40" To="120" Duration="0:0:14"/>
+            <DoubleAnimation Storyboard.TargetName="AuroraVeil" Storyboard.TargetProperty="Opacity" From="0.22" To="0.52" Duration="0:0:8"/>
+        </Storyboard>
 
-        <!--
-          v0.12 starts with a deliberately light-weight ambient scene layer.
-          The host boundary is renderer-agnostic so a Direct3D/DirectComposition,
-          video, or WebView renderer can replace this WPF scene later without
-          changing how TuringDesk integrates with Explorer.
-        -->
-        <Grid x:Name="AmbientSceneLayer">
-            <Grid Opacity="0.62">
-                <Grid.Background>
-                    <RadialGradientBrush Center="0.82,0.15"
-                                         GradientOrigin="0.82,0.15"
-                                         RadiusX="0.72"
-                                         RadiusY="0.72">
-                        <GradientStop Color="#553F62FF" Offset="0" />
-                        <GradientStop Color="#182A3C72" Offset="0.46" />
-                        <GradientStop Color="#00000000" Offset="1" />
-                    </RadialGradientBrush>
-                </Grid.Background>
+        <Storyboard x:Key="NeonMotion" RepeatBehavior="Forever">
+            <DoubleAnimation Storyboard.TargetName="NeonGridTransform" Storyboard.TargetProperty="Y" From="-110" To="0" Duration="0:0:4.8"/>
+            <DoubleAnimation Storyboard.TargetName="NeonBeamTransform" Storyboard.TargetProperty="X" From="-900" To="1500" Duration="0:0:7.5"/>
+            <DoubleAnimation Storyboard.TargetName="NeonHaze" Storyboard.TargetProperty="Opacity" From="0.28" To="0.52" Duration="0:0:3.5" AutoReverse="True"/>
+        </Storyboard>
+
+        <Storyboard x:Key="OrbitMotion" RepeatBehavior="Forever">
+            <DoubleAnimation Storyboard.TargetName="OrbitOuterTransform" Storyboard.TargetProperty="Angle" From="0" To="360" Duration="0:0:36"/>
+            <DoubleAnimation Storyboard.TargetName="OrbitInnerTransform" Storyboard.TargetProperty="Angle" From="360" To="0" Duration="0:0:22"/>
+            <DoubleAnimation Storyboard.TargetName="OrbitCore" Storyboard.TargetProperty="Opacity" From="0.55" To="0.92" Duration="0:0:4.2" AutoReverse="True"/>
+            <DoubleAnimation Storyboard.TargetName="OrbitDustTransform" Storyboard.TargetProperty="Angle" From="0" To="360" Duration="0:0:55"/>
+        </Storyboard>
+    </Window.Resources>
+
+    <Grid x:Name="SceneRoot" IsHitTestVisible="False" ClipToBounds="True">
+        <Border x:Name="WallpaperLayer" Background="#070A10" />
+
+        <Grid x:Name="SceneVisualHost" Opacity="0.86">
+            <!-- AURORA FLOW ------------------------------------------------ -->
+            <Grid x:Name="AuroraScene">
+                <Border Background="#25050A16"/>
+
+                <Ellipse Width="1050" Height="1050" HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,-420,-260,0" Opacity="0.72">
+                    <Ellipse.RenderTransform><TranslateTransform x:Name="AuroraGlowOneTransform"/></Ellipse.RenderTransform>
+                    <Ellipse.Fill>
+                        <RadialGradientBrush>
+                            <GradientStop Color="#B04E5CFF" Offset="0"/>
+                            <GradientStop Color="#65413DC8" Offset="0.36"/>
+                            <GradientStop Color="#00111A3A" Offset="1"/>
+                        </RadialGradientBrush>
+                    </Ellipse.Fill>
+                    <Ellipse.Effect><BlurEffect Radius="52"/></Ellipse.Effect>
+                </Ellipse>
+
+                <Ellipse Width="1180" Height="900" HorizontalAlignment="Left" VerticalAlignment="Bottom" Margin="-350,0,0,-360" Opacity="0.66">
+                    <Ellipse.RenderTransform><TranslateTransform x:Name="AuroraGlowTwoTransform"/></Ellipse.RenderTransform>
+                    <Ellipse.Fill>
+                        <RadialGradientBrush>
+                            <GradientStop Color="#A824E6C7" Offset="0"/>
+                            <GradientStop Color="#56316BA9" Offset="0.42"/>
+                            <GradientStop Color="#00101826" Offset="1"/>
+                        </RadialGradientBrush>
+                    </Ellipse.Fill>
+                    <Ellipse.Effect><BlurEffect Radius="58"/></Ellipse.Effect>
+                </Ellipse>
+
+                <Grid x:Name="AuroraVeil" Opacity="0.32">
+                    <Grid.Background>
+                        <LinearGradientBrush StartPoint="0,1" EndPoint="1,0">
+                            <GradientStop Color="#00151B2C" Offset="0.0"/>
+                            <GradientStop Color="#3B5E6BFF" Offset="0.42"/>
+                            <GradientStop Color="#153BD5B4" Offset="0.63"/>
+                            <GradientStop Color="#00101820" Offset="1.0"/>
+                        </LinearGradientBrush>
+                    </Grid.Background>
+                </Grid>
             </Grid>
 
-            <Grid Opacity="0.46">
-                <Grid.Background>
-                    <RadialGradientBrush Center="0.12,0.88"
-                                         GradientOrigin="0.12,0.88"
-                                         RadiusX="0.78"
-                                         RadiusY="0.78">
-                        <GradientStop Color="#4430A8A4" Offset="0" />
-                        <GradientStop Color="#16215A61" Offset="0.48" />
-                        <GradientStop Color="#00000000" Offset="1" />
-                    </RadialGradientBrush>
-                </Grid.Background>
+            <!-- NEON GRID -------------------------------------------------- -->
+            <Grid x:Name="NeonScene" Visibility="Collapsed" Background="#080711">
+                <Grid x:Name="NeonHaze" Opacity="0.38">
+                    <Grid.Background>
+                        <RadialGradientBrush Center="0.5,0.62" GradientOrigin="0.5,0.62" RadiusX="0.74" RadiusY="0.74">
+                            <GradientStop Color="#8A3E35FF" Offset="0"/>
+                            <GradientStop Color="#45234D9B" Offset="0.36"/>
+                            <GradientStop Color="#0010091A" Offset="1"/>
+                        </RadialGradientBrush>
+                    </Grid.Background>
+                </Grid>
+
+                <Canvas VerticalAlignment="Bottom" Height="760" ClipToBounds="True" Opacity="0.48">
+                    <Canvas.RenderTransform><TranslateTransform x:Name="NeonGridTransform"/></Canvas.RenderTransform>
+                    <Canvas>
+                        <Canvas.RenderTransform>
+                            <TransformGroup>
+                                <SkewTransform AngleX="-18"/>
+                                <RotateTransform Angle="-4" CenterX="900" CenterY="420"/>
+                            </TransformGroup>
+                        </Canvas.RenderTransform>
+                        <Rectangle Width="2200" Height="980" Canvas.Left="-120" Canvas.Top="70">
+                            <Rectangle.Fill>
+                                <DrawingBrush TileMode="Tile" Viewport="0,0,110,110" ViewportUnits="Absolute">
+                                    <DrawingBrush.Drawing>
+                                        <DrawingGroup>
+                                            <GeometryDrawing Brush="Transparent">
+                                                <GeometryDrawing.Pen><Pen Brush="#635C63FF" Thickness="1.2"/></GeometryDrawing.Pen>
+                                                <GeometryDrawing.Geometry>
+                                                    <GeometryGroup>
+                                                        <LineGeometry StartPoint="0,0" EndPoint="110,0"/>
+                                                        <LineGeometry StartPoint="0,0" EndPoint="0,110"/>
+                                                    </GeometryGroup>
+                                                </GeometryDrawing.Geometry>
+                                            </GeometryDrawing>
+                                        </DrawingGroup>
+                                    </DrawingBrush.Drawing>
+                                </DrawingBrush>
+                            </Rectangle.Fill>
+                        </Rectangle>
+                    </Canvas>
+                </Canvas>
+
+                <Rectangle Width="720" Height="4" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="-720,240,0,0" Opacity="0.72">
+                    <Rectangle.RenderTransform><TranslateTransform x:Name="NeonBeamTransform"/></Rectangle.RenderTransform>
+                    <Rectangle.Fill>
+                        <LinearGradientBrush StartPoint="0,0.5" EndPoint="1,0.5">
+                            <GradientStop Color="#003BDAFF" Offset="0"/>
+                            <GradientStop Color="#F05A76FF" Offset="0.5"/>
+                            <GradientStop Color="#003BDAFF" Offset="1"/>
+                        </LinearGradientBrush>
+                    </Rectangle.Fill>
+                    <Rectangle.Effect><BlurEffect Radius="12"/></Rectangle.Effect>
+                </Rectangle>
+
+                <Border VerticalAlignment="Bottom" Height="270">
+                    <Border.Background>
+                        <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
+                            <GradientStop Color="#002A1A4B" Offset="0"/>
+                            <GradientStop Color="#8E100D1D" Offset="1"/>
+                        </LinearGradientBrush>
+                    </Border.Background>
+                </Border>
             </Grid>
 
-            <Border VerticalAlignment="Top"
-                    Height="110"
-                    Opacity="0.24">
-                <Border.Background>
-                    <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
-                        <GradientStop Color="#24000000" Offset="0" />
-                        <GradientStop Color="#00000000" Offset="1" />
-                    </LinearGradientBrush>
-                </Border.Background>
-            </Border>
+            <!-- DEEP ORBIT ------------------------------------------------- -->
+            <Grid x:Name="OrbitScene" Visibility="Collapsed" Background="#05080E">
+                <Grid.Background>
+                    <RadialGradientBrush Center="0.5,0.48" GradientOrigin="0.5,0.48" RadiusX="0.82" RadiusY="0.82">
+                        <GradientStop Color="#30273657" Offset="0"/>
+                        <GradientStop Color="#17111A2C" Offset="0.5"/>
+                        <GradientStop Color="#FF05080E" Offset="1"/>
+                    </RadialGradientBrush>
+                </Grid.Background>
+
+                <Grid Width="920" Height="920" HorizontalAlignment="Center" VerticalAlignment="Center" Opacity="0.75">
+                    <Grid x:Name="OrbitOuter">
+                        <Grid.RenderTransform><RotateTransform x:Name="OrbitOuterTransform" CenterX="460" CenterY="460"/></Grid.RenderTransform>
+                        <Ellipse Margin="80" Stroke="#355A72FF" StrokeThickness="2" StrokeDashArray="2,12"/>
+                        <Ellipse Width="16" Height="16" Fill="#FF8190FF" HorizontalAlignment="Center" VerticalAlignment="Top" Margin="0,72,0,0">
+                            <Ellipse.Effect><BlurEffect Radius="7"/></Ellipse.Effect>
+                        </Ellipse>
+                        <Ellipse Width="9" Height="9" Fill="#FFC5CBFF" HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,70,0"/>
+                    </Grid>
+
+                    <Grid x:Name="OrbitInner">
+                        <Grid.RenderTransform><RotateTransform x:Name="OrbitInnerTransform" CenterX="460" CenterY="460"/></Grid.RenderTransform>
+                        <Ellipse Margin="205" Stroke="#5069DCD0" StrokeThickness="1.5" StrokeDashArray="8,14"/>
+                        <Ellipse Width="13" Height="13" Fill="#FF3BE0C1" HorizontalAlignment="Left" VerticalAlignment="Center" Margin="196,0,0,0">
+                            <Ellipse.Effect><BlurEffect Radius="6"/></Ellipse.Effect>
+                        </Ellipse>
+                    </Grid>
+
+                    <Grid x:Name="OrbitDust">
+                        <Grid.RenderTransform><RotateTransform x:Name="OrbitDustTransform" CenterX="460" CenterY="460"/></Grid.RenderTransform>
+                        <Ellipse Margin="135" Stroke="#263D80A8" StrokeThickness="1" StrokeDashArray="1,20"/>
+                    </Grid>
+
+                    <Ellipse x:Name="OrbitCore" Width="230" Height="230" HorizontalAlignment="Center" VerticalAlignment="Center" Opacity="0.72">
+                        <Ellipse.Fill>
+                            <RadialGradientBrush>
+                                <GradientStop Color="#E96E79FF" Offset="0"/>
+                                <GradientStop Color="#66443BA0" Offset="0.38"/>
+                                <GradientStop Color="#00121A33" Offset="1"/>
+                            </RadialGradientBrush>
+                        </Ellipse.Fill>
+                        <Ellipse.Effect><BlurEffect Radius="28"/></Ellipse.Effect>
+                    </Ellipse>
+                </Grid>
+
+                <Border VerticalAlignment="Top" Height="180" Opacity="0.5">
+                    <Border.Background>
+                        <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
+                            <GradientStop Color="#B405080E" Offset="0"/>
+                            <GradientStop Color="#0005080E" Offset="1"/>
+                        </LinearGradientBrush>
+                    </Border.Background>
+                </Border>
+            </Grid>
         </Grid>
     </Grid>
 </Window>
