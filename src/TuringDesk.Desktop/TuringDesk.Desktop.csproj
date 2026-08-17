@@ -16,6 +16,7 @@
     <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4078.44" />
     <PackageReference Include="System.Speech" Version="8.0.0" />
     <PackageReference Include="Vortice.Wpf" Version="3.8.3" />
+    <PackageReference Include="NAudio" Version="2.3.0" />
   </ItemGroup>
 
   <Target Name="GenerateTuringDeskApplicationIcon"
