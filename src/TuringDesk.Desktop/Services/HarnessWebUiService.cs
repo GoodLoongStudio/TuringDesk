@@ -20,12 +20,16 @@ public static class HarnessWebUiService
     {
         if (await IsReadyAsync(cancellationToken)) return WebUri;
 
+        var store = new ModelSettingsStore();
+        var settings = await store.LoadAsync();
+        var apiKey = store.LoadApiKey();
+
         lock (Gate)
         {
             if (_process is null || _process.HasExited)
             {
                 _process?.Dispose();
-                _process = StartHarnessWebProcess();
+                _process = StartHarnessWebProcess(settings, apiKey);
                 RegisterShutdownHook();
             }
         }
@@ -59,6 +63,12 @@ public static class HarnessWebUiService
         throw new TimeoutException("DeepSeek Harness WebUI did not become ready on 127.0.0.1:4319 within 20 seconds.", lastError);
     }
 
+    public static async Task<Uri> RestartWithSavedConfigurationAsync(CancellationToken cancellationToken = default)
+    {
+        StopOwnedProcess();
+        return await EnsureRunningAsync(cancellationToken);
+    }
+
     private static async Task<bool> IsReadyAsync(CancellationToken cancellationToken)
     {
         try
@@ -77,7 +87,7 @@ public static class HarnessWebUiService
         }
     }
 
-    private static Process StartHarnessWebProcess()
+    private static Process StartHarnessWebProcess(ModelSettings settings, string? apiKey)
     {
         var layout = ResolveRuntimeLayout();
         var harnessHome = Path.Combine(
@@ -110,10 +120,46 @@ public static class HarnessWebUiService
         startInfo.Environment["TURINGDESK_CAPABILITY_URL"] = "http://127.0.0.1:4318";
         startInfo.Environment["TURINGDESK_MCP_NODE"] = layout.NodeExecutable;
         startInfo.Environment["TURINGDESK_MCP_SERVER"] = layout.WindowsMcpServer;
+        ApplySavedModelEnvironment(startInfo, settings, apiKey);
 
         var process = Process.Start(startInfo)
             ?? throw new InvalidOperationException("Failed to launch the bundled DeepSeek Harness WebUI process.");
         return process;
+    }
+
+    private static void ApplySavedModelEnvironment(ProcessStartInfo startInfo, ModelSettings settings, string? apiKey)
+    {
+        var normalizedKey = string.IsNullOrWhiteSpace(apiKey) ? null : apiKey.Trim();
+
+        // The TuringDesk setup wizard and model settings window persist one shared
+        // credential in Windows Credential Manager. The Harness process receives
+        // that same credential at spawn time instead of maintaining a second API
+        // key silo. This keeps native Agent calls and the official Harness WebUI
+        // on exactly the same DeepSeek account/configuration.
+        if (settings.ProviderId.Equals("deepseek", StringComparison.OrdinalIgnoreCase))
+        {
+            if (normalizedKey is not null)
+            {
+                startInfo.Environment["DEEPSEEK_API_KEY"] = normalizedKey;
+            }
+
+            if (!string.IsNullOrWhiteSpace(settings.Model))
+            {
+                startInfo.Environment["TURINGDESK_MODEL_ID"] = settings.Model.Trim();
+            }
+        }
+        else if (normalizedKey is not null)
+        {
+            // Keep the shared credential available to compatible Harness adapters.
+            // Provider-specific mapping remains owned by the TuringDesk runtime.
+            startInfo.Environment["TURINGDESK_MODEL_API_KEY"] = normalizedKey;
+        }
+
+        if (!string.IsNullOrWhiteSpace(settings.BaseUrl))
+        {
+            startInfo.Environment["TURINGDESK_MODEL_BASE_URL"] = settings.BaseUrl.Trim();
+        }
+        startInfo.Environment["TURINGDESK_MODEL_PROVIDER"] = settings.ProviderId;
     }
 
     private static void RegisterShutdownHook()
