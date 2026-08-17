@@ -67,12 +67,7 @@ public partial class EnhancementWallpaperWindow : Window
         }
         else
         {
-            // Ask WPF for a fresh render pass after the HWND has changed parent.
-            Dispatcher.BeginInvoke(new Action(() =>
-            {
-                SceneRoot.InvalidateVisual();
-                Renderer.InvalidateVisual();
-            }), DispatcherPriority.Render);
+            RequestFreshRender();
         }
 
         ReportProbe();
@@ -129,24 +124,68 @@ public partial class EnhancementWallpaperWindow : Window
     {
         if (_windowHandle == IntPtr.Zero) return;
 
+        // Parent equality alone is not enough. Explorer can rebuild/reorder the
+        // wallpaper surface while our HWND remains a perfectly valid child. In
+        // that state SetParent/IsAttached still say "success" but the old Windows
+        // wallpaper covers TuringDesk. ResizeToDesktopRect performs the stronger
+        // parent + visible + non-zero rect + WorkerW top-child verification.
         if (ExplorerDesktopHost.IsAttached(_windowHandle))
         {
-            _attached = true;
-            _ = ExplorerDesktopHost.ResizeToDesktopRect(_windowHandle, _monitor.Left, _monitor.Top, _monitor.Width, _monitor.Height);
-            return;
+            var healthy = ExplorerDesktopHost.ResizeToDesktopRect(
+                _windowHandle,
+                _monitor.Left,
+                _monitor.Top,
+                _monitor.Width,
+                _monitor.Height);
+            if (healthy)
+            {
+                var becameHealthy = !_attached;
+                _attached = true;
+                if (!IsVisible) Show();
+                if (becameHealthy) RequestFreshRender();
+                return;
+            }
+
+            // Never keep the previous false-positive state. Fall through in the
+            // same timer tick so TryAttach can promote the HWND or choose another
+            // WorkerW/Progman strategy immediately.
+            _attached = false;
+            ReportProbe();
         }
 
-        _attached = ExplorerDesktopHost.TryAttach(_windowHandle, _monitor.Left, _monitor.Top, _monitor.Width, _monitor.Height);
-        if (_attached && !IsVisible)
+        _attached = ExplorerDesktopHost.TryAttach(
+            _windowHandle,
+            _monitor.Left,
+            _monitor.Top,
+            _monitor.Width,
+            _monitor.Height);
+
+        if (_attached)
         {
-            Show();
-            Dispatcher.BeginInvoke(new Action(() =>
-            {
-                SceneRoot.InvalidateVisual();
-                Renderer.InvalidateVisual();
-            }), DispatcherPriority.Render);
+            if (!IsVisible) Show();
+            RequestFreshRender();
         }
+        else if (IsVisible)
+        {
+            // If Explorer restarted or the host vanished, do not leave a detached
+            // WPF window floating above normal applications while we wait to retry.
+            Hide();
+        }
+
         ReportProbe();
+    }
+
+    private void RequestFreshRender()
+    {
+        Dispatcher.BeginInvoke(new Action(() =>
+        {
+            SceneRoot.InvalidateMeasure();
+            SceneRoot.InvalidateArrange();
+            SceneRoot.InvalidateVisual();
+            Renderer.InvalidateMeasure();
+            Renderer.InvalidateArrange();
+            Renderer.InvalidateVisual();
+        }), DispatcherPriority.Render);
     }
 
     private async Task ApplyPlaybackPolicyAsync(bool forceProfileRefresh)
@@ -213,11 +252,7 @@ public partial class EnhancementWallpaperWindow : Window
             if (version != _sceneLoadVersion) return;
             _loadedSceneId = scene.Id;
             Renderer.SetVolume(_playbackSettings.GlobalVolume, scene.Muted || _playbackSettings.GlobalVolume <= 0);
-            Dispatcher.BeginInvoke(new Action(() =>
-            {
-                SceneRoot.InvalidateVisual();
-                Renderer.InvalidateVisual();
-            }), DispatcherPriority.Render);
+            RequestFreshRender();
             ReportProbe();
         }
         catch (Exception error)
