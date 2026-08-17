@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using TuringDesk.Desktop.Services;
 
 namespace TuringDesk.Desktop.Services.SceneEngine;
 
@@ -80,6 +81,8 @@ public sealed class DesktopPlaybackSettingsStore
         Converters = { new JsonStringEnumConverter() }
     };
 
+    private static readonly object TraceGate = new();
+    private static string? LastObservedSignature;
     private readonly string _path;
 
     public DesktopPlaybackSettingsStore()
@@ -93,7 +96,13 @@ public sealed class DesktopPlaybackSettingsStore
     {
         try
         {
-            if (!File.Exists(_path)) return new DesktopPlaybackSettings();
+            if (!File.Exists(_path))
+            {
+                var defaults = new DesktopPlaybackSettings();
+                TraceObserved(defaults, "defaults-no-file");
+                return defaults;
+            }
+
             var settings = JsonSerializer.Deserialize<DesktopPlaybackSettings>(File.ReadAllText(_path), JsonOptions)
                 ?? new DesktopPlaybackSettings();
             settings.GlobalFpsLimit = Math.Clamp(settings.GlobalFpsLimit, 1, 240);
@@ -101,20 +110,53 @@ public sealed class DesktopPlaybackSettingsStore
             settings.Playlists ??= [];
             settings.Profiles ??= [];
             settings.ApplicationRules ??= [];
+            TraceObserved(settings, "read");
             return settings;
         }
-        catch
+        catch (Exception error)
         {
-            return new DesktopPlaybackSettings();
+            SceneEngineTrace.Error("settings.playback.read", $"failed path={_path}", error);
+            var defaults = new DesktopPlaybackSettings();
+            TraceObserved(defaults, "fallback-after-read-failure");
+            return defaults;
         }
     }
 
     public void Save(DesktopPlaybackSettings settings)
     {
-        settings.GlobalFpsLimit = Math.Clamp(settings.GlobalFpsLimit, 1, 240);
-        settings.GlobalVolume = Math.Clamp(settings.GlobalVolume, 0, 1);
-        var temp = _path + ".tmp";
-        File.WriteAllText(temp, JsonSerializer.Serialize(settings, JsonOptions));
-        File.Move(temp, _path, true);
+        try
+        {
+            settings.GlobalFpsLimit = Math.Clamp(settings.GlobalFpsLimit, 1, 240);
+            settings.GlobalVolume = Math.Clamp(settings.GlobalVolume, 0, 1);
+            var temp = _path + ".tmp";
+            File.WriteAllText(temp, JsonSerializer.Serialize(settings, JsonOptions));
+            File.Move(temp, _path, true);
+            SceneEngineTrace.Info(
+                "settings.playback.save",
+                $"activePlaylist={settings.ActivePlaylistId ?? "<null>"} activeProfile={settings.ActiveProfileId ?? "<null>"} rules={settings.ApplicationRules.Count} fps={settings.GlobalFpsLimit} path={_path}");
+            TraceObserved(settings, "save");
+        }
+        catch (Exception error)
+        {
+            SceneEngineTrace.Error(
+                "settings.playback.save",
+                $"failed path={_path} activePlaylist={settings.ActivePlaylistId ?? "<null>"} activeProfile={settings.ActiveProfileId ?? "<null>"}",
+                error);
+            throw;
+        }
+    }
+
+    private static void TraceObserved(DesktopPlaybackSettings settings, string source)
+    {
+        var signature = $"{settings.ActivePlaylistId}|{settings.ActiveProfileId}|{settings.FullscreenBehavior}|{settings.MaximizedBehavior}|{settings.ApplicationRules.Count}|{settings.GlobalFpsLimit}";
+        lock (TraceGate)
+        {
+            if (string.Equals(LastObservedSignature, signature, StringComparison.Ordinal)) return;
+            LastObservedSignature = signature;
+        }
+
+        SceneEngineTrace.Info(
+            "settings.playback.observe",
+            $"source={source} activePlaylist={settings.ActivePlaylistId ?? "<null>"} activeProfile={settings.ActiveProfileId ?? "<null>"} fullscreen={settings.FullscreenBehavior} maximized={settings.MaximizedBehavior} rules={settings.ApplicationRules.Count} fps={settings.GlobalFpsLimit}");
     }
 }
