@@ -1,29 +1,35 @@
 using System.Windows;
 using System.Windows.Interop;
-using System.Windows.Media;
-using System.Windows.Media.Animation;
 using System.Windows.Threading;
 using TuringDesk.Desktop.Services;
+using TuringDesk.Desktop.Services.SceneEngine;
 
 namespace TuringDesk.Desktop;
 
 public partial class EnhancementWallpaperWindow : Window
 {
     private readonly ShellSettingsStore _settingsStore = new();
+    private readonly SceneCatalogService _sceneCatalog = new();
+    private readonly DesktopPlaybackSettingsStore _playbackStore = new();
+    private readonly DesktopPlaybackRuleEngine _ruleEngine = new();
     private readonly DispatcherTimer _hostHealthTimer;
+
     private ShellSettings _settings;
-    private Brush? _fallbackBackground;
-    private string? _wallpaperSignature;
-    private string? _sceneSignature;
+    private DesktopPlaybackSettings _playbackSettings;
     private IntPtr _windowHandle;
     private bool _attached;
-    private bool _scenePaused;
+    private string? _loadedSceneId;
+    private ApplicationRuleAction _lastPolicyAction = ApplicationRuleAction.KeepRunning;
+    private string? _lastPolicyTarget;
+    private DateTimeOffset _playlistChangedAt = DateTimeOffset.UtcNow;
+    private int _playlistIndex;
+    private int _sceneLoadVersion;
 
     public EnhancementWallpaperWindow()
     {
         _settings = _settingsStore.Load();
+        _playbackSettings = _playbackStore.Load();
         InitializeComponent();
-        _fallbackBackground = WallpaperLayer.Background;
 
         Left = SystemParameters.VirtualScreenLeft;
         Top = SystemParameters.VirtualScreenTop;
@@ -31,11 +37,12 @@ public partial class EnhancementWallpaperWindow : Window
         Height = Math.Max(1, SystemParameters.VirtualScreenHeight);
         Opacity = 0;
 
+        Renderer.PlaybackError += message => ShellNotificationService.Publish("桌面场景播放失败", message, "warning");
         SourceInitialized += OnSourceInitialized;
         Closed += OnClosed;
 
         _hostHealthTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
-        _hostHealthTimer.Tick += (_, _) => MaintainScene();
+        _hostHealthTimer.Tick += async (_, _) => await MaintainDesktopEngineAsync();
     }
 
     public bool IsAttached => _attached;
@@ -44,8 +51,6 @@ public partial class EnhancementWallpaperWindow : Window
     {
         _windowHandle = new WindowInteropHelper(this).Handle;
         ShellSettingsStore.SettingsChanged += OnShellSettingsChanged;
-        RefreshWallpaper(force: true);
-        RefreshScene(force: true);
 
         _attached = ExplorerDesktopHost.TryAttach(_windowHandle);
         if (_attached)
@@ -54,20 +59,20 @@ public partial class EnhancementWallpaperWindow : Window
         }
         else
         {
-            // Never leave a failed wallpaper host as a normal full-screen window.
-            // The timer remains alive and can attach later if Explorer is still
-            // finishing its desktop hierarchy during user sign-in.
+            // Never cover Explorer when WorkerW/Progman is not ready. The health
+            // timer retries attachment while AI services continue independently.
             Hide();
         }
 
+        _ = RefreshBaseSceneAsync(force: true);
         _hostHealthTimer.Start();
     }
 
     private void OnClosed(object? sender, EventArgs e)
     {
         _hostHealthTimer.Stop();
-        StopAllMotion();
         ShellSettingsStore.SettingsChanged -= OnShellSettingsChanged;
+        Renderer.Stop();
     }
 
     private void OnShellSettingsChanged()
@@ -75,15 +80,15 @@ public partial class EnhancementWallpaperWindow : Window
         Dispatcher.BeginInvoke(new Action(() =>
         {
             _settings = _settingsStore.Load();
-            RefreshWallpaper(force: true);
-            RefreshScene(force: true);
+            _ = RefreshBaseSceneAsync(force: true);
         }), DispatcherPriority.Background);
     }
 
-    private void MaintainScene()
+    private async Task MaintainDesktopEngineAsync()
     {
         MaintainExplorerAttachment();
-        ApplyPerformancePolicy();
+        _playbackSettings = _playbackStore.Load();
+        await ApplyPlaybackPolicyAsync();
     }
 
     private void MaintainExplorerAttachment()
@@ -96,8 +101,6 @@ public partial class EnhancementWallpaperWindow : Window
             return;
         }
 
-        // Explorer can rebuild its WorkerW hierarchy after display topology,
-        // Explorer restart, or sign-in initialization. Re-attach without focus.
         _attached = ExplorerDesktopHost.TryAttach(_windowHandle);
         if (_attached && !IsVisible)
         {
@@ -106,68 +109,125 @@ public partial class EnhancementWallpaperWindow : Window
         }
     }
 
-    private void ApplyPerformancePolicy()
+    private async Task ApplyPlaybackPolicyAsync()
     {
-        var appearance = _settings.Appearance;
-        var shouldPause = appearance.PauseSceneOnFullscreen && DesktopScenePerformancePolicy.ShouldPauseVisualScene();
-        if (shouldPause == _scenePaused) return;
+        var directive = _ruleEngine.Evaluate(_playbackSettings);
+        var policyChanged = directive.Action != _lastPolicyAction ||
+                            !string.Equals(directive.TargetId, _lastPolicyTarget, StringComparison.OrdinalIgnoreCase);
+        _lastPolicyAction = directive.Action;
+        _lastPolicyTarget = directive.TargetId;
 
-        _scenePaused = shouldPause;
-        ApplySceneMotionState();
-    }
-
-    private void RefreshWallpaper(bool force)
-    {
-        var appearance = _settings.Appearance;
-        var resolvedPath = WallpaperService.ResolveWallpaperPath(appearance) ?? string.Empty;
-        var signature = $"{appearance.WallpaperMode}|{appearance.WallpaperFit}|{resolvedPath}";
-        if (!force && string.Equals(signature, _wallpaperSignature, StringComparison.OrdinalIgnoreCase)) return;
-
-        _wallpaperSignature = signature;
-        WallpaperLayer.Background = WallpaperService.CreateWallpaperBrush(appearance) ?? _fallbackBackground;
-    }
-
-    private void RefreshScene(bool force)
-    {
-        var appearance = _settings.Appearance;
-        var signature = $"{appearance.SceneId}|{appearance.SceneMotionEnabled}|{appearance.SceneIntensity:0.000}";
-        if (!force && string.Equals(signature, _sceneSignature, StringComparison.OrdinalIgnoreCase)) return;
-        _sceneSignature = signature;
-
-        AuroraScene.Visibility = appearance.SceneId == "aurora" ? Visibility.Visible : Visibility.Collapsed;
-        NeonScene.Visibility = appearance.SceneId == "neon" ? Visibility.Visible : Visibility.Collapsed;
-        OrbitScene.Visibility = appearance.SceneId == "orbit" ? Visibility.Visible : Visibility.Collapsed;
-        SceneVisualHost.Opacity = appearance.SceneIntensity;
-
-        ApplySceneMotionState();
-    }
-
-    private void ApplySceneMotionState()
-    {
-        StopAllMotion();
-
-        var appearance = _settings.Appearance;
-        if (_scenePaused || !appearance.SceneMotionEnabled) return;
-
-        var key = appearance.SceneId switch
+        switch (directive.Action)
         {
-            "neon" => "NeonMotion",
-            "orbit" => "OrbitMotion",
-            _ => "AuroraMotion"
-        };
+            case ApplicationRuleAction.Stop:
+                if (!Renderer.IsStopped) Renderer.Stop();
+                return;
+            case ApplicationRuleAction.Pause:
+                if (Renderer.IsStopped) await RefreshBaseSceneAsync(force: true);
+                Renderer.Pause();
+                return;
+            case ApplicationRuleAction.LoadScene:
+                if (!string.IsNullOrWhiteSpace(directive.TargetId))
+                    await LoadSceneByIdAsync(directive.TargetId, force: policyChanged);
+                return;
+            case ApplicationRuleAction.LoadPlaylist:
+                if (!string.IsNullOrWhiteSpace(directive.TargetId))
+                    await PlayPlaylistAsync(directive.TargetId, force: policyChanged);
+                return;
+            case ApplicationRuleAction.LoadProfile:
+                if (!string.IsNullOrWhiteSpace(directive.TargetId))
+                    await PlayProfileAsync(directive.TargetId, force: policyChanged);
+                return;
+            default:
+                if (Renderer.IsStopped) await RefreshBaseSceneAsync(force: true);
+                if (Renderer.IsPaused) Renderer.Resume();
+                break;
+        }
 
-        if (FindResource(key) is Storyboard storyboard)
+        if (!string.IsNullOrWhiteSpace(_playbackSettings.ActiveProfileId))
         {
-            storyboard.Begin(this, true);
+            await PlayProfileAsync(_playbackSettings.ActiveProfileId, force: false);
+            return;
+        }
+        if (!string.IsNullOrWhiteSpace(_playbackSettings.ActivePlaylistId))
+        {
+            await PlayPlaylistAsync(_playbackSettings.ActivePlaylistId, force: false);
+            return;
+        }
+
+        await RefreshBaseSceneAsync(force: false);
+    }
+
+    private Task RefreshBaseSceneAsync(bool force) => LoadSceneByIdAsync(_settings.Appearance.SceneId, force);
+
+    private async Task LoadSceneByIdAsync(string? sceneId, bool force)
+    {
+        var scene = _sceneCatalog.Find(sceneId) ?? _sceneCatalog.Find("builtin:aurora");
+        if (scene is null) return;
+        if (!force && string.Equals(_loadedSceneId, scene.Id, StringComparison.OrdinalIgnoreCase) && !Renderer.IsStopped) return;
+
+        var version = ++_sceneLoadVersion;
+        try
+        {
+            await Renderer.LoadAsync(scene, _settings.Appearance);
+            if (version != _sceneLoadVersion) return;
+            _loadedSceneId = scene.Id;
+            Renderer.SetVolume(_playbackSettings.GlobalVolume, scene.Muted || _playbackSettings.GlobalVolume <= 0);
+        }
+        catch (Exception error)
+        {
+            if (version != _sceneLoadVersion) return;
+            ShellNotificationService.Publish("无法加载桌面场景", error.Message, "warning");
         }
     }
 
-    private void StopAllMotion()
+    private async Task PlayPlaylistAsync(string playlistId, bool force)
     {
-        foreach (var key in new[] { "AuroraMotion", "NeonMotion", "OrbitMotion" })
+        var playlist = _playbackSettings.Playlists.FirstOrDefault(item =>
+            string.Equals(item.Id, playlistId, StringComparison.OrdinalIgnoreCase));
+        if (playlist is null || playlist.SceneIds.Count == 0) return;
+
+        var interval = TimeSpan.FromMinutes(Math.Clamp(playlist.IntervalMinutes, 1, 24 * 60));
+        var due = DateTimeOffset.UtcNow - _playlistChangedAt >= interval;
+        if (force)
         {
-            if (FindResource(key) is not Storyboard storyboard) continue;
-            try { storyboard.Stop(this); } catch { }
+            _playlistIndex = 0;
+            _playlistChangedAt = DateTimeOffset.UtcNow;
+        }
+        else if (due && (!Renderer.IsPaused || playlist.ChangeWhilePaused))
+        {
+            _playlistIndex = playlist.Shuffle
+                ? Random.Shared.Next(playlist.SceneIds.Count)
+                : (_playlistIndex + 1) % playlist.SceneIds.Count;
+            _playlistChangedAt = DateTimeOffset.UtcNow;
+        }
+
+        _playlistIndex = Math.Clamp(_playlistIndex, 0, playlist.SceneIds.Count - 1);
+        await LoadSceneByIdAsync(playlist.SceneIds[_playlistIndex], force || due);
+    }
+
+    private async Task PlayProfileAsync(string profileId, bool force)
+    {
+        var profile = _playbackSettings.Profiles.FirstOrDefault(item =>
+            string.Equals(item.Id, profileId, StringComparison.OrdinalIgnoreCase));
+        if (profile is null) return;
+
+        // The v0.13 engine keeps one virtual-desktop renderer. The profile schema
+        // already stores per-monitor assignments so the next renderer split can
+        // apply them independently without migrating user data. Until then the
+        // primary assignment is authoritative.
+        var assignment = profile.Monitors.FirstOrDefault(item =>
+                             string.Equals(item.MonitorKey, "primary", StringComparison.OrdinalIgnoreCase))
+                         ?? profile.Monitors.FirstOrDefault();
+        if (assignment is null) return;
+
+        if (!string.IsNullOrWhiteSpace(assignment.PlaylistId))
+        {
+            await PlayPlaylistAsync(assignment.PlaylistId, force);
+        }
+        else if (!string.IsNullOrWhiteSpace(assignment.SceneId))
+        {
+            await LoadSceneByIdAsync(assignment.SceneId, force);
         }
     }
 }
