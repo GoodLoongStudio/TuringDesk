@@ -1,7 +1,7 @@
 param(
     [string]$Configuration = "Release",
     [string]$RuntimeIdentifier = "win-arm64",
-    [string]$Version = "v0.14.0",
+    [string]$Version = "v0.14.1",
     [string]$NodeVersion = "22.19.0"
 )
 
@@ -198,6 +198,7 @@ Search shortcut: Alt+Space focuses the same desktop search box
 Desktop settings: search-bar design button opens Desktop Library / integrated settings
 Model configuration: one TuringDesk model setting synchronized into official Harness settings; API key remains outside YAML
 Desktop icon avoidance: reserved search-bar region with safe best-effort Explorer icon relocation
+Desktop search Z-order: above Explorer desktop, below normal application windows
 Advanced desktop mode: explicit current-user Replacement Shell
 Install flow: standard Windows Installer (MSI)
 Install ownership: Windows Installer / Program Files
