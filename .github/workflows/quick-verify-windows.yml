@@ -15,15 +15,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22.19.0
-          architecture: arm64
-
-      - uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: 8.0.x
-
       - name: Parse quick verification launcher
         shell: powershell
         run: |
@@ -36,6 +27,8 @@ jobs:
             throw "Windows PowerShell parser rejected quick-verify.ps1"
           }
 
-      - name: Execute the same quick verification build path
+      - name: Execute quick verification from dependency-bootstrap path
         shell: powershell
+        env:
+          TURINGDESK_FORCE_BOOTSTRAP: "1"
         run: .\scripts\quick-verify.ps1 -SkipPull -BuildOnly
