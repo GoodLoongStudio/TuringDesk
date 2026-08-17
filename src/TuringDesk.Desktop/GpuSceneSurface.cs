@@ -56,25 +56,26 @@ public sealed class GpuSceneSurface : DrawingSurface
 
         var animate = _motion && !_paused;
         var t = animate ? (float)_clock.Elapsed.TotalSeconds : 0f;
-        var pulse = animate ? 0.5f + 0.5f * MathF.Sin(t * 0.23f) : 0.5f;
-        var drift = animate ? 0.5f + 0.5f * MathF.Sin(t * 0.17f + 1.7f) : 0.5f;
-        var audioBoost = _bass * 0.09f + _mid * 0.045f + _treble * 0.025f;
+        var pulse = animate ? 0.5f + 0.5f * MathF.Sin(t * 0.31f) : 0.5f;
+        var drift = animate ? 0.5f + 0.5f * MathF.Sin(t * 0.21f + 1.7f) : 0.5f;
+        var shimmer = animate ? 0.5f + 0.5f * MathF.Sin(t * 0.13f + 3.1f) : 0.5f;
+        var audioBoost = _bass * 0.10f + _mid * 0.05f + _treble * 0.03f;
         var color = _preset.ToLowerInvariant() switch
         {
             "neon" => new Color4(
-                Math.Min(1, 0.022f + 0.035f * pulse * _intensity + audioBoost * 0.45f),
-                Math.Min(1, 0.014f + 0.025f * drift * _intensity + _treble * 0.04f),
-                Math.Min(1, 0.075f + 0.095f * pulse * _intensity + _bass * 0.08f),
+                Math.Min(1, 0.030f + 0.085f * pulse * _intensity + audioBoost * 0.42f),
+                Math.Min(1, 0.012f + 0.050f * drift * _intensity + _treble * 0.045f),
+                Math.Min(1, 0.095f + 0.140f * shimmer * _intensity + _bass * 0.085f),
                 1.0f),
             "orbit" => new Color4(
-                Math.Min(1, 0.018f + 0.025f * drift * _intensity + _mid * 0.025f),
-                Math.Min(1, 0.027f + 0.040f * pulse * _intensity + _treble * 0.025f),
-                Math.Min(1, 0.064f + 0.070f * drift * _intensity + _bass * 0.05f),
+                Math.Min(1, 0.020f + 0.050f * shimmer * _intensity + _mid * 0.030f),
+                Math.Min(1, 0.035f + 0.075f * pulse * _intensity + _treble * 0.030f),
+                Math.Min(1, 0.105f + 0.125f * drift * _intensity + _bass * 0.055f),
                 1.0f),
             _ => new Color4(
-                Math.Min(1, 0.018f + 0.025f * pulse * _intensity + _bass * 0.025f),
-                Math.Min(1, 0.024f + 0.045f * drift * _intensity + _mid * 0.035f),
-                Math.Min(1, 0.052f + 0.085f * pulse * _intensity + audioBoost),
+                Math.Min(1, 0.028f + 0.070f * pulse * _intensity + _bass * 0.030f),
+                Math.Min(1, 0.030f + 0.090f * drift * _intensity + _mid * 0.040f),
+                Math.Min(1, 0.090f + 0.145f * shimmer * _intensity + audioBoost),
                 1.0f)
         };
 
