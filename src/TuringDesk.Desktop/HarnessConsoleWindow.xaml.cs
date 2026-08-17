@@ -76,6 +76,17 @@ public partial class HarnessConsoleWindow : Window
         core.Settings.IsStatusBarEnabled = false;
         core.Settings.IsZoomControlEnabled = false;
 
+        // Match the native settings center instead of inheriting the OS/app dark
+        // preference. Harness can still provide its own explicit theme controls.
+        try
+        {
+            core.Profile.PreferredColorScheme = CoreWebView2PreferredColorScheme.Light;
+        }
+        catch
+        {
+            // Older WebView2 runtimes may not expose the preference at runtime.
+        }
+
         core.NavigationStarting -= Core_NavigationStarting;
         core.NavigationStarting += Core_NavigationStarting;
         core.NavigationCompleted -= Core_NavigationCompleted;
@@ -169,10 +180,6 @@ public partial class HarnessConsoleWindow : Window
     private void TitleBar_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
         if (e.ChangedButton != MouseButton.Left) return;
-
-        // Harness is an advanced utility surface, not a primary app window.
-        // Keep double-click from turning this borderless window into a giant
-        // full-screen-like surface that can visually collide with the taskbar.
         if (e.ClickCount > 1) return;
         try { DragMove(); } catch { }
     }
