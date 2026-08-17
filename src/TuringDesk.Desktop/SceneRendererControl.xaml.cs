@@ -66,6 +66,7 @@ public partial class SceneRendererControl : UserControl
                 break;
             default:
                 PauseBuiltInAnimations();
+                PauseSceneGraphAnimations();
                 break;
         }
     }
@@ -84,6 +85,7 @@ public partial class SceneRendererControl : UserControl
                 break;
             default:
                 ResumeBuiltInAnimations();
+                ResumeSceneGraphAnimations();
                 break;
         }
     }
@@ -93,9 +95,14 @@ public partial class SceneRendererControl : UserControl
         _paused = false;
         _stopped = true;
         StopBuiltInAnimations();
+        StopSceneGraph();
         try { VideoPlayer.Stop(); } catch { }
         VideoPlayer.Source = null;
         VideoPlayer.Visibility = Visibility.Collapsed;
+        if (WebPlayer.CoreWebView2 is not null)
+        {
+            try { WebPlayer.CoreWebView2.Navigate("about:blank"); } catch { }
+        }
         WebPlayer.Visibility = Visibility.Collapsed;
         BuiltInScene.Visibility = Visibility.Collapsed;
         ParticleCanvas.Children.Clear();
@@ -121,14 +128,20 @@ public partial class SceneRendererControl : UserControl
 
     private void LoadScene(SceneManifest scene, ShellAppearanceSettings appearance)
     {
-        BuiltInScene.Visibility = Visibility.Visible;
         VideoPlayer.Visibility = Visibility.Collapsed;
         WebPlayer.Visibility = Visibility.Collapsed;
 
-        // Imported image scenes use the image as the base layer and retain the
-        // lightweight effect/particle layer above it. Future scene packages can
-        // replace this WPF renderer with the Direct3D scene graph without changing
-        // the manifest or library model.
+        // Editable projects take the real scene-graph runtime path. Built-ins and
+        // old single-image imports retain the lightweight compatibility renderer.
+        if (LoadSceneGraph(scene))
+        {
+            BuiltInScene.Visibility = Visibility.Collapsed;
+            return;
+        }
+
+        SceneGraphCanvas.Visibility = Visibility.Collapsed;
+        BuiltInScene.Visibility = Visibility.Visible;
+
         if (!scene.IsBuiltIn)
         {
             var entry = scene.ResolveEntryPath();
@@ -202,6 +215,7 @@ public partial class SceneRendererControl : UserControl
         }
 
         BuiltInScene.Visibility = Visibility.Collapsed;
+        SceneGraphCanvas.Visibility = Visibility.Collapsed;
         WebPlayer.Visibility = Visibility.Collapsed;
         VideoPlayer.Visibility = Visibility.Visible;
         VideoPlayer.Stretch = scene.Fit switch
@@ -226,6 +240,7 @@ public partial class SceneRendererControl : UserControl
         }
 
         BuiltInScene.Visibility = Visibility.Collapsed;
+        SceneGraphCanvas.Visibility = Visibility.Collapsed;
         VideoPlayer.Visibility = Visibility.Collapsed;
         WebPlayer.Visibility = Visibility.Visible;
 
@@ -245,10 +260,6 @@ public partial class SceneRendererControl : UserControl
         if (!e.IsSuccess || WebPlayer.CoreWebView2 is null) return;
         try
         {
-            // Compatibility bridge for beginner web wallpapers. Existing web
-            // projects can listen to TuringDesk events, while Wallpaper-Engine-
-            // style projects can expose wallpaperPropertyListener and receive a
-            // normal initial property callback.
             await WebPlayer.CoreWebView2.ExecuteScriptAsync("""
                 (() => {
                   window.turingDesk = window.turingDesk || {};
@@ -331,6 +342,7 @@ public partial class SceneRendererControl : UserControl
 
     private void ResumeBuiltInAnimations()
     {
+        if (_scene is { Layers.Count: > 0 }) return;
         var appearance = new ShellSettingsStore().Load().Appearance;
         if (!appearance.SceneMotionEnabled) return;
         StartGlowAnimation(GlowA, 24, 18, 11);
