@@ -82,6 +82,10 @@ public partial class EnhancementWallpaperWindow : Window
         Dispatcher.BeginInvoke(new Action(() =>
         {
             _settings = _settingsStore.Load();
+            // Applying a scene also disables an active playlist/profile. Reload
+            // playback state here so the old in-memory policy cannot immediately
+            // override the scene the user just selected.
+            _playbackSettings = _playbackStore.Load();
             _ = ApplyPlaybackPolicyAsync(forceProfileRefresh: true);
         }), DispatcherPriority.Background);
     }
@@ -89,9 +93,27 @@ public partial class EnhancementWallpaperWindow : Window
     private async Task MaintainDesktopEngineAsync()
     {
         MaintainExplorerAttachment();
+
+        // The library/control UI can be opened by another TuringDesk process.
+        // Static SettingsChanged events do not cross process boundaries, so the
+        // desktop host must also observe the persisted settings. This makes an
+        // "Apply to desktop" action deterministic even when a background instance
+        // owns the WorkerW wallpaper window.
+        var latestSettings = _settingsStore.Load();
+        var appearanceChanged = AppearanceRequiresReload(_settings.Appearance, latestSettings.Appearance);
+        _settings = latestSettings;
         _playbackSettings = _playbackStore.Load();
-        await ApplyPlaybackPolicyAsync(forceProfileRefresh: false);
+        await ApplyPlaybackPolicyAsync(forceProfileRefresh: appearanceChanged);
     }
+
+    private static bool AppearanceRequiresReload(ShellAppearanceSettings previous, ShellAppearanceSettings current) =>
+        !string.Equals(previous.SceneId, current.SceneId, StringComparison.OrdinalIgnoreCase) ||
+        previous.SceneMotionEnabled != current.SceneMotionEnabled ||
+        Math.Abs(previous.SceneIntensity - current.SceneIntensity) > 0.0001 ||
+        !string.Equals(previous.WallpaperMode, current.WallpaperMode, StringComparison.OrdinalIgnoreCase) ||
+        !string.Equals(previous.WallpaperPath, current.WallpaperPath, StringComparison.OrdinalIgnoreCase) ||
+        !string.Equals(previous.WallpaperFit, current.WallpaperFit, StringComparison.OrdinalIgnoreCase) ||
+        !string.Equals(previous.AccentHex, current.AccentHex, StringComparison.OrdinalIgnoreCase);
 
     private void MaintainExplorerAttachment()
     {
