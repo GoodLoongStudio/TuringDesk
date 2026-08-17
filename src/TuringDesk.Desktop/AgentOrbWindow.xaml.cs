@@ -193,7 +193,7 @@ public partial class AgentOrbWindow : Window
     private void ControlCenter_Click(object sender, RoutedEventArgs e)
     {
         Collapse();
-        _controlCenter.ShowControlCenter();
+        _controlCenter.ShowDiyCenter();
     }
 
     private void Diy_Click(object sender, RoutedEventArgs e)
