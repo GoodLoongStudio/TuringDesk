@@ -36,10 +36,11 @@ public sealed class DesktopAiModelChoiceService
             var currentCredential = _store.LoadApiKey();
             var available = IsUsable(current, currentCredential);
             var preset = ModelProviderPresets.Find(current.ProviderId);
+            var providerLabel = ProviderLabel(preset);
             choices.Add(new DesktopAiModelChoice(
                 "configured",
                 DisplayNameFor(current, preset),
-                available ? "当前配置" : "当前配置缺少必要信息",
+                available ? $"{providerLabel} · 当前配置" : $"{providerLabel} · 缺少必要信息",
                 current,
                 currentCredential,
                 available));
@@ -57,8 +58,8 @@ public sealed class DesktopAiModelChoiceService
         {
             choices.Add(new DesktopAiModelChoice(
                 "deepseek-fallback",
-                "DeepSeek",
                 deepSeekSettings.Model,
+                "DeepSeek · 已配置",
                 deepSeekSettings with { HasApiKey = true },
                 deepSeekCredential,
                 true));
@@ -68,7 +69,7 @@ public sealed class DesktopAiModelChoiceService
         {
             choices.Insert(0, new DesktopAiModelChoice(
                 "no-model",
-                "⚠ 未配置 AI",
+                "未配置 AI",
                 "点击这里设置模型或 API Key",
                 null,
                 null,
@@ -78,7 +79,7 @@ public sealed class DesktopAiModelChoiceService
 
         choices.Add(new DesktopAiModelChoice(
             "configure",
-            "＋ 配置模型…",
+            "配置模型…",
             "打开 AI 模型设置",
             null,
             null,
@@ -127,14 +128,13 @@ public sealed class DesktopAiModelChoiceService
 
     private static string DisplayNameFor(ModelSettings settings, ModelProviderPreset preset)
     {
-        var provider = preset.Name
-            .Replace(" API", string.Empty, StringComparison.OrdinalIgnoreCase)
-            .Replace("（无需模型）", string.Empty, StringComparison.OrdinalIgnoreCase)
-            .Trim();
-
         var model = settings.Model.Trim();
-        if (provider.Equals("DeepSeek", StringComparison.OrdinalIgnoreCase)) return "DeepSeek";
-        if (string.IsNullOrWhiteSpace(model)) return provider;
-        return $"{provider} · {model}";
+        if (!string.IsNullOrWhiteSpace(model)) return model;
+        return ProviderLabel(preset);
     }
+
+    private static string ProviderLabel(ModelProviderPreset preset) => preset.Name
+        .Replace(" API", string.Empty, StringComparison.OrdinalIgnoreCase)
+        .Replace("（无需模型）", string.Empty, StringComparison.OrdinalIgnoreCase)
+        .Trim();
 }
