@@ -1,7 +1,7 @@
 param(
     [string]$Configuration = "Release",
     [string]$RuntimeIdentifier = "win-arm64",
-    [string]$Version = "v0.14.1",
+    [string]$Version = "v0.14.2",
     [string]$NodeVersion = "22.19.0"
 )
 
@@ -192,11 +192,13 @@ Node: $NodeVersion ($DetectedNodeArch)
 DeepSeek Harness: 0.1.0-rc.6
 Harness UI: official DeepSeek Harness WebUI wrapped by TuringDesk WebView2
 Harness WebUI: packaged and boot-smoke verified
+Harness startup: process launch begins before MainWindow construction
+Harness configuration: shared official settings.yaml + .credentials.yaml stores
+Harness credentials: Models page and beginner setup use the same writable credential source
 Default desktop mode: Explorer Desktop Enhancement (WorkerW/Progman scene host)
 Primary desktop UX: top-center AI search/conversation bar; no legacy Orb/Home dashboard
 Search shortcut: Alt+Space focuses the same desktop search box
 Desktop settings: search-bar design button opens Desktop Library / integrated settings
-Model configuration: one TuringDesk model setting synchronized into official Harness settings; API key remains outside YAML
 Desktop icon avoidance: reserved search-bar region with safe best-effort Explorer icon relocation
 Desktop search Z-order: above Explorer desktop, below normal application windows
 Advanced desktop mode: explicit current-user Replacement Shell
