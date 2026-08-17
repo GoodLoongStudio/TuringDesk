@@ -35,6 +35,8 @@ public static class ShellNotificationService
                 Items.RemoveRange(0, Items.Count - 80);
             }
         }
+
+        SceneEngineTrace.Info("notification", $"kind={kind} title={title} message={message}");
         Changed?.Invoke();
     }
 
