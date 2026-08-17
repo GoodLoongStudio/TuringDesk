@@ -15,6 +15,7 @@ public sealed class GpuSceneSurface : DrawingSurface
     private string _preset = "aurora";
     private float _intensity = 0.85f;
     private bool _motion = true;
+    private bool _paused;
 
     public GpuSceneSurface()
     {
@@ -27,6 +28,13 @@ public sealed class GpuSceneSurface : DrawingSurface
         _preset = string.IsNullOrWhiteSpace(preset) ? "aurora" : preset;
         _intensity = (float)Math.Clamp(intensity, 0.2, 1.0);
         _motion = motion;
+        _paused = false;
+        Invalidate();
+    }
+
+    public void SetPaused(bool paused)
+    {
+        _paused = paused;
         Invalidate();
     }
 
@@ -35,9 +43,10 @@ public sealed class GpuSceneSurface : DrawingSurface
         var target = e.Surface.ColorTextureView;
         if (target is null) return;
 
-        var t = _motion ? (float)_clock.Elapsed.TotalSeconds : 0f;
-        var pulse = _motion ? 0.5f + 0.5f * MathF.Sin(t * 0.23f) : 0.5f;
-        var drift = _motion ? 0.5f + 0.5f * MathF.Sin(t * 0.17f + 1.7f) : 0.5f;
+        var animate = _motion && !_paused;
+        var t = animate ? (float)_clock.Elapsed.TotalSeconds : 0f;
+        var pulse = animate ? 0.5f + 0.5f * MathF.Sin(t * 0.23f) : 0.5f;
+        var drift = animate ? 0.5f + 0.5f * MathF.Sin(t * 0.17f + 1.7f) : 0.5f;
         var color = _preset.ToLowerInvariant() switch
         {
             "neon" => new Color4(
