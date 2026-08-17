@@ -12,8 +12,8 @@ public partial class MainWindow
 
     /// <summary>
     /// Default TuringDesk mode: keep Explorer as the Windows shell and attach
-    /// TuringDesk's visual scene behind Explorer desktop icons. The control
-    /// center becomes secondary; the desktop Orb is the primary quick UI.
+    /// the desktop engine behind Explorer icons. The control center is secondary;
+    /// normal users enter through the Orb, Alt+Space or voice.
     /// </summary>
     internal void EnableEnhancementMode()
     {
@@ -44,24 +44,29 @@ public partial class MainWindow
 
             if (wallpaper.IsAttached)
             {
-                AddActivity("desktop", "Animated Scene attached behind Explorer desktop icons; Explorer remains the shell.");
+                AddActivity("desktop", "Desktop Engine attached behind Explorer icons; Explorer remains the Windows shell.");
                 ShellNotificationService.Publish(
                     "TuringDesk AI Desktop 已就绪",
-                    "动态 Scene 已挂到 Windows 桌面；按 Alt+Space 或点击右下角 Orb 直接唤起 AI。",
+                    "按 Alt+Space、点击右下角 Orb 或直接说“图灵桌面”。",
                     "shell");
             }
             else
             {
-                AddActivity("desktop", "Explorer wallpaper host was unavailable. Agent Orb remains available while Windows desktop stays untouched.");
+                AddActivity("desktop", "Explorer wallpaper host was unavailable. Agent entry remains available while the Windows desktop stays untouched.");
                 ShellNotificationService.Publish(
-                    "Scene 暂未挂载",
-                    "Explorer 仍正常工作；AI Orb、Harness 与语音功能不受影响。",
+                    "桌面引擎正在等待 Explorer",
+                    "Windows 桌面不受影响；AI 与语音仍可正常使用。",
                     "warning");
             }
 
-            // Product default: do not greet the user with an engineering console.
-            // Services are already bootstrapping from MainWindow.Loaded; hide the
-            // control center and let the desktop scene + Orb be the first surface.
+            var onboarding = new OnboardingStateStore();
+            if (!onboarding.IsCompleted())
+            {
+                var setup = new FirstRunSetupWindow(_runtime, _modelStore) { Owner = this };
+                setup.ShowDialog();
+            }
+
+            // Product default: do not greet users with an engineering console.
             Hide();
         }), DispatcherPriority.ApplicationIdle);
     }
@@ -70,8 +75,7 @@ public partial class MainWindow
     {
         if (!ShellSession.IsEnhancementMode || ShellSession.ExitRequested) return;
 
-        // Closing the control center should not kill the desktop engine. It is a
-        // secondary settings/status surface in Enhancement Mode.
+        // Closing the control center should not kill the desktop engine.
         e.Cancel = true;
         Hide();
     }
