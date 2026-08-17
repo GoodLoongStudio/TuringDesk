@@ -6,20 +6,76 @@ namespace TuringDesk.Desktop.Services;
 
 /// <summary>
 /// Bridges TuringDesk's beginner-friendly model selection into the official
-/// DeepSeek Harness settings/credential seams. Secrets never enter settings.yaml:
-/// the API key stays in Windows Credential Manager and is injected only into the
-/// owned Harness child process environment.
+/// DeepSeek Harness settings and credentials seams.
+///
+/// The official Harness local credential provider uses
+/// $DSH_HOME/.credentials.yaml. TuringDesk writes that same store instead of
+/// shadowing it with process environment variables, so the beginner setup and
+/// Harness Models page see one credential state and Harness can hot-reload it.
 /// </summary>
 public static class HarnessModelBridgeService
 {
+    private const string DeepSeekCredentialRef = "DEEPSEEK_API_KEY";
+    private const string CompatibleCredentialRef = "TURINGDESK_MODEL_API_KEY";
+
     public static string HarnessHome => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         "TuringDesk",
         "Harness");
 
     public static string SettingsPath => Path.Combine(HarnessHome, "settings.yaml");
+    public static string CredentialsPath => Path.Combine(HarnessHome, ".credentials.yaml");
 
-    public static void Synchronize(ModelSettings settings)
+    public static void Synchronize(ModelSettings settings) => SynchronizeSettings(settings);
+
+    public static void Synchronize(ModelSettings settings, string? apiKey)
+    {
+        SynchronizeSettings(settings);
+        SynchronizeCredentials(settings, apiKey);
+    }
+
+    public static string? LoadCredential(ModelSettings settings)
+    {
+        var reference = CredentialReference(settings);
+        if (reference is null || !File.Exists(CredentialsPath)) return null;
+
+        try
+        {
+            foreach (var line in File.ReadLines(CredentialsPath, Encoding.UTF8))
+            {
+                var trimmed = line.Trim();
+                if (trimmed.Length == 0 || trimmed.StartsWith('#')) continue;
+                if (!trimmed.StartsWith(reference + ":", StringComparison.Ordinal)) continue;
+
+                var raw = trimmed[(reference.Length + 1)..].Trim();
+                if (raw.Length == 0) return null;
+                return ParseYamlScalar(raw);
+            }
+        }
+        catch
+        {
+            // The Harness provider owns validation and diagnostics. TuringDesk
+            // simply falls back to its Windows credential migration copy.
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Only points the child process at the shared Harness home. Provider keys
+    /// deliberately do NOT enter the process environment: Harness treats an
+    /// inherited environment credential as read-only and it shadows the writable
+    /// Models-page credential store.
+    /// </summary>
+    public static void ApplyEnvironment(ProcessStartInfo startInfo)
+    {
+        startInfo.Environment["DSH_HOME"] = HarnessHome;
+        startInfo.Environment.Remove(DeepSeekCredentialRef);
+        startInfo.Environment.Remove(CompatibleCredentialRef);
+        startInfo.Environment.Remove("DEEPSEEK_BASE_URL");
+    }
+
+    private static void SynchronizeSettings(ModelSettings settings)
     {
         Directory.CreateDirectory(HarnessHome);
 
@@ -27,9 +83,8 @@ public static class HarnessModelBridgeService
             ? File.ReadAllText(SettingsPath, Encoding.UTF8)
             : string.Empty;
 
-        // These are the only namespaces TuringDesk owns. Keep every other
-        // Harness/WebUI/plugin setting untouched so advanced users can continue
-        // using the official console without fighting the beginner settings UI.
+        // These are the only settings namespaces TuringDesk owns. Keep every
+        // other Harness/WebUI/plugin setting untouched.
         existing = RemoveTopLevelSection(existing, "llm-deepseek");
         existing = RemoveTopLevelSection(existing, "llm-pi-ai");
 
@@ -45,30 +100,85 @@ public static class HarnessModelBridgeService
         File.WriteAllText(SettingsPath, output, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
     }
 
-    public static void ApplyEnvironment(ProcessStartInfo startInfo, ModelSettings settings, string? apiKey)
+    private static void SynchronizeCredentials(ModelSettings settings, string? apiKey)
     {
-        startInfo.Environment["DSH_HOME"] = HarnessHome;
+        Directory.CreateDirectory(HarnessHome);
 
-        if (settings.ProviderId.Equals("deepseek", StringComparison.OrdinalIgnoreCase))
+        var existing = File.Exists(CredentialsPath)
+            ? File.ReadAllLines(CredentialsPath, Encoding.UTF8).ToList()
+            : new List<string>();
+
+        // TuringDesk manages only these two references. Leave credentials for
+        // other Harness providers exactly as the user/Models page stored them.
+        existing.RemoveAll(line => IsCredentialLine(line, DeepSeekCredentialRef)
+                                   || IsCredentialLine(line, CompatibleCredentialRef));
+
+        var reference = CredentialReference(settings);
+        var normalizedKey = apiKey?.Trim();
+        if (reference is not null && !string.IsNullOrWhiteSpace(normalizedKey))
         {
-            if (!string.IsNullOrWhiteSpace(apiKey))
-            {
-                startInfo.Environment["DEEPSEEK_API_KEY"] = apiKey.Trim();
-            }
-            if (!string.IsNullOrWhiteSpace(settings.BaseUrl))
-            {
-                startInfo.Environment["DEEPSEEK_BASE_URL"] = settings.BaseUrl.Trim();
-            }
+            while (existing.Count > 0 && string.IsNullOrWhiteSpace(existing[^1])) existing.RemoveAt(existing.Count - 1);
+            if (existing.Count > 0) existing.Add(string.Empty);
+            existing.Add($"{reference}: {YamlString(normalizedKey)}");
+        }
+
+        while (existing.Count > 0 && string.IsNullOrWhiteSpace(existing[^1])) existing.RemoveAt(existing.Count - 1);
+
+        if (existing.Count == 0)
+        {
+            if (File.Exists(CredentialsPath)) File.Delete(CredentialsPath);
             return;
         }
 
-        if (settings.ProviderId is "openai-compatible" or "ollama" or "lmstudio")
+        var output = string.Join(Environment.NewLine, existing) + Environment.NewLine;
+        AtomicWrite(CredentialsPath, output);
+    }
+
+    private static string? CredentialReference(ModelSettings settings)
+    {
+        if (settings.ProviderId.Equals("deepseek", StringComparison.OrdinalIgnoreCase))
+            return DeepSeekCredentialRef;
+
+        return settings.ProviderId is "openai-compatible" or "ollama" or "lmstudio"
+            ? CompatibleCredentialRef
+            : null;
+    }
+
+    private static bool IsCredentialLine(string line, string reference)
+    {
+        var trimmed = line.TrimStart();
+        return trimmed.StartsWith(reference + ":", StringComparison.Ordinal);
+    }
+
+    private static void AtomicWrite(string path, string content)
+    {
+        var directory = Path.GetDirectoryName(path)!;
+        var temp = Path.Combine(directory, $".{Path.GetFileName(path)}.{Environment.ProcessId}.{Guid.NewGuid():N}.tmp");
+        File.WriteAllText(temp, content, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+        try
         {
-            if (!string.IsNullOrWhiteSpace(apiKey))
-            {
-                startInfo.Environment["TURINGDESK_MODEL_API_KEY"] = apiKey.Trim();
-            }
+            File.Move(temp, path, overwrite: true);
         }
+        finally
+        {
+            if (File.Exists(temp)) File.Delete(temp);
+        }
+    }
+
+    private static string ParseYamlScalar(string raw)
+    {
+        if (raw.StartsWith('"') && raw.EndsWith('"'))
+        {
+            return JsonSerializer.Deserialize<string>(raw) ?? string.Empty;
+        }
+
+        if (raw.Length >= 2 && raw[0] == '\'' && raw[^1] == '\'')
+        {
+            return raw[1..^1].Replace("''", "'", StringComparison.Ordinal);
+        }
+
+        var comment = raw.IndexOf(" #", StringComparison.Ordinal);
+        return (comment >= 0 ? raw[..comment] : raw).Trim();
     }
 
     private static string BuildManagedSection(ModelSettings settings)
