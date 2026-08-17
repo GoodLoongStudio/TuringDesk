@@ -99,12 +99,12 @@ jobs:
 
       - name: Build and verify native ARM64 MSI
         shell: pwsh
-        run: ./scripts/package-installer.ps1 -Version "v0.12.0" -RuntimeIdentifier "win-arm64"
+        run: ./scripts/package-installer.ps1 -Version "v0.14.2" -RuntimeIdentifier "win-arm64"
 
       - name: Verify MSI artifact
         shell: pwsh
         run: |
-          $msi = Resolve-Path "artifacts/TuringDesk-v0.12.0-win-arm64.msi"
+          $msi = Resolve-Path "artifacts/TuringDesk-v0.14.2-win-arm64.msi"
           $size = (Get-Item $msi).Length
           Write-Host "MSI: $msi"
           Write-Host "Size: $size bytes"
@@ -113,9 +113,9 @@ jobs:
       - name: Upload native ARM64 Windows installer
         uses: actions/upload-artifact@v4
         with:
-          name: TuringDesk-v0.12.0-win-arm64-installer
+          name: TuringDesk-v0.14.2-win-arm64-installer
           path: |
-            artifacts/TuringDesk-v0.12.0-win-arm64.msi
-            artifacts/TuringDesk-v0.12.0-win-arm64/BUILD-INFO.txt
+            artifacts/TuringDesk-v0.14.2-win-arm64.msi
+            artifacts/TuringDesk-v0.14.2-win-arm64/BUILD-INFO.txt
           if-no-files-found: error
           retention-days: 30
