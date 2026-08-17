@@ -37,6 +37,7 @@ public partial class SceneRendererControl : UserControl
         _stopped = false;
         Root.Visibility = Visibility.Visible;
         ApplyStaticBackground(appearance);
+        ConfigureGpuSurface(scene, appearance);
 
         switch (scene.Kind)
         {
@@ -69,6 +70,7 @@ public partial class SceneRendererControl : UserControl
                 _ = SetWebPlaybackStateAsync(paused: true);
                 break;
             default:
+                GpuSurface.SetPaused(true);
                 PauseBuiltInAnimations();
                 PauseSceneGraphAnimations();
                 break;
@@ -88,6 +90,7 @@ public partial class SceneRendererControl : UserControl
                 _ = SetWebPlaybackStateAsync(paused: false);
                 break;
             default:
+                GpuSurface.SetPaused(false);
                 ResumeBuiltInAnimations();
                 ResumeSceneGraphAnimations();
                 break;
@@ -100,6 +103,7 @@ public partial class SceneRendererControl : UserControl
         _stopped = true;
         StopBuiltInAnimations();
         StopSceneGraph();
+        GpuSurface.Visibility = Visibility.Collapsed;
         try { VideoPlayer.Stop(); } catch { }
         VideoPlayer.Source = null;
         VideoPlayer.Visibility = Visibility.Collapsed;
@@ -128,6 +132,19 @@ public partial class SceneRendererControl : UserControl
     {
         StaticBackground.Background = WallpaperService.CreateWallpaperBrush(appearance)
             ?? new SolidColorBrush(Color.FromRgb(8, 10, 16));
+    }
+
+    private void ConfigureGpuSurface(SceneManifest scene, ShellAppearanceSettings appearance)
+    {
+        if (scene.Kind != SceneKind.Scene)
+        {
+            GpuSurface.Visibility = Visibility.Collapsed;
+            return;
+        }
+
+        var preset = scene.Tags.FirstOrDefault(tag => tag is "aurora" or "neon" or "orbit") ?? "aurora";
+        GpuSurface.Configure(preset, appearance.SceneIntensity, appearance.SceneMotionEnabled);
+        GpuSurface.Visibility = Visibility.Visible;
     }
 
     private void LoadScene(SceneManifest scene, ShellAppearanceSettings appearance)
@@ -220,6 +237,7 @@ public partial class SceneRendererControl : UserControl
 
         BuiltInScene.Visibility = Visibility.Collapsed;
         SceneGraphCanvas.Visibility = Visibility.Collapsed;
+        GpuSurface.Visibility = Visibility.Collapsed;
         WebPlayer.Visibility = Visibility.Collapsed;
         VideoPlayer.Visibility = Visibility.Visible;
         VideoPlayer.Stretch = scene.Fit switch
@@ -245,6 +263,7 @@ public partial class SceneRendererControl : UserControl
 
         BuiltInScene.Visibility = Visibility.Collapsed;
         SceneGraphCanvas.Visibility = Visibility.Collapsed;
+        GpuSurface.Visibility = Visibility.Collapsed;
         VideoPlayer.Visibility = Visibility.Collapsed;
         WebPlayer.Visibility = Visibility.Visible;
 
