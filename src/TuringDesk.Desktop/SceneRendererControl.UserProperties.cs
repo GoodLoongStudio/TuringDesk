@@ -54,23 +54,19 @@ public partial class SceneRendererControl
     {
         if (_scene?.Kind != SceneKind.Web || WebPlayer.CoreWebView2 is null) return;
 
-        // Wallpaper Engine-compatible user-property shape: each key receives an
-        // object with a `value` member. TuringDesk also emits its own event so a
-        // web wallpaper can support both APIs without branching its entire app.
         var compatible = settings.Properties.ToDictionary(
             pair => pair.Key,
             pair => new Dictionary<string, object?> { ["value"] = pair.Value },
             StringComparer.OrdinalIgnoreCase);
         var json = JsonSerializer.Serialize(compatible);
-        var script = $"""
-            (() => {{
-              const properties = {json};
-              if (window.wallpaperPropertyListener && typeof window.wallpaperPropertyListener.applyUserProperties === 'function') {{
-                window.wallpaperPropertyListener.applyUserProperties(properties);
-              }}
-              window.dispatchEvent(new CustomEvent('turingdesk-properties', {{ detail: properties }}));
-            }})();
-            """;
+        var script =
+            "(() => {" +
+            "const properties=" + json + ";" +
+            "if(window.wallpaperPropertyListener&&typeof window.wallpaperPropertyListener.applyUserProperties==='function'){" +
+            "window.wallpaperPropertyListener.applyUserProperties(properties);" +
+            "}" +
+            "window.dispatchEvent(new CustomEvent('turingdesk-properties',{detail:properties}));" +
+            "})();";
         try { await WebPlayer.CoreWebView2.ExecuteScriptAsync(script); } catch { }
     }
 }
