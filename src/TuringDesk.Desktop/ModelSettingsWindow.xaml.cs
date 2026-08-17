@@ -81,6 +81,8 @@ public partial class ModelSettingsWindow : Window
         {
             var settings = BuildSettings();
             var key = ApiKeyBox.Password;
+            StatusText.Text = "正在保存统一模型配置并同步 DeepSeek Harness…";
+
             var applied = await _runtime.ConfigureModelAsync(settings, key);
             if (applied is null)
             {
@@ -88,7 +90,23 @@ public partial class ModelSettingsWindow : Window
                 return;
             }
 
+            // Persist exactly once. Both the native runtime and bundled Harness
+            // read this same settings file + Windows Credential Manager secret.
             await _store.SaveAsync(settings, key);
+
+            // Harness may already have started during App bootstrap. Restart the
+            // owned process so the freshly saved shared API key/config becomes
+            // active immediately instead of requiring an application restart.
+            try
+            {
+                await HarnessWebUiService.RestartWithSavedConfigurationAsync();
+            }
+            catch (Exception harnessError)
+            {
+                StatusText.Text = $"模型已保存，但 Harness 重新加载失败：{harnessError.Message}";
+                return;
+            }
+
             SavedSettings = settings with { HasApiKey = !string.IsNullOrWhiteSpace(key) };
             DialogResult = true;
         }
