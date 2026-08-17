@@ -87,6 +87,24 @@ jobs:
             throw "$file must remain ASCII-safe because the MSI invokes it with Windows PowerShell 5.1."
           }
 
+      - name: Verify v0.14 desktop UX contract
+        shell: pwsh
+        run: |
+          if (Test-Path "src/TuringDesk.Desktop/AgentOrbWindow.xaml") { throw "Legacy AgentOrbWindow.xaml must not ship in v0.14" }
+          if (Test-Path "src/TuringDesk.Desktop/AgentOrbWindow.xaml.cs") { throw "Legacy AgentOrbWindow.xaml.cs must not ship in v0.14" }
+          foreach ($required in @(
+            "src/TuringDesk.Desktop/DesktopSearchBarWindow.xaml",
+            "src/TuringDesk.Desktop/DesktopSearchBarWindow.xaml.cs",
+            "src/TuringDesk.Desktop/Services/DesktopSearchReservedArea.cs",
+            "src/TuringDesk.Desktop/Services/HarnessModelBridgeService.cs",
+            "docs/V0.14-SEARCH-DESKTOP.md"
+          )) {
+            if (-not (Test-Path $required)) { throw "Missing v0.14 UX source: $required" }
+          }
+          $mode = Get-Content "src/TuringDesk.Desktop/MainWindow.EnhancementMode.cs" -Raw
+          if ($mode -notmatch "DesktopSearchBarWindow") { throw "Enhancement mode is not wired to DesktopSearchBarWindow" }
+          if ($mode -match "AgentOrbWindow") { throw "Enhancement mode still references legacy AgentOrbWindow" }
+
       - name: Build Desktop and ShellHost with embedded application icons
         shell: pwsh
         run: |
@@ -103,12 +121,12 @@ jobs:
 
       - name: Build and verify native ARM64 MSI
         shell: pwsh
-        run: ./scripts/package-installer.ps1 -Version "v0.13.1" -RuntimeIdentifier "win-arm64"
+        run: ./scripts/package-installer.ps1 -Version "v0.14.0" -RuntimeIdentifier "win-arm64"
 
       - name: Verify MSI artifact
         shell: pwsh
         run: |
-          $msi = Resolve-Path "artifacts/TuringDesk-v0.13.1-win-arm64.msi"
+          $msi = Resolve-Path "artifacts/TuringDesk-v0.14.0-win-arm64.msi"
           $size = (Get-Item $msi).Length
           Write-Host "MSI: $msi"
           Write-Host "Size: $size bytes"
@@ -117,9 +135,9 @@ jobs:
       - name: Upload native ARM64 Windows installer
         uses: actions/upload-artifact@v4
         with:
-          name: TuringDesk-v0.13.1-win-arm64-installer
+          name: TuringDesk-v0.14.0-win-arm64-installer
           path: |
-            artifacts/TuringDesk-v0.13.1-win-arm64.msi
-            artifacts/TuringDesk-v0.13.1-win-arm64/BUILD-INFO.txt
+            artifacts/TuringDesk-v0.14.0-win-arm64.msi
+            artifacts/TuringDesk-v0.14.0-win-arm64/BUILD-INFO.txt
           if-no-files-found: error
           retention-days: 30
