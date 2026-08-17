@@ -6,8 +6,8 @@ namespace TuringDesk.Desktop.Services;
 /// <summary>
 /// Hosts TuringDesk render windows inside Explorer's wallpaper layer while
 /// Explorer keeps ownership of desktop icons, taskbar, tray and context menus.
-/// Supports both the classic top-level WorkerW layout and the Windows 11
-/// raised-desktop layout where SHELLDLL_DefView/WorkerW live under Progman.
+/// Supports both the classic top-level WorkerW layout and newer Windows 11
+/// layouts where SHELLDLL_DefView/WorkerW may live under Progman.
 /// </summary>
 internal static class ExplorerDesktopHost
 {
@@ -19,15 +19,17 @@ internal static class ExplorerDesktopHost
     private const long WsExTransparent = 0x00000020L;
     private const long WsExToolWindow = 0x00000080L;
     private const long WsExAppWindow = 0x00040000L;
-    private const long WsExLayered = 0x00080000L;
     private const long WsExNoActivate = 0x08000000L;
 
     private const uint SmtoNormal = 0x0000;
     private const uint SwpNoActivate = 0x0010;
     private const uint SwpFrameChanged = 0x0020;
     private const uint SwpShowWindow = 0x0040;
-    private const uint LwaAlpha = 0x00000002;
     private const int SwShowNoActivate = 4;
+
+    private const uint RdwInvalidate = 0x0001;
+    private const uint RdwUpdatenow = 0x0100;
+    private const uint RdwAllChildren = 0x0080;
 
     private const int SmXVirtualScreen = 76;
     private const int SmYVirtualScreen = 77;
@@ -57,30 +59,20 @@ internal static class ExplorerDesktopHost
         style |= WsChild;
         SetWindowStyle(windowHandle, GwlStyle, style);
 
+        // Preserve WPF's own layered-window state. Window.Opacity can cause WPF
+        // to manage WS_EX_LAYERED internally; forcibly adding/removing that flag
+        // after HWND creation can produce an attached-but-invisible render target.
         var exStyle = GetWindowStyle(windowHandle, GwlExStyle);
         exStyle |= WsExToolWindow | WsExNoActivate | WsExTransparent;
         exStyle &= ~WsExAppWindow;
-        if (target.RequiresLayeredWindow)
-        {
-            exStyle |= WsExLayered;
-        }
-        else
-        {
-            exStyle &= ~WsExLayered;
-        }
         SetWindowStyle(windowHandle, GwlExStyle, exStyle);
 
         Marshal.SetLastPInvokeError(0);
         _ = SetParent(windowHandle, target.Parent);
         if (Marshal.GetLastPInvokeError() != 0) return false;
 
-        if (target.RequiresLayeredWindow)
-        {
-            _ = SetLayeredWindowAttributes(windowHandle, 0, 255, LwaAlpha);
-        }
-
         _ = ShowWindow(windowHandle, SwShowNoActivate);
-        return PositionInHost(
+        var positioned = PositionInHost(
             windowHandle,
             target.Parent,
             target.InsertAfter,
@@ -89,6 +81,17 @@ internal static class ExplorerDesktopHost
             width,
             height,
             frameChanged: true);
+
+        if (positioned)
+        {
+            _ = RedrawWindow(
+                windowHandle,
+                IntPtr.Zero,
+                IntPtr.Zero,
+                RdwInvalidate | RdwUpdatenow | RdwAllChildren);
+        }
+
+        return positioned;
     }
 
     public static bool IsAttached(IntPtr windowHandle)
@@ -126,7 +129,14 @@ internal static class ExplorerDesktopHost
         if (windowHandle == IntPtr.Zero || !IsWindow(windowHandle)) return "window-unavailable";
         var parent = GetParent(windowHandle);
         if (parent == IntPtr.Zero || !IsWindow(parent)) return "not-attached";
+
         var parentClass = GetClassName(parent);
+        var grandParent = GetParent(parent);
+        if (grandParent != IntPtr.Zero && IsWindow(grandParent))
+        {
+            return $"{parentClass}:0x{parent.ToInt64():X} <- {GetClassName(grandParent)}:0x{grandParent.ToInt64():X}";
+        }
+
         return $"{parentClass}:0x{parent.ToInt64():X}";
     }
 
@@ -144,7 +154,7 @@ internal static class ExplorerDesktopHost
 
         // Child HWND coordinates are relative to the parent's client area. Use
         // MapWindowPoints instead of subtracting top-level window rectangles;
-        // this also handles negative coordinates and mixed multi-monitor layouts.
+        // this handles negative coordinates and mixed multi-monitor layouts.
         var origin = new Point { X = screenX, Y = screenY };
         _ = MapWindowPoints(IntPtr.Zero, host, ref origin, 1);
 
@@ -169,56 +179,67 @@ internal static class ExplorerDesktopHost
 
         RaiseDesktop(progman);
 
-        // Windows 11 24H2+ may keep SHELLDLL_DefView directly under Progman.
-        // In that raised-desktop layout, parent our child directly to Progman
-        // and place it immediately below the icon view in child Z-order.
-        var directDefView = FindWindowEx(progman, IntPtr.Zero, "SHELLDLL_DefView", null);
-        if (directDefView != IntPtr.Zero)
+        // IMPORTANT: always prefer a dedicated WorkerW wallpaper host. On newer
+        // Windows 11 builds SHELLDLL_DefView can be a direct Progman child while
+        // Explorer still creates a separate WorkerW for wallpaper content. The
+        // previous implementation returned Progman immediately in that layout;
+        // SetParent then succeeded but WPF could remain hidden behind Explorer's
+        // actual wallpaper surface. Search every WorkerW path first.
+        var wallpaperWorker = FindTopLevelWallpaperWorker();
+        if (wallpaperWorker != IntPtr.Zero)
         {
-            return new DesktopHostTarget(progman, directDefView, RequiresLayeredWindow: true);
+            return new DesktopHostTarget(wallpaperWorker, HwndBottom);
         }
 
-        // Classic layout: SHELLDLL_DefView lives in a top-level WorkerW and the
-        // following WorkerW is the wallpaper layer used by dynamic wallpapers.
+        wallpaperWorker = FindProgmanChildWallpaperWorker(progman);
+        if (wallpaperWorker != IntPtr.Zero)
+        {
+            return new DesktopHostTarget(wallpaperWorker, HwndBottom);
+        }
+
+        // Last-resort compatibility path. Keep the render child immediately
+        // below Explorer's icon view, but do not mutate WPF's layered-window bit.
+        var directDefView = FindWindowEx(progman, IntPtr.Zero, "SHELLDLL_DefView", null);
+        return directDefView != IntPtr.Zero
+            ? new DesktopHostTarget(progman, directDefView)
+            : null;
+    }
+
+    private static IntPtr FindTopLevelWallpaperWorker()
+    {
         var wallpaperWorker = IntPtr.Zero;
         _ = EnumWindows((topLevel, _) =>
         {
             var shellView = FindWindowEx(topLevel, IntPtr.Zero, "SHELLDLL_DefView", null);
             if (shellView == IntPtr.Zero) return true;
 
+            // The WorkerW immediately following the window that owns DefView is
+            // the classic Explorer wallpaper host. This also handles Win11 builds
+            // where DefView is directly under top-level Progman.
             var worker = FindWindowEx(IntPtr.Zero, topLevel, "WorkerW", null);
             if (worker == IntPtr.Zero) return true;
 
             wallpaperWorker = worker;
             return false;
         }, IntPtr.Zero);
+        return wallpaperWorker;
+    }
 
-        if (wallpaperWorker != IntPtr.Zero)
-        {
-            return new DesktopHostTarget(wallpaperWorker, HwndBottom, RequiresLayeredWindow: false);
-        }
-
-        // Some recent builds create WorkerW as a Progman child. Prefer a child
-        // WorkerW that does not itself host SHELLDLL_DefView.
+    private static IntPtr FindProgmanChildWallpaperWorker(IntPtr progman)
+    {
         var childAfter = IntPtr.Zero;
         while (true)
         {
             var worker = FindWindowEx(progman, childAfter, "WorkerW", null);
-            if (worker == IntPtr.Zero) break;
+            if (worker == IntPtr.Zero) return IntPtr.Zero;
+
             if (FindWindowEx(worker, IntPtr.Zero, "SHELLDLL_DefView", null) == IntPtr.Zero)
             {
-                return new DesktopHostTarget(worker, HwndBottom, RequiresLayeredWindow: false);
+                return worker;
             }
+
             childAfter = worker;
         }
-
-        // Final safe fallback: if Explorer exposes its icon view under Progman
-        // after the probing messages, use the raised-desktop path rather than
-        // claiming success against an unrelated WorkerW.
-        directDefView = FindWindowEx(progman, IntPtr.Zero, "SHELLDLL_DefView", null);
-        return directDefView != IntPtr.Zero
-            ? new DesktopHostTarget(progman, directDefView, RequiresLayeredWindow: true)
-            : null;
     }
 
     private static void RaiseDesktop(IntPtr progman)
@@ -253,7 +274,7 @@ internal static class ExplorerDesktopHost
         }
     }
 
-    private sealed record DesktopHostTarget(IntPtr Parent, IntPtr InsertAfter, bool RequiresLayeredWindow);
+    private sealed record DesktopHostTarget(IntPtr Parent, IntPtr InsertAfter);
 
     private delegate bool EnumWindowsProc(IntPtr hwnd, IntPtr lParam);
 
@@ -307,9 +328,9 @@ internal static class ExplorerDesktopHost
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool ShowWindow(IntPtr hwnd, int command);
 
-    [DllImport("user32.dll", SetLastError = true)]
+    [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool SetLayeredWindowAttributes(IntPtr hwnd, uint colorKey, byte alpha, uint flags);
+    private static extern bool RedrawWindow(IntPtr hwnd, IntPtr updateRect, IntPtr updateRegion, uint flags);
 
     [DllImport("user32.dll")]
     private static extern int GetSystemMetrics(int index);
