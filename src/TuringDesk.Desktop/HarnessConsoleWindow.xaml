@@ -4,8 +4,8 @@
         xmlns:local="clr-namespace:TuringDesk.Desktop"
         xmlns:wv2="clr-namespace:Microsoft.Web.WebView2.Wpf;assembly=Microsoft.Web.WebView2.Wpf"
         Title="TuringDesk · Agent 控制台"
-        Width="1180" Height="780"
-        MinWidth="900" MinHeight="620"
+        Width="980" Height="660"
+        MinWidth="760" MinHeight="520"
         WindowStartupLocation="CenterOwner"
         WindowStyle="None"
         ResizeMode="CanResize"
@@ -52,7 +52,7 @@
             <wv2:WebView2 x:Name="HarnessView" Visibility="Collapsed"/>
 
             <Grid x:Name="LoadingPanel" Background="{StaticResource WindowBrush}">
-                <StackPanel Width="440" HorizontalAlignment="Center" VerticalAlignment="Center">
+                <StackPanel Width="420" HorizontalAlignment="Center" VerticalAlignment="Center">
                     <Border Width="58" Height="58" CornerRadius="16" Background="{StaticResource AccentSoftBrush}" HorizontalAlignment="Center" Margin="0,0,0,18">
                         <local:ShellIcon Kind="Agent" Width="28" Height="28" Foreground="{StaticResource AccentBrush}" HorizontalAlignment="Center" VerticalAlignment="Center"/>
                     </Border>
