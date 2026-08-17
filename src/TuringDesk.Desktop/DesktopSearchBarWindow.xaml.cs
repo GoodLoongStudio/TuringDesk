@@ -16,12 +16,14 @@ public partial class DesktopSearchBarWindow : Window
     private const uint ModControl = 0x0002;
     private const uint ModNoRepeat = 0x4000;
     private const uint VkSpace = 0x20;
+    private static readonly TimeSpan SearchResponseTimeout = TimeSpan.FromSeconds(30);
 
     private readonly MainWindow _host;
     private HwndSource? _source;
     private bool _hotkeyRegistered;
     private bool _fallbackHotkeyRegistered;
     private bool _busy;
+    private CancellationTokenSource? _activeRequest;
 
     public DesktopSearchBarWindow(MainWindow host)
     {
@@ -111,6 +113,10 @@ public partial class DesktopSearchBarWindow : Window
 
     private void OnClosed(object? sender, EventArgs e)
     {
+        _activeRequest?.Cancel();
+        _activeRequest?.Dispose();
+        _activeRequest = null;
+
         DesktopSearchReservedArea.Clear();
         var hwnd = new WindowInteropHelper(this).Handle;
         if ((_hotkeyRegistered || _fallbackHotkeyRegistered) && hwnd != IntPtr.Zero)
@@ -143,8 +149,8 @@ public partial class DesktopSearchBarWindow : Window
         if (e.Key == Key.Escape)
         {
             e.Handled = true;
-            CollapseReply();
-            SearchBox.Clear();
+            _activeRequest?.Cancel();
+            RestoreIdleState(clearText: true);
             Keyboard.ClearFocus();
             return;
         }
@@ -168,13 +174,24 @@ public partial class DesktopSearchBarWindow : Window
         ReplyDot.Fill = new SolidColorBrush(Color.FromRgb(127, 143, 255));
         ExpandReply();
 
+        var request = new CancellationTokenSource(SearchResponseTimeout);
+        _activeRequest = request;
+
         try
         {
-            var reply = await _host.SubmitSearchCommandAsync(prompt);
+            var reply = await _host.SubmitSearchCommandAsync(prompt, request.Token);
+            if (request.IsCancellationRequested) return;
+
             ReplyTitle.Text = "图灵";
             ReplyText.Text = string.IsNullOrWhiteSpace(reply) ? "没有返回内容。" : reply;
             ReplyDot.Fill = new SolidColorBrush(Color.FromRgb(99, 230, 190));
             SearchBox.Clear();
+        }
+        catch (OperationCanceledException) when (request.IsCancellationRequested)
+        {
+            // A desktop entry must never look permanently stuck. After 30 seconds
+            // (or Escape) cancel the request and restore the compact idle search UI.
+            RestoreIdleState(clearText: true);
         }
         catch (Exception error)
         {
@@ -184,11 +201,29 @@ public partial class DesktopSearchBarWindow : Window
         }
         finally
         {
+            if (ReferenceEquals(_activeRequest, request))
+            {
+                _activeRequest = null;
+            }
+            request.Dispose();
             _busy = false;
             SearchBox.IsEnabled = true;
-            SearchBox.Focus();
-            RefreshPosition();
+            if (IsVisible)
+            {
+                SearchBox.Focus();
+                RefreshPosition();
+            }
         }
+    }
+
+    private void RestoreIdleState(bool clearText)
+    {
+        if (clearText) SearchBox.Clear();
+        ReplyTitle.Text = "图灵";
+        ReplyText.Text = string.Empty;
+        CollapseReply();
+        SearchBox.IsEnabled = true;
+        _busy = false;
     }
 
     private void ExpandReply()
