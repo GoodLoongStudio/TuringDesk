@@ -67,8 +67,8 @@ internal sealed class SceneScriptRuntime : IDisposable
         try
         {
             _engine.Execute(source);
-            _hasInit = _engine.GetValue("init").IsCallable;
-            _hasUpdate = _engine.GetValue("update").IsCallable;
+            _hasInit = _engine.GetValue("init").IsCallable();
+            _hasUpdate = _engine.GetValue("update").IsCallable();
         }
         catch (Exception error) when (error is JavaScriptException or TimeoutException or MemoryLimitExceededException or StatementsCountOverflowException or RecursionDepthOverflowException)
         {
