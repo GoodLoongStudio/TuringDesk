@@ -6,6 +6,10 @@ param(
 
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $PSScriptRoot
+$ToolsRoot = Join-Path $Root ".tools\quick-verify"
+$NodeVersion = "22.19.0"
+$PnpmVersion = "11.7.0"
+$ForceBootstrap = $env:TURINGDESK_FORCE_BOOTSTRAP -eq "1"
 Set-Location $Root
 
 function Resolve-CommandPath([string]$Name, [string[]]$Candidates = @()) {
@@ -38,7 +42,8 @@ function Resolve-Git {
             ForEach-Object {
                 @(
                     (Join-Path $_.FullName "resources\app\git\cmd\git.exe"),
-                    (Join-Path $_.FullName "resources\app\git\bin\git.exe")
+                    (Join-Path $_.FullName "resources\app\git\bin\git.exe"),
+                    (Join-Path $_.FullName "resources\app\git\mingw64\bin\git.exe")
                 )
             } |
             Where-Object { Test-Path $_ } |
@@ -49,29 +54,147 @@ function Resolve-Git {
     return $null
 }
 
-function Require-Command([string]$Name, [string[]]$Candidates = @()) {
-    $resolved = Resolve-CommandPath $Name $Candidates
-    if (-not $resolved) {
-        throw "Missing required command: $Name"
+function Get-WindowsArchitecture {
+    $osArch = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString()
+    switch ($osArch) {
+        "Arm64" { return "arm64" }
+        "X64" { return "x64" }
+        default { throw "Unsupported Windows architecture for quick verification: $osArch" }
     }
-    return $resolved
+}
+
+function Test-NodeVersion([string]$NodePath) {
+    if (-not $NodePath -or -not (Test-Path $NodePath)) { return $false }
+    try {
+        $versionText = (& $NodePath -p "process.versions.node").Trim()
+        return ([version]$versionText -ge [version]$NodeVersion)
+    }
+    catch {
+        return $false
+    }
+}
+
+function Install-LocalNode([string]$Architecture) {
+    $nodeRoot = Join-Path $ToolsRoot "node-v$NodeVersion-win-$Architecture"
+    $nodeExe = Join-Path $nodeRoot "node.exe"
+    if ((Test-Path $nodeExe) -and (Test-NodeVersion $nodeExe)) {
+        return $nodeExe
+    }
+
+    New-Item -ItemType Directory -Force -Path $ToolsRoot | Out-Null
+    $zipPath = Join-Path $ToolsRoot "node-v$NodeVersion-win-$Architecture.zip"
+    $download = "https://nodejs.org/dist/v$NodeVersion/node-v$NodeVersion-win-$Architecture.zip"
+
+    Write-Host "Node.js $NodeVersion was not found. Bootstrapping local Node.js $Architecture..." -ForegroundColor Yellow
+    Write-Host "  $download" -ForegroundColor DarkGray
+    if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
+    Invoke-WebRequest $download -OutFile $zipPath -UseBasicParsing
+
+    if (Test-Path $nodeRoot) { Remove-Item $nodeRoot -Recurse -Force }
+    Expand-Archive $zipPath -DestinationPath $ToolsRoot -Force
+    Remove-Item $zipPath -Force -ErrorAction SilentlyContinue
+
+    if (-not (Test-Path $nodeExe)) { throw "Local Node.js bootstrap did not produce $nodeExe" }
+    return $nodeExe
+}
+
+function Resolve-Node([string]$Architecture) {
+    if (-not $ForceBootstrap) {
+        $candidate = Resolve-CommandPath "node" @(
+            "$env:ProgramFiles\nodejs\node.exe",
+            "$env:LOCALAPPDATA\Programs\nodejs\node.exe"
+        )
+        if ($candidate -and (Test-NodeVersion $candidate)) {
+            return $candidate
+        }
+    }
+
+    return Install-LocalNode $Architecture
+}
+
+function Resolve-Npm([string]$NodePath) {
+    $nodeDir = Split-Path $NodePath -Parent
+    foreach ($candidate in @(
+        (Join-Path $nodeDir "npm.cmd"),
+        (Resolve-CommandPath "npm" @("$env:ProgramFiles\nodejs\npm.cmd"))
+    )) {
+        if ($candidate -and (Test-Path $candidate)) { return $candidate }
+    }
+    throw "npm was not found next to Node.js: $NodePath"
+}
+
+function Install-LocalPnpm([string]$NpmPath) {
+    $pnpmRoot = Join-Path $ToolsRoot "pnpm-$PnpmVersion"
+    $pnpmCmd = Join-Path $pnpmRoot "pnpm.cmd"
+
+    if (-not $ForceBootstrap -and (Test-Path $pnpmCmd)) {
+        try {
+            if ((& $pnpmCmd --version).Trim() -eq $PnpmVersion) { return $pnpmCmd }
+        }
+        catch {
+            # Reinstall below.
+        }
+    }
+
+    Write-Host "pnpm $PnpmVersion was not found. Bootstrapping local pnpm..." -ForegroundColor Yellow
+    if (Test-Path $pnpmRoot) { Remove-Item $pnpmRoot -Recurse -Force }
+    New-Item -ItemType Directory -Force -Path $pnpmRoot | Out-Null
+    & $NpmPath install --global --prefix $pnpmRoot "pnpm@$PnpmVersion" --no-audit --no-fund
+    if ($LASTEXITCODE -ne 0) { throw "pnpm bootstrap failed with exit code $LASTEXITCODE" }
+    if (-not (Test-Path $pnpmCmd)) { throw "pnpm bootstrap did not produce $pnpmCmd" }
+    return $pnpmCmd
+}
+
+function Test-Dotnet8Sdk([string]$DotnetPath) {
+    if (-not $DotnetPath -or -not (Test-Path $DotnetPath)) { return $false }
+    try {
+        $sdks = & $DotnetPath --list-sdks
+        return [bool]($sdks | Where-Object { $_ -match '^8\.' } | Select-Object -First 1)
+    }
+    catch {
+        return $false
+    }
+}
+
+function Install-LocalDotnet8([string]$Architecture) {
+    $dotnetRoot = Join-Path $ToolsRoot "dotnet8-$Architecture"
+    $dotnetExe = Join-Path $dotnetRoot "dotnet.exe"
+    if ((Test-Path $dotnetExe) -and (Test-Dotnet8Sdk $dotnetExe)) {
+        return $dotnetExe
+    }
+
+    New-Item -ItemType Directory -Force -Path $ToolsRoot | Out-Null
+    $installer = Join-Path $ToolsRoot "dotnet-install.ps1"
+    Write-Host ".NET 8 SDK was not found. Bootstrapping a local SDK ($Architecture)..." -ForegroundColor Yellow
+    Invoke-WebRequest "https://dot.net/v1/dotnet-install.ps1" -OutFile $installer -UseBasicParsing
+
+    if (Test-Path $dotnetRoot) { Remove-Item $dotnetRoot -Recurse -Force }
+    $powershell = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
+    & $powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File $installer -Channel 8.0 -Architecture $Architecture -InstallDir $dotnetRoot -NoPath
+    if ($LASTEXITCODE -ne 0) { throw ".NET 8 SDK bootstrap failed with exit code $LASTEXITCODE" }
+    if (-not (Test-Dotnet8Sdk $dotnetExe)) { throw "Local .NET bootstrap did not produce a usable .NET 8 SDK." }
+    return $dotnetExe
+}
+
+function Resolve-Dotnet8([string]$Architecture) {
+    if (-not $ForceBootstrap) {
+        $candidate = Resolve-CommandPath "dotnet" @(
+            "$env:ProgramFiles\dotnet\dotnet.exe"
+        )
+        if ($candidate -and (Test-Dotnet8Sdk $candidate)) {
+            return $candidate
+        }
+    }
+
+    return Install-LocalDotnet8 $Architecture
 }
 
 Write-Host "=== TuringDesk quick verification (main) ===" -ForegroundColor Cyan
+$architecture = Get-WindowsArchitecture
 $git = Resolve-Git
-$dotnet = Require-Command "dotnet" @(
-    "$env:ProgramFiles\dotnet\dotnet.exe"
-)
-$node = Require-Command "node" @(
-    "$env:ProgramFiles\nodejs\node.exe",
-    "$env:LOCALAPPDATA\Programs\nodejs\node.exe"
-)
-$corepack = Resolve-CommandPath "corepack" @(
-    "$env:ProgramFiles\nodejs\corepack.cmd",
-    "$env:ProgramFiles\nodejs\corepack.ps1"
-)
-if (-not $corepack) { throw "Missing required command: corepack (install Node.js 22.19+ with Corepack)" }
 
+# Update source first when Git is available. Dependency bootstrap happens after
+# the pull so the script itself can evolve without requiring local prerequisites.
 if ($git) {
     Write-Host "Git: $git" -ForegroundColor DarkGray
     if (-not $SkipPull) {
@@ -90,13 +213,21 @@ if ($git) {
 }
 else {
     if (-not $SkipPull) {
-        Write-Host "Git was not found in PATH, Git for Windows, or GitHub Desktop. Using the current checkout without pulling." -ForegroundColor Yellow
-        Write-Host "If this folder came from GitHub Desktop, use Repository -> Pull origin first, then run QUICK-VERIFY.cmd again." -ForegroundColor Yellow
+        Write-Host "Git was not found. Continuing with the current checkout instead of failing." -ForegroundColor Yellow
+        Write-Host "If you use GitHub Desktop, press Fetch origin / Pull origin before running this launcher." -ForegroundColor Yellow
     }
     $commit = "current-checkout"
 }
 
 Write-Host "Commit: $commit" -ForegroundColor Green
+Write-Host "Checking build prerequisites..." -ForegroundColor Cyan
+$node = Resolve-Node $architecture
+$npm = Resolve-Npm $node
+$pnpm = Install-LocalPnpm $npm
+$dotnet = Resolve-Dotnet8 $architecture
+Write-Host "Node: $((& $node -p 'process.versions.node').Trim()) [$node]" -ForegroundColor DarkGray
+Write-Host "pnpm: $((& $pnpm --version).Trim()) [$pnpm]" -ForegroundColor DarkGray
+Write-Host ".NET: $((& $dotnet --version).Trim()) [$dotnet]" -ForegroundColor DarkGray
 
 Write-Host "Stopping previous TuringDesk processes..." -ForegroundColor Cyan
 Get-Process TuringDesk.Desktop,TuringDesk.ShellHost -ErrorAction SilentlyContinue | Stop-Process -Force
@@ -120,15 +251,12 @@ if (Test-Path $statusPath) { Remove-Item $statusPath -Force }
 Write-Host "Building Runtime..." -ForegroundColor Cyan
 Push-Location (Join-Path $Root "runtime")
 try {
-    & $corepack enable
-    if ($LASTEXITCODE -ne 0) { throw "corepack enable failed" }
-
     if (-not $SkipRuntimeInstall) {
-        & $corepack pnpm install --no-frozen-lockfile
+        & $pnpm install --no-frozen-lockfile
         if ($LASTEXITCODE -ne 0) { throw "pnpm install failed" }
     }
 
-    & $corepack pnpm build
+    & $pnpm build
     if ($LASTEXITCODE -ne 0) { throw "Runtime build failed" }
 }
 finally {
@@ -136,6 +264,7 @@ finally {
 }
 
 Write-Host "Building Desktop Release..." -ForegroundColor Cyan
+$env:DOTNET_ROOT = Split-Path $dotnet -Parent
 & $dotnet build "src/TuringDesk.Desktop/TuringDesk.Desktop.csproj" --configuration Release
 if ($LASTEXITCODE -ne 0) { throw "Desktop build failed" }
 
