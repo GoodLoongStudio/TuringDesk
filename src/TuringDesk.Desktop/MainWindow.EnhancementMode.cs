@@ -8,18 +8,16 @@ namespace TuringDesk.Desktop;
 public partial class MainWindow
 {
     private readonly List<EnhancementWallpaperWindow> _enhancementWallpapers = [];
-    private AgentOrbWindow? _agentOrb;
+    private DesktopSearchBarWindow? _desktopSearchBar;
     private DispatcherTimer? _enhancementDisplayTimer;
     private string _enhancementDisplaySignature = string.Empty;
 
     /// <summary>
     /// Default TuringDesk mode: Explorer stays the Windows shell. Each physical
-    /// monitor gets its own wallpaper-engine child window so profiles can assign
-    /// independent scenes/playlists without replacing Explorer.
-    ///
-    /// MainWindow is only the background service/runtime host in this mode. The
-    /// old command-center window is intentionally never presented as a product UI;
-    /// users interact through the imported desktop scene, AI Orb and Desktop Library.
+    /// monitor gets its own wallpaper-engine child window while one top-center
+    /// search bar becomes the primary AI/desktop entry on the primary monitor.
+    /// MainWindow is an invisible runtime owner only; the legacy dashboard is not
+    /// presented to users in enhancement mode.
     /// </summary>
     internal void EnableEnhancementMode()
     {
@@ -29,10 +27,6 @@ public partial class MainWindow
         ShellSession.ExitRequested = false;
         Title = "TuringDesk · Desktop Runtime Host";
 
-        // Keep the legacy WPF control center completely out of the user's desktop.
-        // We still Show() the window once from App so WPF raises Loaded and starts
-        // the runtime/capability/speech services, but it is born off-screen and
-        // transparent and is hidden as soon as the desktop engine is attached.
         ShowInTaskbar = false;
         ShowActivated = false;
         WindowStartupLocation = WindowStartupLocation.Manual;
@@ -58,29 +52,24 @@ public partial class MainWindow
 
             RebuildEnhancementMonitors(force: true);
             _enhancementDisplayTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(3) };
-            _enhancementDisplayTimer.Tick += (_, _) => RebuildEnhancementMonitors(force: false);
+            _enhancementDisplayTimer.Tick += (_, _) =>
+            {
+                RebuildEnhancementMonitors(force: false);
+                _desktopSearchBar?.RefreshPosition();
+            };
             _enhancementDisplayTimer.Start();
-
-            _agentOrb = new AgentOrbWindow(this);
-            _agentOrb.Show();
 
             var attached = _enhancementWallpapers.Count(window => window.IsAttached);
             if (attached > 0)
             {
                 AddActivity("desktop", $"Desktop Engine attached on {attached}/{_enhancementWallpapers.Count} monitor(s); Explorer remains the Windows shell.");
-                ShellNotificationService.Publish(
-                    "TuringDesk AI Desktop 已就绪",
-                    _enhancementWallpapers.Count > 1
-                        ? $"{_enhancementWallpapers.Count} 块显示器已启用独立桌面引擎。按 Alt+Space 直接使用 AI。"
-                        : "桌面场景已接管背景层。按 Alt+Space 使用 AI，或从 Orb 打开桌面库。",
-                    "shell");
             }
             else
             {
-                AddActivity("desktop", "Explorer wallpaper host was unavailable. Agent entry remains available while the Windows desktop stays untouched.");
+                AddActivity("desktop", "Explorer wallpaper host was unavailable. Search/AI remains available while the Windows desktop stays untouched.");
                 ShellNotificationService.Publish(
                     "桌面引擎正在等待 Explorer",
-                    "Windows 桌面不受影响；AI 与语音仍可正常使用。",
+                    "Windows 桌面不受影响；顶部 AI 搜索和语音仍可正常使用。",
                     "warning");
             }
 
@@ -90,6 +79,15 @@ public partial class MainWindow
                 var setup = new FirstRunSetupWindow(_runtime, _modelStore);
                 setup.ShowDialog();
             }
+
+            _desktopSearchBar = new DesktopSearchBarWindow(this);
+            _desktopSearchBar.Show();
+            _desktopSearchBar.RefreshPosition();
+
+            ShellNotificationService.Publish(
+                "TuringDesk AI Desktop 已就绪",
+                "直接使用屏幕上方搜索框，或按 Alt+Space 聚焦。右侧设计按钮进入桌面库与综合设置。",
+                "shell");
 
             Hide();
         }), DispatcherPriority.ApplicationIdle);
@@ -113,6 +111,8 @@ public partial class MainWindow
             _enhancementWallpapers.Add(wallpaper);
             wallpaper.Show();
         }
+
+        _desktopSearchBar?.RefreshPosition();
     }
 
     private void EnhancementMode_Closing(object? sender, CancelEventArgs e)
@@ -128,10 +128,10 @@ public partial class MainWindow
         _enhancementDisplayTimer?.Stop();
         _enhancementDisplayTimer = null;
 
-        if (_agentOrb is not null)
+        if (_desktopSearchBar is not null)
         {
-            try { _agentOrb.Close(); } catch { }
-            _agentOrb = null;
+            try { _desktopSearchBar.Close(); } catch { }
+            _desktopSearchBar = null;
         }
 
         foreach (var wallpaper in _enhancementWallpapers.ToArray())
