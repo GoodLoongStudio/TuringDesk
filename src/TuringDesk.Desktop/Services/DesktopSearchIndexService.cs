@@ -196,17 +196,17 @@ public sealed class DesktopSearchIndexService : IDisposable
                 EnableRaisingEvents = true
             };
 
-            watcher.Created += (_, e) =>
+            watcher.Created += (sender, e) =>
             {
                 if (File.Exists(e.FullPath)) TryIndexFile(e.FullPath);
             };
-            watcher.Deleted += (_, e) => _files.TryRemove(e.FullPath, out _);
-            watcher.Renamed += (_, e) =>
+            watcher.Deleted += (sender, e) => _files.TryRemove(e.FullPath, out _);
+            watcher.Renamed += (sender, e) =>
             {
                 _files.TryRemove(e.OldFullPath, out _);
                 if (File.Exists(e.FullPath)) TryIndexFile(e.FullPath);
             };
-            watcher.Error += (_, _) =>
+            watcher.Error += (sender, e) =>
             {
                 if (!_lifetime.IsCancellationRequested)
                     _ = Task.Run(() => IndexTree(root, _lifetime.Token), _lifetime.Token);
