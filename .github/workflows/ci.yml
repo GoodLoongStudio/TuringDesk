@@ -20,8 +20,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22.19.0
-          cache: pnpm
-          cache-dependency-path: runtime/pnpm-lock.yaml
       - run: corepack enable
       - run: pnpm install --no-frozen-lockfile
       - run: pnpm typecheck
@@ -39,8 +37,6 @@ jobs:
         with:
           node-version: 22.19.0
           architecture: arm64
-          cache: pnpm
-          cache-dependency-path: runtime/pnpm-lock.yaml
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 8.0.x
