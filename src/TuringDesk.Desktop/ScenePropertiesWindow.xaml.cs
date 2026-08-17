@@ -1,5 +1,6 @@
 using Microsoft.Win32;
 using System.Globalization;
+using System.Text.Json;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -114,7 +115,7 @@ public partial class ScenePropertiesWindow : Window
             {
                 var combo = new ComboBox { Margin = new Thickness(0, 6, 0, 0), DisplayMemberPath = nameof(ScenePropertyOption.Label), SelectedValuePath = nameof(ScenePropertyOption.Value) };
                 combo.ItemsSource = definition.Options;
-                combo.SelectedValue = value?.ToString() ?? definition.Default?.ToString();
+                combo.SelectedValue = ToText(value) ?? definition.Default?.ToString();
                 if (combo.SelectedIndex < 0 && combo.Items.Count > 0) combo.SelectedIndex = 0;
                 editor = combo;
                 break;
@@ -124,7 +125,7 @@ public partial class ScenePropertiesWindow : Window
                 var grid = new Grid { Margin = new Thickness(0, 6, 0, 0) };
                 grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
                 grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-                var box = new TextBox { Text = value?.ToString() ?? string.Empty, IsReadOnly = true, Padding = new Thickness(8, 6, 8, 6) };
+                var box = new TextBox { Text = ToText(value) ?? string.Empty, IsReadOnly = true, Padding = new Thickness(8, 6, 8, 6) };
                 var button = new Button { Content = "浏览", Margin = new Thickness(6, 0, 0, 0), Padding = new Thickness(10, 5, 10, 5) };
                 button.Click += (_, _) =>
                 {
@@ -140,7 +141,7 @@ public partial class ScenePropertiesWindow : Window
             }
             case ScenePropertyKind.Shortcut:
             {
-                var box = new TextBox { Text = value?.ToString() ?? definition.Default?.ToString() ?? string.Empty, IsReadOnly = true, Margin = new Thickness(0, 6, 0, 0), Padding = new Thickness(8, 6, 8, 6), ToolTip = "点击后按一个快捷键组合" };
+                var box = new TextBox { Text = ToText(value) ?? definition.Default?.ToString() ?? string.Empty, IsReadOnly = true, Margin = new Thickness(0, 6, 0, 0), Padding = new Thickness(8, 6, 8, 6), ToolTip = "点击后按一个快捷键组合" };
                 box.PreviewKeyDown += (_, e) =>
                 {
                     e.Handled = true;
@@ -156,7 +157,7 @@ public partial class ScenePropertiesWindow : Window
             {
                 var box = new TextBox
                 {
-                    Text = value?.ToString() ?? definition.Default?.ToString() ?? string.Empty,
+                    Text = ToText(value) ?? definition.Default?.ToString() ?? string.Empty,
                     Margin = new Thickness(0, 6, 0, 0),
                     Padding = new Thickness(8, 6, 8, 6),
                     ToolTip = definition.Kind == ScenePropertyKind.Color ? "#RRGGBB 或 #AARRGGBB" : null
@@ -238,7 +239,8 @@ public partial class ScenePropertiesWindow : Window
     private static bool ToBool(object? value)
     {
         if (value is bool boolean) return boolean;
-        return bool.TryParse(value?.ToString(), out var parsed) && parsed;
+        if (value is JsonElement element && element.ValueKind is JsonValueKind.True or JsonValueKind.False) return element.GetBoolean();
+        return bool.TryParse(ToText(value), out var parsed) && parsed;
     }
 
     private static double ToDouble(object? value, double fallback)
@@ -247,7 +249,17 @@ public partial class ScenePropertiesWindow : Window
         if (value is double d) return d;
         if (value is float f) return f;
         if (value is int i) return i;
-        return double.TryParse(value?.ToString(), NumberStyles.Float, CultureInfo.InvariantCulture, out var parsed) ? parsed : fallback;
+        return double.TryParse(ToText(value), NumberStyles.Float, CultureInfo.InvariantCulture, out var parsed) ? parsed : fallback;
+    }
+
+    private static string? ToText(object? value)
+    {
+        if (value is null) return null;
+        if (value is JsonElement element)
+        {
+            return element.ValueKind == JsonValueKind.String ? element.GetString() : element.ToString();
+        }
+        return value.ToString();
     }
 
     private void TitleBar_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
