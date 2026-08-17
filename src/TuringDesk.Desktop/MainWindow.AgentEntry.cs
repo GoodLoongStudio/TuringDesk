@@ -1,24 +1,48 @@
+using System.Windows.Media;
+using TuringDesk.Desktop.Services;
+
 namespace TuringDesk.Desktop;
 
 public partial class MainWindow
 {
     /// <summary>
-    /// Entry point used by desktop-native lightweight surfaces such as the AI Orb.
-    /// It intentionally reuses the exact same Runtime/Harness path and floating
-    /// cards as the control-center command box instead of creating another agent.
+    /// Entry point used by the desktop-native top search bar. It reuses the
+    /// existing Runtime/Harness-backed chat path and floating trace cards while
+    /// returning the reply so the search bar can remain the primary conversation UI.
     /// </summary>
-    internal async Task SubmitExternalCommandAsync(string text)
+    internal async Task<string> SubmitSearchCommandAsync(string text)
     {
-        if (string.IsNullOrWhiteSpace(text)) return;
+        var prompt = text?.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(prompt)) return string.Empty;
 
         if (!Dispatcher.CheckAccess())
         {
-            await Dispatcher.InvokeAsync(() => SubmitExternalCommandAsync(text)).Task.Unwrap();
-            return;
+            return await Dispatcher.InvokeAsync(() => SubmitSearchCommandAsync(prompt)).Task.Unwrap();
         }
 
-        CommandBox.Text = text.Trim();
-        await SubmitCommandAsync();
+        AddActivity("you", prompt);
+        SetAgentState("正在理解你的请求…", TrimForUi(prompt, 120), Color.FromRgb(135, 150, 255));
+        AgentFloatingCardsService.Begin(DisplayManager.GetPrimary(), prompt);
+
+        var reply = await _runtime.ChatAsync(prompt);
+        if (reply is null)
+        {
+            const string offline = "AI Runtime 离线或当前模型无法响应。请从搜索框右侧的设置进入 AI 配置。";
+            AddActivity("ai", offline);
+            SetAgentState("这次没有完成", offline, Color.FromRgb(240, 125, 125));
+            AgentFloatingCardsService.Fail(offline);
+            return offline;
+        }
+
+        AddActivity("ai", reply);
+        SetAgentState("已完成", TrimForUi(reply, 150), Color.FromRgb(84, 214, 138));
+        AgentFloatingCardsService.Complete(reply);
+        return reply;
+    }
+
+    internal async Task SubmitExternalCommandAsync(string text)
+    {
+        _ = await SubmitSearchCommandAsync(text);
     }
 
     internal void RequestApplicationExit()
