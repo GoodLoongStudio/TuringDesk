@@ -1,0 +1,41 @@
+name: Quick Verify Windows
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: turingdesk-quick-verify-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quick-verify:
+    runs-on: windows-11-arm
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.19.0
+          architecture: arm64
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Parse quick verification launcher
+        shell: powershell
+        run: |
+          $file = "scripts/quick-verify.ps1"
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $file), [ref]$tokens, [ref]$errors) | Out-Null
+          if ($errors.Count -gt 0) {
+            $errors | ForEach-Object { Write-Error "${file}: $($_.Message)" }
+            throw "Windows PowerShell parser rejected quick-verify.ps1"
+          }
+
+      - name: Execute the same quick verification build path
+        shell: powershell
+        run: .\scripts\quick-verify.ps1 -SkipPull -BuildOnly
