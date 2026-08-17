@@ -96,6 +96,7 @@ jobs:
             "src/TuringDesk.Desktop/DesktopSearchBarWindow.xaml",
             "src/TuringDesk.Desktop/DesktopSearchBarWindow.xaml.cs",
             "src/TuringDesk.Desktop/Services/DesktopSearchReservedArea.cs",
+            "src/TuringDesk.Desktop/Services/DesktopWidgetZOrderService.cs",
             "src/TuringDesk.Desktop/Services/HarnessModelBridgeService.cs",
             "docs/V0.14-SEARCH-DESKTOP.md"
           )) {
@@ -104,6 +105,10 @@ jobs:
           $mode = Get-Content "src/TuringDesk.Desktop/MainWindow.EnhancementMode.cs" -Raw
           if ($mode -notmatch "DesktopSearchBarWindow") { throw "Enhancement mode is not wired to DesktopSearchBarWindow" }
           if ($mode -match "AgentOrbWindow") { throw "Enhancement mode still references legacy AgentOrbWindow" }
+          $searchXaml = Get-Content "src/TuringDesk.Desktop/DesktopSearchBarWindow.xaml" -Raw
+          if ($searchXaml -match 'Topmost="True"') { throw "Desktop search must stay below normal application windows" }
+          $searchCode = Get-Content "src/TuringDesk.Desktop/DesktopSearchBarWindow.xaml.cs" -Raw
+          if ($searchCode -notmatch "DesktopWidgetZOrderService") { throw "Desktop search is not pinned to Explorer desktop Z order" }
 
       - name: Build Desktop and ShellHost with embedded application icons
         shell: pwsh
@@ -121,12 +126,12 @@ jobs:
 
       - name: Build and verify native ARM64 MSI
         shell: pwsh
-        run: ./scripts/package-installer.ps1 -Version "v0.14.0" -RuntimeIdentifier "win-arm64"
+        run: ./scripts/package-installer.ps1 -Version "v0.14.1" -RuntimeIdentifier "win-arm64"
 
       - name: Verify MSI artifact
         shell: pwsh
         run: |
-          $msi = Resolve-Path "artifacts/TuringDesk-v0.14.0-win-arm64.msi"
+          $msi = Resolve-Path "artifacts/TuringDesk-v0.14.1-win-arm64.msi"
           $size = (Get-Item $msi).Length
           Write-Host "MSI: $msi"
           Write-Host "Size: $size bytes"
@@ -135,9 +140,9 @@ jobs:
       - name: Upload native ARM64 Windows installer
         uses: actions/upload-artifact@v4
         with:
-          name: TuringDesk-v0.14.0-win-arm64-installer
+          name: TuringDesk-v0.14.1-win-arm64-installer
           path: |
-            artifacts/TuringDesk-v0.14.0-win-arm64.msi
-            artifacts/TuringDesk-v0.14.0-win-arm64/BUILD-INFO.txt
+            artifacts/TuringDesk-v0.14.1-win-arm64.msi
+            artifacts/TuringDesk-v0.14.1-win-arm64/BUILD-INFO.txt
           if-no-files-found: error
           retention-days: 30
