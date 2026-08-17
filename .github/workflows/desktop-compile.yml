@@ -3,7 +3,11 @@ name: Desktop Compile
 on:
   push:
     branches:
-      - agent/v0.13-visible-product-pass
+      - main
+    paths:
+      - 'src/TuringDesk.Desktop/**'
+      - 'src/TuringDesk.ShellHost/**'
+      - '.github/workflows/desktop-compile.yml'
   pull_request:
     paths:
       - 'src/TuringDesk.Desktop/**'
