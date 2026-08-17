@@ -1,11 +1,14 @@
 using System.IO.Compression;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace TuringDesk.Desktop.Services.SceneEngine;
 
 public sealed class SceneCatalogService
 {
     private const string ManifestFileName = "scene.json";
+    private static readonly HashSet<string> VideoExtensions = new(StringComparer.OrdinalIgnoreCase) { ".mp4", ".webm", ".mov", ".m4v", ".avi" };
+    private static readonly HashSet<string> ImageExtensions = new(StringComparer.OrdinalIgnoreCase) { ".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif" };
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNameCaseInsensitive = true,
@@ -59,10 +62,24 @@ public sealed class SceneCatalogService
     public SceneManifest? Find(string? id) =>
         LoadAll().FirstOrDefault(scene => string.Equals(scene.Id, id, StringComparison.OrdinalIgnoreCase));
 
+    /// <summary>
+    /// Beginner import path: users can select an image, video, HTML entry point,
+    /// a .tdscene package, or an advanced project directory. TuringDesk creates
+    /// the scene manifest for simple files automatically.
+    /// </summary>
     public SceneManifest Import(string sourcePath)
     {
-        if (string.IsNullOrWhiteSpace(sourcePath)) throw new ArgumentException("Scene package path is required.", nameof(sourcePath));
+        if (string.IsNullOrWhiteSpace(sourcePath)) throw new ArgumentException("Scene source path is required.", nameof(sourcePath));
         sourcePath = Path.GetFullPath(sourcePath);
+
+        if (File.Exists(sourcePath))
+        {
+            var extension = Path.GetExtension(sourcePath);
+            if (VideoExtensions.Contains(extension)) return ImportSimpleFile(sourcePath, SceneKind.Video);
+            if (ImageExtensions.Contains(extension)) return ImportSimpleFile(sourcePath, SceneKind.Scene);
+            if (extension.Equals(".html", StringComparison.OrdinalIgnoreCase) || extension.Equals(".htm", StringComparison.OrdinalIgnoreCase))
+                return ImportWebProject(sourcePath);
+        }
 
         string stagingRoot;
         var deleteStaging = false;
@@ -79,27 +96,18 @@ public sealed class SceneCatalogService
         }
         else
         {
-            throw new FileNotFoundException("Choose a TuringDesk .tdscene package or a scene project folder.", sourcePath);
+            throw new FileNotFoundException("请选择图片、视频、HTML、.tdscene 或场景项目文件夹。", sourcePath);
         }
 
         try
         {
             var manifestPath = Path.Combine(stagingRoot, ManifestFileName);
-            if (!File.Exists(manifestPath)) throw new InvalidDataException("Scene package is missing scene.json.");
+            if (!File.Exists(manifestPath)) throw new InvalidDataException("高级场景项目需要 scene.json。简单图片/视频/HTML 可直接选择文件导入。");
             var manifest = JsonSerializer.Deserialize<SceneManifest>(File.ReadAllText(manifestPath), JsonOptions)
                 ?? throw new InvalidDataException("scene.json could not be parsed.");
             Normalize(manifest);
             Validate(manifest, stagingRoot);
-
-            var safeId = string.Concat(manifest.Id.Select(ch => char.IsLetterOrDigit(ch) || ch is '-' or '_' or '.' ? ch : '_'));
-            if (string.IsNullOrWhiteSpace(safeId)) safeId = Guid.NewGuid().ToString("N");
-            var destination = Path.Combine(_sceneRoot, safeId);
-            if (Directory.Exists(destination)) Directory.Delete(destination, recursive: true);
-            CopyDirectory(stagingRoot, destination);
-
-            manifest.PackageRoot = destination;
-            manifest.IsBuiltIn = false;
-            return manifest;
+            return InstallFromStaging(manifest, stagingRoot);
         }
         finally
         {
@@ -124,18 +132,128 @@ public sealed class SceneCatalogService
         return destinationFile;
     }
 
+    private SceneManifest ImportSimpleFile(string sourcePath, SceneKind kind)
+    {
+        var id = "user:" + Guid.NewGuid().ToString("N");
+        var title = Path.GetFileNameWithoutExtension(sourcePath);
+        var package = Path.Combine(_sceneRoot, SafeId(id));
+        Directory.CreateDirectory(package);
+        var assetName = "content" + Path.GetExtension(sourcePath).ToLowerInvariant();
+        File.Copy(sourcePath, Path.Combine(package, assetName), overwrite: true);
+
+        var manifest = new SceneManifest
+        {
+            Id = id,
+            Title = title,
+            Author = Environment.UserName,
+            Kind = kind,
+            Entry = assetName,
+            PreferredFps = kind == SceneKind.Video ? 60 : 30,
+            Muted = true,
+            Fit = SceneFit.Cover,
+            Tags = kind == SceneKind.Video ? ["video", "imported"] : ["scene", "image", "imported"],
+            PackageRoot = package
+        };
+        WriteManifest(package, manifest);
+        return manifest;
+    }
+
+    private SceneManifest ImportWebProject(string entryHtml)
+    {
+        var id = "user:" + Guid.NewGuid().ToString("N");
+        var title = Path.GetFileNameWithoutExtension(entryHtml);
+        var sourceRoot = Path.GetDirectoryName(entryHtml) ?? throw new InvalidDataException("HTML source folder is unavailable.");
+        ValidateWebProjectSize(sourceRoot);
+
+        var package = Path.Combine(_sceneRoot, SafeId(id));
+        var webRoot = Path.Combine(package, "web");
+        CopyDirectory(sourceRoot, webRoot);
+        var relativeEntry = Path.Combine("web", Path.GetFileName(entryHtml));
+
+        var manifest = new SceneManifest
+        {
+            Id = id,
+            Title = title,
+            Author = Environment.UserName,
+            Kind = SceneKind.Web,
+            Entry = relativeEntry,
+            PreferredFps = 60,
+            Interactive = true,
+            Muted = true,
+            Tags = ["web", "imported"],
+            PackageRoot = package
+        };
+        WriteManifest(package, manifest);
+        return manifest;
+    }
+
+    private SceneManifest InstallFromStaging(SceneManifest manifest, string stagingRoot)
+    {
+        var destination = Path.Combine(_sceneRoot, SafeId(manifest.Id));
+        if (Directory.Exists(destination)) Directory.Delete(destination, recursive: true);
+        CopyDirectory(stagingRoot, destination);
+        manifest.PackageRoot = destination;
+        manifest.IsBuiltIn = false;
+        WriteManifest(destination, manifest);
+        return manifest;
+    }
+
+    private static void WriteManifest(string root, SceneManifest manifest)
+    {
+        Directory.CreateDirectory(root);
+        var copy = new SceneManifest
+        {
+            SchemaVersion = manifest.SchemaVersion,
+            Id = manifest.Id,
+            Title = manifest.Title,
+            Description = manifest.Description,
+            Author = manifest.Author,
+            Kind = manifest.Kind,
+            Entry = manifest.Entry,
+            Preview = manifest.Preview,
+            Fit = manifest.Fit,
+            PreferredFps = manifest.PreferredFps,
+            Interactive = manifest.Interactive,
+            AudioReactive = manifest.AudioReactive,
+            MediaIntegration = manifest.MediaIntegration,
+            Muted = manifest.Muted,
+            Tags = manifest.Tags,
+            Properties = manifest.Properties,
+            Defaults = manifest.Defaults
+        };
+        File.WriteAllText(Path.Combine(root, ManifestFileName), JsonSerializer.Serialize(copy, JsonOptions));
+    }
+
     private static void Validate(SceneManifest manifest, string root)
     {
         if (manifest.SchemaVersion != 1) throw new InvalidDataException($"Unsupported scene schema version: {manifest.SchemaVersion}");
         if (string.IsNullOrWhiteSpace(manifest.Id)) throw new InvalidDataException("Scene id is required.");
         if (string.IsNullOrWhiteSpace(manifest.Title)) throw new InvalidDataException("Scene title is required.");
 
-        if (manifest.Kind is SceneKind.Video or SceneKind.Web)
+        if (!string.IsNullOrWhiteSpace(manifest.Entry))
         {
-            if (string.IsNullOrWhiteSpace(manifest.Entry)) throw new InvalidDataException($"{manifest.Kind} scenes require an entry file.");
             var entry = Path.GetFullPath(Path.Combine(root, manifest.Entry));
             if (!entry.StartsWith(Path.GetFullPath(root), StringComparison.OrdinalIgnoreCase) || !File.Exists(entry))
                 throw new InvalidDataException("Scene entry file is missing or outside the package directory.");
+        }
+        else if (manifest.Kind is SceneKind.Video or SceneKind.Web)
+        {
+            throw new InvalidDataException($"{manifest.Kind} scenes require an entry file.");
+        }
+    }
+
+    private static void ValidateWebProjectSize(string root)
+    {
+        const long maxBytes = 512L * 1024 * 1024;
+        const int maxFiles = 5000;
+        long bytes = 0;
+        var count = 0;
+        foreach (var path in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories))
+        {
+            count++;
+            if (count > maxFiles) throw new InvalidDataException("Web 项目文件过多，请先整理到独立项目文件夹后再导入。");
+            try { bytes += new FileInfo(path).Length; } catch { }
+            if (bytes > maxBytes) throw new InvalidDataException("Web 项目超过 512 MB，请精简后再导入。");
         }
     }
 
@@ -153,6 +271,12 @@ public sealed class SceneCatalogService
             property.Label = string.IsNullOrWhiteSpace(property.Label) ? property.Key : property.Label.Trim();
             property.Options ??= [];
         }
+    }
+
+    private static string SafeId(string id)
+    {
+        var safe = string.Concat(id.Select(ch => char.IsLetterOrDigit(ch) || ch is '-' or '_' or '.' ? ch : '_'));
+        return string.IsNullOrWhiteSpace(safe) ? Guid.NewGuid().ToString("N") : safe;
     }
 
     private static void CopyDirectory(string source, string destination)
