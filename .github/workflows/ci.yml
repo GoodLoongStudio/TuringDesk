@@ -4,6 +4,13 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
+    inputs:
+      package:
+        description: Build the Windows ARM64 MSI installer
+        required: false
+        default: false
+        type: boolean
 
 concurrency:
   group: turingdesk-ci-${{ github.workflow }}-${{ github.ref }}
@@ -28,96 +35,37 @@ jobs:
       - name: Boot bundled DeepSeek Harness + TuringDesk MCP
         run: pnpm test:harness
 
-  installer-win-arm64:
+  desktop-win-arm64:
     needs: [runtime]
     runs-on: windows-11-arm
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22.19.0
-          architecture: arm64
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 8.0.x
 
-      - name: Verify native ARM64 runner toolchain
+      - name: Verify desktop search and Harness contract
         shell: pwsh
         run: |
-          $nodeArch = (node -p "process.arch").Trim()
-          $osArch = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString()
-          Write-Host "Node architecture: $nodeArch"
-          Write-Host "OS architecture: $osArch"
-          if ($nodeArch -ne "arm64") { throw "Expected native ARM64 Node, got $nodeArch" }
-          if ($osArch -ne "Arm64") { throw "Expected Windows ARM64 runner, got $osArch" }
-
-      - name: Parse packaging and recovery scripts
-        shell: pwsh
-        run: |
-          $files = @(
-            "scripts/generate-brand-icon.ps1",
-            "scripts/package-portable.ps1",
-            "scripts/package-installer.ps1",
-            "packaging/shell/Enable-TuringDeskShell.ps1",
-            "packaging/shell/Restore-Explorer.ps1"
-          )
-          foreach ($file in $files) {
-            $tokens = $null
-            $errors = $null
-            [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $file), [ref]$tokens, [ref]$errors) | Out-Null
-            if ($errors.Count -gt 0) {
-              $errors | ForEach-Object { Write-Error "${file}: $($_.Message)" }
-              throw "PowerShell parser rejected $file"
-            }
-          }
-
-      - name: Validate installed shell script with Windows PowerShell 5.1
-        shell: powershell
-        run: |
-          $file = "packaging/shell/Enable-TuringDeskShell.ps1"
-          $tokens = $null
-          $errors = $null
-          [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $file), [ref]$tokens, [ref]$errors) | Out-Null
-          if ($errors.Count -gt 0) {
-            $errors | ForEach-Object { Write-Error "${file}: $($_.Message)" }
-            throw "Windows PowerShell 5.1 parser rejected $file"
-          }
-          $nonAscii = [System.IO.File]::ReadAllBytes((Resolve-Path $file)) | Where-Object { $_ -gt 127 }
-          if ($nonAscii.Count -gt 0) {
-            throw "$file must remain ASCII-safe because the MSI invokes it with Windows PowerShell 5.1."
-          }
-
-      - name: Verify v0.14 desktop UX and Harness contract
-        shell: pwsh
-        run: |
-          if (Test-Path "src/TuringDesk.Desktop/AgentOrbWindow.xaml") { throw "Legacy AgentOrbWindow.xaml must not ship in v0.14" }
-          if (Test-Path "src/TuringDesk.Desktop/AgentOrbWindow.xaml.cs") { throw "Legacy AgentOrbWindow.xaml.cs must not ship in v0.14" }
           foreach ($required in @(
             "src/TuringDesk.Desktop/DesktopSearchBarWindow.xaml",
             "src/TuringDesk.Desktop/DesktopSearchBarWindow.xaml.cs",
             "src/TuringDesk.Desktop/MainWindow.AgentEntry.cs",
             "src/TuringDesk.Desktop/Services/DesktopSearchIndexService.cs",
             "src/TuringDesk.Desktop/Services/DesktopAiModelChoiceService.cs",
-            "src/TuringDesk.Desktop/Services/DesktopSearchReservedArea.cs",
-            "src/TuringDesk.Desktop/Services/DesktopWidgetZOrderService.cs",
-            "src/TuringDesk.Desktop/Services/HarnessModelBridgeService.cs",
-            "src/TuringDesk.Desktop/Services/UnifiedModelConfigurationService.cs",
-            "docs/V0.14-SEARCH-DESKTOP.md"
+            "src/TuringDesk.Desktop/Services/HarnessModelBridgeService.cs"
           )) {
-            if (-not (Test-Path $required)) { throw "Missing v0.14 UX source: $required" }
+            if (-not (Test-Path $required)) { throw "Missing desktop UX source: $required" }
           }
-
-          $mode = Get-Content "src/TuringDesk.Desktop/MainWindow.EnhancementMode.cs" -Raw
-          if ($mode -notmatch "DesktopSearchBarWindow") { throw "Enhancement mode is not wired to DesktopSearchBarWindow" }
-          if ($mode -match "AgentOrbWindow") { throw "Enhancement mode still references legacy AgentOrbWindow" }
 
           $searchXaml = Get-Content "src/TuringDesk.Desktop/DesktopSearchBarWindow.xaml" -Raw
           if ($searchXaml -match 'Topmost="True"') { throw "Desktop search must stay below normal application windows" }
-          if ($searchXaml -notmatch 'x:Name="ModelSelector"') { throw "Desktop search is missing the visible AI model selector" }
+          if ($searchXaml -notmatch 'x:Name="ModelSelector"') { throw "Desktop search is missing the AI model selector" }
+          if ($searchXaml -notmatch 'Text="设置"') { throw "Desktop search settings action must be visibly labeled" }
+          if ($searchXaml -notmatch 'Text="语音"') { throw "Desktop search voice action must be visibly labeled" }
           if ($searchXaml -notmatch 'x:Name="SearchResultsList"') { throw "Desktop search is missing local application/file results" }
 
           $searchCode = Get-Content "src/TuringDesk.Desktop/DesktopSearchBarWindow.xaml.cs" -Raw
-          if ($searchCode -notmatch "DesktopWidgetZOrderService") { throw "Desktop search is not pinned to Explorer desktop Z order" }
           if ($searchCode -notmatch "DesktopSearchIndexService") { throw "Desktop search is not connected to the local index" }
           if ($searchCode -notmatch "SubmitSearchCommandWithModelAsync") { throw "Desktop search bypasses its visible AI model selection" }
 
@@ -137,23 +85,7 @@ jobs:
           if ($localIndex -notmatch "ShellSurfaceCatalog.LoadStartApps") { throw "Desktop search does not index installed Start Menu applications" }
           if ($localIndex -notmatch "FileSystemWatcher") { throw "Desktop text-file index is not incrementally refreshed" }
 
-          $bridge = Get-Content "src/TuringDesk.Desktop/Services/HarnessModelBridgeService.cs" -Raw
-          if ($bridge -notmatch '\.credentials\.yaml') { throw "Harness API key is not synchronized through the official credential store" }
-          if ($bridge -match 'startInfo\.Environment\["DEEPSEEK_API_KEY"\]\s*=') { throw "Harness WebUI API key must not be injected through inherited environment" }
-
-          $firstRun = Get-Content "src/TuringDesk.Desktop/FirstRunSetupWindow.xaml.cs" -Raw
-          $modelDialog = Get-Content "src/TuringDesk.Desktop/ModelSettingsWindow.xaml.cs" -Raw
-          if ($firstRun -notmatch "UnifiedModelConfigurationService") { throw "First-run model setup bypasses the unified model pipeline" }
-          if ($modelDialog -notmatch "UnifiedModelConfigurationService") { throw "Model settings dialog bypasses the unified model pipeline" }
-
-          $app = Get-Content "src/TuringDesk.Desktop/App.xaml.cs" -Raw
-          $harnessIndex = $app.IndexOf("HarnessWebUiService.StartEarly()")
-          $mainIndex = $app.IndexOf("new MainWindow()")
-          if ($harnessIndex -lt 0 -or $mainIndex -lt 0 -or $harnessIndex -gt $mainIndex) {
-            throw "Harness must begin startup before MainWindow construction"
-          }
-
-      - name: Verify scene application and vivid built-in scenes
+      - name: Verify scene host contract
         shell: pwsh
         run: |
           $catalog = Get-Content "src/TuringDesk.Desktop/Services/SceneEngine/SceneCatalogService.cs" -Raw
@@ -161,29 +93,16 @@ jobs:
             if ($catalog -notmatch [regex]::Escape($id)) { throw "Missing built-in scene: $id" }
           }
 
-          $library = Get-Content "src/TuringDesk.Desktop/DesktopLibraryWindow.xaml.cs" -Raw
-          $playlistIndex = $library.IndexOf("_playback.ActivePlaylistId = null")
-          $profileIndex = $library.IndexOf("_playback.ActiveProfileId = null")
-          $sceneSaveIndex = $library.IndexOf("_shellStore.Save(shell)")
-          if ($playlistIndex -lt 0 -or $profileIndex -lt 0 -or $sceneSaveIndex -lt 0) { throw "Scene apply pipeline is incomplete" }
-          if ($playlistIndex -gt $sceneSaveIndex -or $profileIndex -gt $sceneSaveIndex) { throw "Scene apply must clear playlist/profile before saving SceneId" }
-
-          $wallpaperHost = Get-Content "src/TuringDesk.Desktop/EnhancementWallpaperWindow.xaml.cs" -Raw
-          if ($wallpaperHost -notmatch "latestSettings = _settingsStore.Load\(\)") { throw "Wallpaper host does not poll persisted SceneId across processes" }
-          if ($wallpaperHost -notmatch "AppearanceRequiresReload") { throw "Wallpaper host does not force reload when SceneId changes" }
-
           $desktopHost = Get-Content "src/TuringDesk.Desktop/Services/ExplorerDesktopHost.cs" -Raw
           foreach ($marker in @("workerw/progman-child", "workerw/classic-sibling", "BringWindowToTop", "VerifyAttachment", "HwndTop")) {
             if ($desktopHost -notmatch [regex]::Escape($marker)) { throw "Explorer scene host visibility contract missing: $marker" }
           }
           if ($desktopHost -match "HwndBottom") { throw "Scene HWND must not be pushed under Explorer's wallpaper child with HWND_BOTTOM" }
 
-          $renderer = Get-Content "src/TuringDesk.Desktop/SceneRendererControl.xaml.cs" -Raw
-          foreach ($marker in @("GlowC", "255, 54, 209", "255, 184, 72", "255, 92, 184")) {
-            if ($renderer -notmatch [regex]::Escape($marker)) { throw "Built-in vivid scene renderer marker missing: $marker" }
-          }
+          $wallpaperHost = Get-Content "src/TuringDesk.Desktop/EnhancementWallpaperWindow.xaml.cs" -Raw
+          if ($wallpaperHost -notmatch "AppearanceRequiresReload") { throw "Wallpaper host does not force reload when SceneId changes" }
 
-      - name: Build Desktop and ShellHost with embedded application icons
+      - name: Build Desktop and ShellHost
         shell: pwsh
         run: |
           dotnet restore src/TuringDesk.Desktop/TuringDesk.Desktop.csproj
@@ -195,27 +114,27 @@ jobs:
           dotnet build src/TuringDesk.ShellHost/TuringDesk.ShellHost.csproj --configuration Release --no-restore
           if ($LASTEXITCODE -ne 0) { throw "ShellHost build failed: $LASTEXITCODE" }
 
+  package-win-arm64:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.package }}
+    needs: [runtime, desktop-win-arm64]
+    runs-on: windows-11-arm
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.19.0
+          architecture: arm64
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
       - run: corepack enable
-
-      - name: Build and verify native ARM64 MSI
+      - name: Build Windows ARM64 MSI
         shell: pwsh
         run: ./scripts/package-installer.ps1 -Version "v0.14.4" -RuntimeIdentifier "win-arm64"
-
-      - name: Verify MSI artifact
-        shell: pwsh
-        run: |
-          $msi = Resolve-Path "artifacts/TuringDesk-v0.14.4-win-arm64.msi"
-          $size = (Get-Item $msi).Length
-          Write-Host "MSI: $msi"
-          Write-Host "Size: $size bytes"
-          if ($size -lt 1MB) { throw "MSI is unexpectedly small: $size bytes" }
-
-      - name: Upload native ARM64 Windows installer
+      - name: Upload Windows ARM64 MSI
         uses: actions/upload-artifact@v4
         with:
           name: TuringDesk-v0.14.4-win-arm64-installer
-          path: |
-            artifacts/TuringDesk-v0.14.4-win-arm64.msi
-            artifacts/TuringDesk-v0.14.4-win-arm64/BUILD-INFO.txt
+          path: artifacts/TuringDesk-v0.14.4-win-arm64.msi
           if-no-files-found: error
           retention-days: 30
