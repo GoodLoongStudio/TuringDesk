@@ -103,8 +103,21 @@ public partial class MainWindow
 
     internal void ShowAiModelSettingsFromSearch()
     {
-        ShowDiyCenter();
-        _modelSettings = _modelStore.Load();
+        if (!Dispatcher.CheckAccess())
+        {
+            Dispatcher.Invoke(ShowAiModelSettingsFromSearch);
+            return;
+        }
+
+        var current = _modelStore.Load();
+        var apiKey = _modelStore.LoadApiKey();
+        var dialog = new ModelSettingsWindow(_runtime, _modelStore, current, apiKey)
+        {
+            Owner = IsVisible ? this : null
+        };
+
+        _ = dialog.ShowDialog();
+        _modelSettings = dialog.SavedSettings ?? _modelStore.Load();
         UpdateModelStatus();
     }
 
