@@ -37,8 +37,12 @@ public partial class EnhancementWallpaperWindow : Window
         Top = monitor.Top;
         Width = Math.Max(1, monitor.Width);
         Height = Math.Max(1, monitor.Height);
-        Opacity = 0;
 
+        // Do not set Window.Opacity=0 here. WPF may switch the HWND into layered
+        // composition when opacity changes; reparenting that HWND into Explorer's
+        // WorkerW can then succeed while the WPF render target remains invisible.
+        // SourceInitialized runs before the first visible paint, so attach there
+        // and simply hide the window if Explorer is not ready yet.
         Renderer.PlaybackError += message => ShellNotificationService.Publish("桌面场景播放失败", $"{MonitorLabel}: {message}", "warning");
         SourceInitialized += OnSourceInitialized;
         Closed += OnClosed;
@@ -57,13 +61,18 @@ public partial class EnhancementWallpaperWindow : Window
         ShellSettingsStore.SettingsChanged += OnShellSettingsChanged;
 
         _attached = ExplorerDesktopHost.TryAttach(_windowHandle, _monitor.Left, _monitor.Top, _monitor.Width, _monitor.Height);
-        if (_attached)
+        if (!_attached)
         {
-            Opacity = 1;
+            Hide();
         }
         else
         {
-            Hide();
+            // Ask WPF for a fresh render pass after the HWND has changed parent.
+            Dispatcher.BeginInvoke(new Action(() =>
+            {
+                SceneRoot.InvalidateVisual();
+                Renderer.InvalidateVisual();
+            }), DispatcherPriority.Render);
         }
 
         ReportProbe();
@@ -131,7 +140,11 @@ public partial class EnhancementWallpaperWindow : Window
         if (_attached && !IsVisible)
         {
             Show();
-            Opacity = 1;
+            Dispatcher.BeginInvoke(new Action(() =>
+            {
+                SceneRoot.InvalidateVisual();
+                Renderer.InvalidateVisual();
+            }), DispatcherPriority.Render);
         }
         ReportProbe();
     }
@@ -200,6 +213,11 @@ public partial class EnhancementWallpaperWindow : Window
             if (version != _sceneLoadVersion) return;
             _loadedSceneId = scene.Id;
             Renderer.SetVolume(_playbackSettings.GlobalVolume, scene.Muted || _playbackSettings.GlobalVolume <= 0);
+            Dispatcher.BeginInvoke(new Action(() =>
+            {
+                SceneRoot.InvalidateVisual();
+                Renderer.InvalidateVisual();
+            }), DispatcherPriority.Render);
             ReportProbe();
         }
         catch (Exception error)
