@@ -7,7 +7,7 @@ namespace TuringDesk.Desktop;
 public partial class ModelSettingsWindow : Window
 {
     private readonly RuntimeClient _runtime;
-    private readonly ModelSettingsStore _store;
+    private readonly UnifiedModelConfigurationService _modelConfiguration;
     private bool _initializing = true;
 
     public ModelSettings? SavedSettings { get; private set; }
@@ -16,7 +16,7 @@ public partial class ModelSettingsWindow : Window
     {
         InitializeComponent();
         _runtime = runtime;
-        _store = store;
+        _modelConfiguration = new UnifiedModelConfigurationService(runtime, store);
 
         ProviderBox.ItemsSource = ModelProviderPresets.All;
         ProviderBox.SelectedItem = ModelProviderPresets.Find(initial.ProviderId);
@@ -83,32 +83,12 @@ public partial class ModelSettingsWindow : Window
             var key = ApiKeyBox.Password;
             StatusText.Text = "正在同步 TuringDesk 与 DeepSeek Harness…";
 
-            var applied = await _runtime.ConfigureModelAsync(settings, key);
-            if (applied is null)
-            {
-                StatusText.Text = "Runtime 配置失败，暂未保存。";
-                return;
-            }
-
-            await _store.SaveAsync(settings, key);
-            var normalized = settings with { HasApiKey = !string.IsNullOrWhiteSpace(key) };
-            SavedSettings = normalized;
-
-            try
-            {
-                await HarnessWebUiService.ApplyModelSettingsAsync(normalized, key);
-            }
-            catch (Exception error)
-            {
-                StatusText.Text = $"配置已经保存并写入 Harness；后台 Harness 重启失败：{error.Message}";
-                return;
-            }
-
+            SavedSettings = await _modelConfiguration.ApplyAndSaveAsync(settings, key);
             DialogResult = true;
         }
         catch (Exception error)
         {
-            StatusText.Text = error.Message;
+            StatusText.Text = $"配置未完成：{error.Message}";
         }
     }
 
