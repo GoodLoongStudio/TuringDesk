@@ -199,7 +199,7 @@ public partial class AgentOrbWindow : Window
     private void Diy_Click(object sender, RoutedEventArgs e)
     {
         Collapse();
-        _controlCenter.ShowDiyCenter();
+        _controlCenter.ShowDesktopLibrary();
     }
 
     private void Exit_Click(object sender, RoutedEventArgs e)
