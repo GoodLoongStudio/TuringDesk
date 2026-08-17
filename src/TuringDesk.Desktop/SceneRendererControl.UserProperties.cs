@@ -39,6 +39,7 @@ public partial class SceneRendererControl
     private async Task ApplyUserPropertiesAsync()
     {
         if (_scene is null) return;
+        UpdateAudioLeaseForCurrentScene();
         var settings = _instanceSettingsStore.Load(_scene);
         SetVolume(settings.Volume, settings.Muted);
         if (_scene.Kind == SceneKind.Web) await ApplyUserPropertiesToWebAsync(settings);
