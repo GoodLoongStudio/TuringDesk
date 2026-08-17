@@ -2,7 +2,9 @@
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:wv2="clr-namespace:Microsoft.Web.WebView2.Wpf;assembly=Microsoft.Web.WebView2.Wpf"
-             Background="#080A10">
+             Background="#080A10"
+             Loaded="Renderer_Loaded"
+             Unloaded="Renderer_Unloaded">
     <Grid x:Name="Root" ClipToBounds="True" IsHitTestVisible="False">
         <Border x:Name="StaticBackground" Background="#080A10"/>
 
