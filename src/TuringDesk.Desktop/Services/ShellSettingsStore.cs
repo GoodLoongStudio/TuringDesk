@@ -37,6 +37,8 @@ public sealed class ShellSettings
 public sealed class ShellSettingsStore
 {
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
+    private static readonly object TraceGate = new();
+    private static string? LastObservedSignature;
     private readonly string _path;
 
     public static event Action? SettingsChanged;
@@ -55,15 +57,22 @@ public sealed class ShellSettingsStore
             if (File.Exists(_path))
             {
                 var settings = JsonSerializer.Deserialize<ShellSettings>(File.ReadAllText(_path), JsonOptions);
-                if (settings is not null) return Normalize(settings);
+                if (settings is not null)
+                {
+                    var normalized = Normalize(settings);
+                    TraceObserved(normalized, "read");
+                    return normalized;
+                }
             }
         }
-        catch
+        catch (Exception error)
         {
-            // A damaged preferences file should never prevent the desktop from starting.
+            SceneEngineTrace.Error("settings.shell.read", $"failed path={_path}", error);
         }
 
-        return CreateDefaults();
+        var defaults = CreateDefaults();
+        TraceObserved(defaults, File.Exists(_path) ? "fallback-after-read-failure" : "defaults-no-file");
+        return defaults;
     }
 
     public void Save(ShellSettings settings)
@@ -74,11 +83,15 @@ public sealed class ShellSettingsStore
             var temporary = _path + ".tmp";
             File.WriteAllText(temporary, JsonSerializer.Serialize(normalized, JsonOptions));
             File.Move(temporary, _path, true);
+            SceneEngineTrace.Info(
+                "settings.shell.save",
+                $"scene={normalized.Appearance.SceneId} wallpaperMode={normalized.Appearance.WallpaperMode} motion={normalized.Appearance.SceneMotionEnabled} intensity={normalized.Appearance.SceneIntensity:0.###} path={_path}");
+            TraceObserved(normalized, "save");
             SettingsChanged?.Invoke();
         }
-        catch
+        catch (Exception error)
         {
-            // Preferences are best-effort; Windows desktop usability must win.
+            SceneEngineTrace.Error("settings.shell.save", $"failed path={_path} requestedScene={settings.Appearance?.SceneId ?? "<null>"}", error);
         }
     }
 
@@ -87,6 +100,21 @@ public sealed class ShellSettingsStore
         var settings = Load();
         settings.Appearance = CreateDefaultAppearance();
         Save(settings);
+    }
+
+    private static void TraceObserved(ShellSettings settings, string source)
+    {
+        var appearance = settings.Appearance;
+        var signature = $"{appearance.SceneId}|{appearance.WallpaperMode}|{appearance.WallpaperPath}|{appearance.SceneMotionEnabled}|{appearance.SceneIntensity:0.###}";
+        lock (TraceGate)
+        {
+            if (string.Equals(LastObservedSignature, signature, StringComparison.Ordinal)) return;
+            LastObservedSignature = signature;
+        }
+
+        SceneEngineTrace.Info(
+            "settings.shell.observe",
+            $"source={source} scene={appearance.SceneId} wallpaperMode={appearance.WallpaperMode} wallpaperPath={appearance.WallpaperPath ?? "<null>"} motion={appearance.SceneMotionEnabled} intensity={appearance.SceneIntensity:0.###}");
     }
 
     private static ShellSettings Normalize(ShellSettings settings)
