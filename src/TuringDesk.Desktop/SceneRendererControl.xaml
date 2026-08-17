@@ -34,6 +34,8 @@
             </Grid>
         </Grid>
 
+        <Canvas x:Name="SceneGraphCanvas" Visibility="Collapsed" ClipToBounds="True"/>
+
         <MediaElement x:Name="VideoPlayer"
                       Visibility="Collapsed"
                       LoadedBehavior="Manual"
@@ -43,6 +45,6 @@
                       MediaEnded="VideoPlayer_MediaEnded"
                       MediaFailed="VideoPlayer_MediaFailed"/>
 
-        <wv2:WebView2 x:Name="WebPlayer" Visibility="Collapsed" DefaultBackgroundColor="Transparent"/>
+        <wv2:WebView2 x:Name="WebPlayer" Visibility="Collapsed"/>
     </Grid>
 </UserControl>
