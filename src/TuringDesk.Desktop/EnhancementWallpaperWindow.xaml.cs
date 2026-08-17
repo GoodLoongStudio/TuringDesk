@@ -1,6 +1,7 @@
 using System.Windows;
 using System.Windows.Interop;
 using System.Windows.Media;
+using System.Windows.Media.Animation;
 using System.Windows.Threading;
 using TuringDesk.Desktop.Services;
 
@@ -13,6 +14,7 @@ public partial class EnhancementWallpaperWindow : Window
     private ShellSettings _settings;
     private Brush? _fallbackBackground;
     private string? _wallpaperSignature;
+    private string? _sceneSignature;
     private IntPtr _windowHandle;
     private bool _attached;
     private bool _scenePaused;
@@ -43,6 +45,7 @@ public partial class EnhancementWallpaperWindow : Window
         _windowHandle = new WindowInteropHelper(this).Handle;
         ShellSettingsStore.SettingsChanged += OnShellSettingsChanged;
         RefreshWallpaper(force: true);
+        RefreshScene(force: true);
 
         _attached = ExplorerDesktopHost.TryAttach(_windowHandle);
         if (_attached)
@@ -63,6 +66,7 @@ public partial class EnhancementWallpaperWindow : Window
     private void OnClosed(object? sender, EventArgs e)
     {
         _hostHealthTimer.Stop();
+        StopAllMotion();
         ShellSettingsStore.SettingsChanged -= OnShellSettingsChanged;
     }
 
@@ -72,6 +76,7 @@ public partial class EnhancementWallpaperWindow : Window
         {
             _settings = _settingsStore.Load();
             RefreshWallpaper(force: true);
+            RefreshScene(force: true);
         }), DispatcherPriority.Background);
     }
 
@@ -103,11 +108,12 @@ public partial class EnhancementWallpaperWindow : Window
 
     private void ApplyPerformancePolicy()
     {
-        var shouldPause = DesktopScenePerformancePolicy.ShouldPauseVisualScene();
+        var appearance = _settings.Appearance;
+        var shouldPause = appearance.PauseSceneOnFullscreen && DesktopScenePerformancePolicy.ShouldPauseVisualScene();
         if (shouldPause == _scenePaused) return;
 
         _scenePaused = shouldPause;
-        AmbientSceneLayer.Visibility = shouldPause ? Visibility.Hidden : Visibility.Visible;
+        ApplySceneMotionState();
     }
 
     private void RefreshWallpaper(bool force)
@@ -119,5 +125,49 @@ public partial class EnhancementWallpaperWindow : Window
 
         _wallpaperSignature = signature;
         WallpaperLayer.Background = WallpaperService.CreateWallpaperBrush(appearance) ?? _fallbackBackground;
+    }
+
+    private void RefreshScene(bool force)
+    {
+        var appearance = _settings.Appearance;
+        var signature = $"{appearance.SceneId}|{appearance.SceneMotionEnabled}|{appearance.SceneIntensity:0.000}";
+        if (!force && string.Equals(signature, _sceneSignature, StringComparison.OrdinalIgnoreCase)) return;
+        _sceneSignature = signature;
+
+        AuroraScene.Visibility = appearance.SceneId == "aurora" ? Visibility.Visible : Visibility.Collapsed;
+        NeonScene.Visibility = appearance.SceneId == "neon" ? Visibility.Visible : Visibility.Collapsed;
+        OrbitScene.Visibility = appearance.SceneId == "orbit" ? Visibility.Visible : Visibility.Collapsed;
+        SceneVisualHost.Opacity = appearance.SceneIntensity;
+
+        ApplySceneMotionState();
+    }
+
+    private void ApplySceneMotionState()
+    {
+        StopAllMotion();
+
+        var appearance = _settings.Appearance;
+        if (_scenePaused || !appearance.SceneMotionEnabled) return;
+
+        var key = appearance.SceneId switch
+        {
+            "neon" => "NeonMotion",
+            "orbit" => "OrbitMotion",
+            _ => "AuroraMotion"
+        };
+
+        if (FindResource(key) is Storyboard storyboard)
+        {
+            storyboard.Begin(this, true);
+        }
+    }
+
+    private void StopAllMotion()
+    {
+        foreach (var key in new[] { "AuroraMotion", "NeonMotion", "OrbitMotion" })
+        {
+            if (FindResource(key) is not Storyboard storyboard) continue;
+            try { storyboard.Stop(this); } catch { }
+        }
     }
 }
