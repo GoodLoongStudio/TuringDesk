@@ -35,14 +35,18 @@ public sealed class RuntimeClient
         }
     }
 
-    public async Task<string?> ChatAsync(string message)
+    public async Task<string?> ChatAsync(string message, CancellationToken cancellationToken = default)
     {
         try
         {
-            using var response = await _http.PostAsJsonAsync("v1/chat", new ChatRequest(message));
+            using var response = await _http.PostAsJsonAsync("v1/chat", new ChatRequest(message), cancellationToken);
             response.EnsureSuccessStatusCode();
-            var body = await response.Content.ReadFromJsonAsync<ChatResponse>();
+            var body = await response.Content.ReadFromJsonAsync<ChatResponse>(cancellationToken: cancellationToken);
             return body?.Reply;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
         }
         catch
         {
