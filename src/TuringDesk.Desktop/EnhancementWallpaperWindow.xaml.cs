@@ -8,6 +8,7 @@ namespace TuringDesk.Desktop;
 
 public partial class EnhancementWallpaperWindow : Window
 {
+    private readonly DisplayMonitor _monitor;
     private readonly ShellSettingsStore _settingsStore = new();
     private readonly SceneCatalogService _sceneCatalog = new();
     private readonly DesktopPlaybackSettingsStore _playbackStore = new();
@@ -25,19 +26,20 @@ public partial class EnhancementWallpaperWindow : Window
     private int _playlistIndex;
     private int _sceneLoadVersion;
 
-    public EnhancementWallpaperWindow()
+    public EnhancementWallpaperWindow(DisplayMonitor monitor)
     {
+        _monitor = monitor;
         _settings = _settingsStore.Load();
         _playbackSettings = _playbackStore.Load();
         InitializeComponent();
 
-        Left = SystemParameters.VirtualScreenLeft;
-        Top = SystemParameters.VirtualScreenTop;
-        Width = Math.Max(1, SystemParameters.VirtualScreenWidth);
-        Height = Math.Max(1, SystemParameters.VirtualScreenHeight);
+        Left = monitor.Left;
+        Top = monitor.Top;
+        Width = Math.Max(1, monitor.Width);
+        Height = Math.Max(1, monitor.Height);
         Opacity = 0;
 
-        Renderer.PlaybackError += message => ShellNotificationService.Publish("桌面场景播放失败", message, "warning");
+        Renderer.PlaybackError += message => ShellNotificationService.Publish("桌面场景播放失败", $"{MonitorLabel}: {message}", "warning");
         SourceInitialized += OnSourceInitialized;
         Closed += OnClosed;
 
@@ -46,21 +48,21 @@ public partial class EnhancementWallpaperWindow : Window
     }
 
     public bool IsAttached => _attached;
+    public string MonitorId => _monitor.Id;
+    public string MonitorLabel => _monitor.IsPrimary ? "主显示器" : $"显示器 {_monitor.Id}";
 
     private void OnSourceInitialized(object? sender, EventArgs e)
     {
         _windowHandle = new WindowInteropHelper(this).Handle;
         ShellSettingsStore.SettingsChanged += OnShellSettingsChanged;
 
-        _attached = ExplorerDesktopHost.TryAttach(_windowHandle);
+        _attached = ExplorerDesktopHost.TryAttach(_windowHandle, _monitor.Left, _monitor.Top, _monitor.Width, _monitor.Height);
         if (_attached)
         {
             Opacity = 1;
         }
         else
         {
-            // Never cover Explorer when WorkerW/Progman is not ready. The health
-            // timer retries attachment while AI services continue independently.
             Hide();
         }
 
@@ -80,7 +82,7 @@ public partial class EnhancementWallpaperWindow : Window
         Dispatcher.BeginInvoke(new Action(() =>
         {
             _settings = _settingsStore.Load();
-            _ = RefreshBaseSceneAsync(force: true);
+            _ = ApplyPlaybackPolicyAsync(forceProfileRefresh: true);
         }), DispatcherPriority.Background);
     }
 
@@ -88,7 +90,7 @@ public partial class EnhancementWallpaperWindow : Window
     {
         MaintainExplorerAttachment();
         _playbackSettings = _playbackStore.Load();
-        await ApplyPlaybackPolicyAsync();
+        await ApplyPlaybackPolicyAsync(forceProfileRefresh: false);
     }
 
     private void MaintainExplorerAttachment()
@@ -97,11 +99,11 @@ public partial class EnhancementWallpaperWindow : Window
 
         if (ExplorerDesktopHost.IsAttached(_windowHandle))
         {
-            _ = ExplorerDesktopHost.ResizeToVirtualDesktop(_windowHandle);
+            _ = ExplorerDesktopHost.ResizeToDesktopRect(_windowHandle, _monitor.Left, _monitor.Top, _monitor.Width, _monitor.Height);
             return;
         }
 
-        _attached = ExplorerDesktopHost.TryAttach(_windowHandle);
+        _attached = ExplorerDesktopHost.TryAttach(_windowHandle, _monitor.Left, _monitor.Top, _monitor.Width, _monitor.Height);
         if (_attached && !IsVisible)
         {
             Show();
@@ -109,7 +111,7 @@ public partial class EnhancementWallpaperWindow : Window
         }
     }
 
-    private async Task ApplyPlaybackPolicyAsync()
+    private async Task ApplyPlaybackPolicyAsync(bool forceProfileRefresh)
     {
         var directive = _ruleEngine.Evaluate(_playbackSettings);
         var policyChanged = directive.Action != _lastPolicyAction ||
@@ -136,7 +138,7 @@ public partial class EnhancementWallpaperWindow : Window
                 return;
             case ApplicationRuleAction.LoadProfile:
                 if (!string.IsNullOrWhiteSpace(directive.TargetId))
-                    await PlayProfileAsync(directive.TargetId, force: policyChanged);
+                    await PlayProfileAsync(directive.TargetId, force: policyChanged || forceProfileRefresh);
                 return;
             default:
                 if (Renderer.IsStopped) await RefreshBaseSceneAsync(force: true);
@@ -146,7 +148,7 @@ public partial class EnhancementWallpaperWindow : Window
 
         if (!string.IsNullOrWhiteSpace(_playbackSettings.ActiveProfileId))
         {
-            await PlayProfileAsync(_playbackSettings.ActiveProfileId, force: false);
+            await PlayProfileAsync(_playbackSettings.ActiveProfileId, force: forceProfileRefresh);
             return;
         }
         if (!string.IsNullOrWhiteSpace(_playbackSettings.ActivePlaylistId))
@@ -155,7 +157,7 @@ public partial class EnhancementWallpaperWindow : Window
             return;
         }
 
-        await RefreshBaseSceneAsync(force: false);
+        await RefreshBaseSceneAsync(force: forceProfileRefresh);
     }
 
     private Task RefreshBaseSceneAsync(bool force) => LoadSceneByIdAsync(_settings.Appearance.SceneId, force);
@@ -177,7 +179,7 @@ public partial class EnhancementWallpaperWindow : Window
         catch (Exception error)
         {
             if (version != _sceneLoadVersion) return;
-            ShellNotificationService.Publish("无法加载桌面场景", error.Message, "warning");
+            ShellNotificationService.Publish("无法加载桌面场景", $"{MonitorLabel}: {error.Message}", "warning");
         }
     }
 
@@ -212,13 +214,13 @@ public partial class EnhancementWallpaperWindow : Window
             string.Equals(item.Id, profileId, StringComparison.OrdinalIgnoreCase));
         if (profile is null) return;
 
-        // The v0.13 engine keeps one virtual-desktop renderer. The profile schema
-        // already stores per-monitor assignments so the next renderer split can
-        // apply them independently without migrating user data. Until then the
-        // primary assignment is authoritative.
+        // Match stable monitor id first; "primary" is a portable alias that still
+        // follows the user's primary display when hardware/topology changes.
         var assignment = profile.Monitors.FirstOrDefault(item =>
-                             string.Equals(item.MonitorKey, "primary", StringComparison.OrdinalIgnoreCase))
-                         ?? profile.Monitors.FirstOrDefault();
+                             string.Equals(item.MonitorKey, _monitor.Id, StringComparison.OrdinalIgnoreCase))
+                         ?? (_monitor.IsPrimary
+                             ? profile.Monitors.FirstOrDefault(item => string.Equals(item.MonitorKey, "primary", StringComparison.OrdinalIgnoreCase))
+                             : null);
         if (assignment is null) return;
 
         if (!string.IsNullOrWhiteSpace(assignment.PlaylistId))
