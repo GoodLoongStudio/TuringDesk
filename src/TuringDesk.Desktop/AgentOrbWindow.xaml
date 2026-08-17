@@ -75,7 +75,7 @@
                     <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                     <StackPanel Orientation="Horizontal">
                         <Button Height="27" Padding="9,0" Margin="0,0,6,0" Click="Diy_Click" Background="#151B25" BorderBrush="#2D384D" Foreground="#AEB8CB" ToolTip="导入、选择并应用完整桌面场景">
-                            <StackPanel Orientation="Horizontal"><local:ShellIcon Kind="Wallpaper" Width="13" Height="13" Foreground="#AEB8CB" Margin="0,0,5,0"/><TextBlock Text="桌面库" FontSize="10.5"/></StackPanel>
+                            <StackPanel Orientation="Horizontal"><local:ShellIcon Kind="Personalize" Width="13" Height="13" Foreground="#AEB8CB" Margin="0,0,5,0"/><TextBlock Text="桌面库" FontSize="10.5"/></StackPanel>
                         </Button>
                         <Button Height="27" Padding="9,0" Margin="0,0,6,0" Click="ControlCenter_Click" Background="#151B25" BorderBrush="#2D384D" Foreground="#7F8B9F" ToolTip="模型、桌面与高级设置">
                             <StackPanel Orientation="Horizontal"><local:ShellIcon Kind="Settings" Width="13" Height="13" Foreground="#7F8B9F" Margin="0,0,5,0"/><TextBlock Text="设置" FontSize="10.5"/></StackPanel>
