@@ -16,6 +16,10 @@ public partial class MainWindow
     /// Default TuringDesk mode: Explorer stays the Windows shell. Each physical
     /// monitor gets its own wallpaper-engine child window so profiles can assign
     /// independent scenes/playlists without replacing Explorer.
+    ///
+    /// MainWindow is only the background service/runtime host in this mode. The
+    /// old command-center window is intentionally never presented as a product UI;
+    /// users interact through the imported desktop scene, AI Orb and Desktop Library.
     /// </summary>
     internal void EnableEnhancementMode()
     {
@@ -23,7 +27,22 @@ public partial class MainWindow
 
         ShellSession.IsEnhancementMode = true;
         ShellSession.ExitRequested = false;
-        Title = "TuringDesk · AI Desktop";
+        Title = "TuringDesk · Desktop Runtime Host";
+
+        // Keep the legacy WPF control center completely out of the user's desktop.
+        // We still Show() the window once from App so WPF raises Loaded and starts
+        // the runtime/capability/speech services, but it is born off-screen and
+        // transparent and is hidden as soon as the desktop engine is attached.
+        ShowInTaskbar = false;
+        ShowActivated = false;
+        WindowStartupLocation = WindowStartupLocation.Manual;
+        WindowState = WindowState.Normal;
+        Left = -32000;
+        Top = -32000;
+        Width = 1;
+        Height = 1;
+        Opacity = 0;
+
         Loaded += EnhancementMode_Loaded;
         Closing += EnhancementMode_Closing;
         Closed += EnhancementMode_Closed;
@@ -53,7 +72,7 @@ public partial class MainWindow
                     "TuringDesk AI Desktop 已就绪",
                     _enhancementWallpapers.Count > 1
                         ? $"{_enhancementWallpapers.Count} 块显示器已启用独立桌面引擎。按 Alt+Space 直接使用 AI。"
-                        : "按 Alt+Space、点击右下角 Orb 或直接说“图灵桌面”。",
+                        : "桌面场景已接管背景层。按 Alt+Space 使用 AI，或从 Orb 打开桌面库。",
                     "shell");
             }
             else
@@ -68,7 +87,7 @@ public partial class MainWindow
             var onboarding = new OnboardingStateStore();
             if (!onboarding.IsCompleted())
             {
-                var setup = new FirstRunSetupWindow(_runtime, _modelStore) { Owner = this };
+                var setup = new FirstRunSetupWindow(_runtime, _modelStore);
                 setup.ShowDialog();
             }
 
