@@ -14,6 +14,7 @@ public partial class SceneRendererControl
 
     private void Renderer_Loaded(object sender, RoutedEventArgs e)
     {
+        InitializePropertyBridge();
         if (!_desktopInputHooked)
         {
             _desktopInputTimer.Tick += DesktopInputTimer_Tick;
@@ -25,6 +26,7 @@ public partial class SceneRendererControl
     private void Renderer_Unloaded(object sender, RoutedEventArgs e)
     {
         _desktopInputTimer.Stop();
+        ShutdownPropertyBridge();
     }
 
     private async void DesktopInputTimer_Tick(object? sender, EventArgs e)
