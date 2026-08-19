@@ -13,6 +13,14 @@ dist/
 # Repository-local verified toolchain cache
 .tools/
 
+# Bootstrapped third-party binaries (licenses/notices remain tracked)
+src/TuringDesk.Desktop/ThirdParty/Everything/arm64/Everything.exe
+src/TuringDesk.Desktop/ThirdParty/Everything/arm64/es.exe
+src/TuringDesk.Desktop/ThirdParty/Everything/arm64/.component-version
+src/TuringDesk.Desktop/ThirdParty/Everything/x64/Everything.exe
+src/TuringDesk.Desktop/ThirdParty/Everything/x64/es.exe
+src/TuringDesk.Desktop/ThirdParty/Everything/x64/.component-version
+
 # Build/package output
 artifacts/
 
