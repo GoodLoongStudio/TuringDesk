@@ -67,10 +67,10 @@ internal static class DesktopEngineProbe
 
     /// <summary>
     /// Wait until the live desktop host acknowledges that the primary monitor is
-    /// attached and has actually loaded the requested scene. This deliberately
-    /// reads the status file as well as in-process state because Desktop Library can
-    /// be opened by a second TuringDesk process while the enhancement host owns the
-    /// wallpaper renderer.
+    /// attached to a real WorkerW wallpaper host and has loaded the requested scene.
+    /// This deliberately reads the status file as well as in-process state because
+    /// Desktop Library can be opened by a second TuringDesk process while the
+    /// enhancement host owns the wallpaper renderer.
     /// </summary>
     public static async Task<bool> WaitForPrimarySceneAsync(
         string sceneId,
@@ -119,6 +119,7 @@ internal static class DesktopEngineProbe
     private static bool Matches(DesktopEngineProbeState? state, string sceneId) =>
         state is not null &&
         state.Attached &&
+        state.Attachment.StartsWith("workerw/", StringComparison.OrdinalIgnoreCase) &&
         string.Equals(state.SceneId, sceneId, StringComparison.OrdinalIgnoreCase) &&
         DateTimeOffset.UtcNow - state.UpdatedAtUtc < TimeSpan.FromSeconds(5);
 }
