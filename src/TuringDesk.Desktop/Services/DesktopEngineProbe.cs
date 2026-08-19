@@ -64,6 +64,63 @@ internal static class DesktopEngineProbe
         ExplorerDesktopDiagnostics.Capture(
             $"probe-change monitor={monitor.Id} attached={attached} scene={sceneId ?? "<null>"}");
     }
+
+    /// <summary>
+    /// Wait until the live desktop host acknowledges that the primary monitor is
+    /// attached and has actually loaded the requested scene. This deliberately
+    /// reads the status file as well as in-process state because Desktop Library can
+    /// be opened by a second TuringDesk process while the enhancement host owns the
+    /// wallpaper renderer.
+    /// </summary>
+    public static async Task<bool> WaitForPrimarySceneAsync(
+        string sceneId,
+        TimeSpan timeout,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(sceneId)) return false;
+        var deadline = DateTimeOffset.UtcNow + timeout;
+
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (PrimarySceneMatches(sceneId)) return true;
+            await Task.Delay(100, cancellationToken);
+        }
+
+        return PrimarySceneMatches(sceneId);
+    }
+
+    private static bool PrimarySceneMatches(string sceneId)
+    {
+        lock (Gate)
+        {
+            var primary = States.Values.FirstOrDefault(state => state.IsPrimary);
+            if (Matches(primary, sceneId)) return true;
+        }
+
+        try
+        {
+            if (!File.Exists(StatusPath)) return false;
+            var states = JsonSerializer.Deserialize<List<DesktopEngineProbeState>>(
+                File.ReadAllText(StatusPath),
+                JsonOptions);
+            var primary = states?.FirstOrDefault(state => state.IsPrimary);
+            return Matches(primary, sceneId);
+        }
+        catch
+        {
+            // The host writes through a temporary file and atomic move, but a second
+            // process may still observe a transient sharing/replace race. The caller
+            // retries until timeout instead of treating one read as a hard failure.
+            return false;
+        }
+    }
+
+    private static bool Matches(DesktopEngineProbeState? state, string sceneId) =>
+        state is not null &&
+        state.Attached &&
+        string.Equals(state.SceneId, sceneId, StringComparison.OrdinalIgnoreCase) &&
+        DateTimeOffset.UtcNow - state.UpdatedAtUtc < TimeSpan.FromSeconds(5);
 }
 
 internal sealed record DesktopEngineProbeState(
