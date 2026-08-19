@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.IO;
 using System.Windows.Media;
+using NPinyin;
 
 namespace TuringDesk.Desktop.Services;
 
@@ -16,23 +17,27 @@ public sealed record DesktopSearchResult(
     DesktopSearchResultKind Kind,
     string Subtitle,
     ImageSource? Icon,
-    int Score)
+    int Score,
+    int Level = 1)
 {
     public string KindLabel => Kind == DesktopSearchResultKind.App ? "应用" : "文件";
 }
 
 /// <summary>
-/// Fast, user-space search index for the desktop search bar.
+/// Tiered desktop search index.
 ///
-/// The query path is deliberately Everything-like: build a compact in-memory
-/// filename/path index once, then keep it fresh with FileSystemWatcher instead
-/// of walking the disk for every keystroke. The first release indexes text/code
-/// files under the current user's profile plus Start Menu applications. This is
-/// intentionally non-elevated; a future NTFS MFT/USN provider can plug into the
-/// same result contract without changing the search UI.
+/// Level 1 is a startup-built RAM index for installed applications. The hot path
+/// never touches disk and supports the original app name, compact full pinyin and
+/// pinyin initials through a prefix hash index.
+///
+/// Level 2 is the user-profile text/code file index. FileSystemWatcher keeps the
+/// snapshot incrementally fresh, while query scoring is always executed on a pool
+/// thread so a large profile cannot block the WPF dispatcher.
 /// </summary>
 public sealed class DesktopSearchIndexService : IDisposable
 {
+    private const int MaxIndexedAliasLength = 48;
+
     private static readonly HashSet<string> TextExtensions = new(StringComparer.OrdinalIgnoreCase)
     {
         ".txt", ".md", ".markdown", ".log", ".csv", ".tsv",
@@ -53,7 +58,8 @@ public sealed class DesktopSearchIndexService : IDisposable
         "node_modules", "packages", ".nuget", ".cache"
     };
 
-    private readonly IReadOnlyList<StartAppItem> _apps;
+    private readonly IndexedApp[] _apps;
+    private readonly IReadOnlyDictionary<string, int[]> _appPrefixIndex;
     private readonly ConcurrentDictionary<string, IndexedTextFile> _files = new(StringComparer.OrdinalIgnoreCase);
     private readonly CancellationTokenSource _lifetime = new();
     private readonly List<FileSystemWatcher> _watchers = new();
@@ -63,11 +69,15 @@ public sealed class DesktopSearchIndexService : IDisposable
 
     public DesktopSearchIndexService()
     {
-        // This constructor is normally called on the WPF UI thread, which keeps
-        // shell icon extraction compatible with the existing Start Menu catalog.
-        _apps = ShellSurfaceCatalog.LoadStartApps();
-        _roots = BuildRoots();
+        // ShellSurfaceCatalog icon extraction is intentionally performed here,
+        // normally on the WPF UI thread. After construction the L1 query path is
+        // pure RAM access and never invokes Shell/COM again.
+        _apps = ShellSurfaceCatalog.LoadStartApps()
+            .Select(CreateIndexedApp)
+            .ToArray();
+        _appPrefixIndex = BuildAppPrefixIndex(_apps);
 
+        _roots = BuildRoots();
         foreach (var root in _roots)
             TryStartWatcher(root);
 
@@ -75,63 +85,211 @@ public sealed class DesktopSearchIndexService : IDisposable
     }
 
     public bool IsInitialIndexComplete => _initialIndexTask.IsCompleted;
+    public int AppCount => _apps.Length;
+    public int IndexedFileCount => _files.Count;
 
-    public Task<IReadOnlyList<DesktopSearchResult>> SearchAsync(
+    /// <summary>
+    /// Level 1: synchronous RAM-only application search. Safe to call directly
+    /// from TextChanged before any debounce/yield.
+    /// </summary>
+    public IReadOnlyList<DesktopSearchResult> SearchApps(string query, int limit = 5)
+    {
+        var normalized = NormalizeAlias(query);
+        if (normalized.Length == 0 || _apps.Length == 0)
+            return Array.Empty<DesktopSearchResult>();
+
+        limit = Math.Clamp(limit, 1, 12);
+        IEnumerable<int> candidates;
+        if (_appPrefixIndex.TryGetValue(normalized, out var indexedCandidates))
+        {
+            candidates = indexedCandidates;
+        }
+        else
+        {
+            // Contains/fuzzy fallback still stays cheap because the installed-app
+            // catalog is small and every searchable alias was precomputed.
+            candidates = Enumerable.Range(0, _apps.Length);
+        }
+
+        return candidates
+            .Select(index => (_apps[index], ScoreApp(normalized, _apps[index])))
+            .Where(pair => pair.Item2 > 0)
+            .OrderByDescending(pair => pair.Item2)
+            .ThenBy(pair => pair.Item1.Name, StringComparer.CurrentCultureIgnoreCase)
+            .Take(limit)
+            .Select(pair => new DesktopSearchResult(
+                pair.Item1.Name,
+                pair.Item1.Target,
+                DesktopSearchResultKind.App,
+                string.IsNullOrWhiteSpace(pair.Item1.Category) ? "已安装应用" : pair.Item1.Category,
+                pair.Item1.Icon,
+                pair.Item2,
+                Level: 1))
+            .ToArray();
+    }
+
+    /// <summary>
+    /// Level 2: asynchronous file search. It never enumerates the file snapshot on
+    /// the caller/dispatcher thread. Cancellation is checked throughout scoring so
+    /// rapid typing abandons obsolete work quickly.
+    /// </summary>
+    public Task<IReadOnlyList<DesktopSearchResult>> SearchFilesAsync(
         string query,
-        int limit = 8,
+        int limit = 6,
         CancellationToken cancellationToken = default)
     {
         var normalized = NormalizeQuery(query);
         if (normalized.Length == 0)
             return Task.FromResult<IReadOnlyList<DesktopSearchResult>>(Array.Empty<DesktopSearchResult>());
 
+        limit = Math.Clamp(limit, 1, 16);
+        return Task.Run<IReadOnlyList<DesktopSearchResult>>(
+            () => SearchFilesCore(normalized, limit, cancellationToken),
+            cancellationToken);
+    }
+
+    /// <summary>
+    /// Compatibility entry point for callers that still want one merged result.
+    /// New search-bar code should render SearchApps immediately, then stream in
+    /// SearchFilesAsync results.
+    /// </summary>
+    public async Task<IReadOnlyList<DesktopSearchResult>> SearchAsync(
+        string query,
+        int limit = 8,
+        CancellationToken cancellationToken = default)
+    {
         cancellationToken.ThrowIfCancellationRequested();
-        var results = new List<DesktopSearchResult>(Math.Max(12, limit * 2));
+        var apps = SearchApps(query, Math.Min(limit, 5));
+        var files = await SearchFilesAsync(query, Math.Min(limit, 8), cancellationToken).ConfigureAwait(false);
+        cancellationToken.ThrowIfCancellationRequested();
 
-        foreach (var app in _apps)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            var score = Score(normalized, app.Name, app.Target, appBoost: 75);
-            if (score <= 0) continue;
-
-            results.Add(new DesktopSearchResult(
-                app.Name,
-                app.Target,
-                DesktopSearchResultKind.App,
-                string.IsNullOrWhiteSpace(app.Category) ? "已安装应用" : app.Category,
-                app.Icon,
-                score));
-        }
-
-        foreach (var file in _files.Values)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            var score = Score(normalized, file.Name, file.Path, appBoost: 0);
-            if (score <= 0) continue;
-
-            results.Add(new DesktopSearchResult(
-                file.Name,
-                file.Path,
-                DesktopSearchResultKind.TextFile,
-                file.Subtitle,
-                null,
-                score));
-        }
-
-        IReadOnlyList<DesktopSearchResult> ordered = results
-            .OrderByDescending(item => item.Score)
-            .ThenBy(item => item.Kind)
-            .ThenBy(item => item.Name, StringComparer.CurrentCultureIgnoreCase)
+        return apps
+            .Concat(files)
+            .OrderByDescending(result => result.Score)
+            .ThenBy(result => result.Level)
+            .ThenBy(result => result.Name, StringComparer.CurrentCultureIgnoreCase)
             .Take(Math.Clamp(limit, 1, 24))
             .ToArray();
-
-        return Task.FromResult(ordered);
     }
 
     public bool Open(DesktopSearchResult result) => ShellSurfaceCatalog.OpenTarget(result.Target);
 
     public bool OpenContainingFolder(DesktopSearchResult result) =>
         result.Kind == DesktopSearchResultKind.TextFile && ShellSurfaceCatalog.OpenContainingFolder(result.Target);
+
+    private IReadOnlyList<DesktopSearchResult> SearchFilesCore(
+        string normalized,
+        int limit,
+        CancellationToken cancellationToken)
+    {
+        var best = new PriorityQueue<DesktopSearchResult, int>();
+        var visited = 0;
+
+        foreach (var file in _files.Values)
+        {
+            if ((visited++ & 31) == 0)
+                cancellationToken.ThrowIfCancellationRequested();
+
+            var score = Score(normalized, file.NormalizedName, file.NormalizedPath);
+            if (score <= 0) continue;
+
+            var result = new DesktopSearchResult(
+                file.Name,
+                file.Path,
+                DesktopSearchResultKind.TextFile,
+                file.Subtitle,
+                null,
+                score,
+                Level: 2);
+
+            best.Enqueue(result, score);
+            if (best.Count > limit)
+                _ = best.Dequeue();
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+        return best.UnorderedItems
+            .Select(item => item.Element)
+            .OrderByDescending(item => item.Score)
+            .ThenBy(item => item.Name, StringComparer.CurrentCultureIgnoreCase)
+            .ToArray();
+    }
+
+    private static IndexedApp CreateIndexedApp(StartAppItem app)
+    {
+        var normalizedName = NormalizeAlias(app.Name);
+        var pinyin = string.Empty;
+        var initials = string.Empty;
+
+        try
+        {
+            var converted = Pinyin.GetPinyin(app.Name) ?? string.Empty;
+            var syllables = converted
+                .Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            pinyin = NormalizeAlias(string.Concat(syllables));
+            initials = NormalizeAlias(string.Concat(syllables.Select(item => item.Length > 0 ? item[0] : '\0')));
+        }
+        catch
+        {
+            // A malformed/special shell display name must never prevent the whole
+            // launcher index from being constructed.
+        }
+
+        return new IndexedApp(
+            app.Name,
+            app.Target,
+            app.Category,
+            app.Icon,
+            normalizedName,
+            pinyin,
+            initials);
+    }
+
+    private static IReadOnlyDictionary<string, int[]> BuildAppPrefixIndex(IndexedApp[] apps)
+    {
+        var mutable = new Dictionary<string, List<int>>(StringComparer.Ordinal);
+        for (var index = 0; index < apps.Length; index++)
+        {
+            foreach (var alias in apps[index].Aliases)
+            {
+                if (string.IsNullOrWhiteSpace(alias)) continue;
+                var max = Math.Min(alias.Length, MaxIndexedAliasLength);
+                for (var length = 1; length <= max; length++)
+                {
+                    var prefix = alias[..length];
+                    if (!mutable.TryGetValue(prefix, out var list))
+                    {
+                        list = new List<int>(4);
+                        mutable[prefix] = list;
+                    }
+                    if (list.Count == 0 || list[^1] != index)
+                        list.Add(index);
+                }
+            }
+        }
+
+        return mutable.ToDictionary(
+            pair => pair.Key,
+            pair => pair.Value.Distinct().ToArray(),
+            StringComparer.Ordinal);
+    }
+
+    private static int ScoreApp(string query, IndexedApp app)
+    {
+        var nameScore = ScoreAlias(query, app.NormalizedName, exact: 1320, prefix: 1080, contains: 760);
+        var pinyinScore = ScoreAlias(query, app.Pinyin, exact: 1240, prefix: 1010, contains: 690);
+        var initialsScore = ScoreAlias(query, app.Initials, exact: 1210, prefix: 990, contains: 650);
+        return Math.Max(nameScore, Math.Max(pinyinScore, initialsScore));
+    }
+
+    private static int ScoreAlias(string query, string value, int exact, int prefix, int contains)
+    {
+        if (string.IsNullOrEmpty(value)) return 0;
+        if (value.Equals(query, StringComparison.Ordinal)) return exact;
+        if (value.StartsWith(query, StringComparison.Ordinal)) return prefix;
+        if (value.Contains(query, StringComparison.Ordinal)) return contains;
+        return 0;
+    }
 
     private void BuildInitialIndex(CancellationToken cancellationToken)
     {
@@ -178,8 +336,8 @@ public sealed class DesktopSearchIndexService : IDisposable
             catch
             {
                 // Directory contents may change while they are being enumerated.
-                // The watcher will catch later additions and the next session can
-                // rebuild any entries missed during this pass.
+                // Watchers catch subsequent updates and the next session rebuilds
+                // any entries missed during this pass.
             }
         }
     }
@@ -196,17 +354,17 @@ public sealed class DesktopSearchIndexService : IDisposable
                 EnableRaisingEvents = true
             };
 
-            watcher.Created += (sender, e) =>
+            watcher.Created += (_, e) =>
             {
                 if (File.Exists(e.FullPath)) TryIndexFile(e.FullPath);
             };
-            watcher.Deleted += (sender, e) => _files.TryRemove(e.FullPath, out _);
-            watcher.Renamed += (sender, e) =>
+            watcher.Deleted += (_, e) => _files.TryRemove(e.FullPath, out _);
+            watcher.Renamed += (_, e) =>
             {
                 _files.TryRemove(e.OldFullPath, out _);
                 if (File.Exists(e.FullPath)) TryIndexFile(e.FullPath);
             };
-            watcher.Error += (sender, e) =>
+            watcher.Error += (_, _) =>
             {
                 if (!_lifetime.IsCancellationRequested)
                     _ = Task.Run(() => IndexTree(root, _lifetime.Token), _lifetime.Token);
@@ -216,8 +374,8 @@ public sealed class DesktopSearchIndexService : IDisposable
         }
         catch
         {
-            // Search remains useful from the initial snapshot even if a watched
-            // folder is unavailable or refuses notification handles.
+            // Search remains useful from the initial snapshot if notifications
+            // are unavailable for a specific root.
         }
     }
 
@@ -238,7 +396,9 @@ public sealed class DesktopSearchIndexService : IDisposable
             _files[path] = new IndexedTextFile(
                 name,
                 path,
-                BuildFileSubtitle(path));
+                BuildFileSubtitle(path),
+                NormalizeQuery(name),
+                NormalizeQuery(path));
         }
         catch
         {
@@ -275,9 +435,6 @@ public sealed class DesktopSearchIndexService : IDisposable
     {
         var userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         var roots = new List<string>();
-
-        // Index the whole user profile so developer project folders are included,
-        // but explicitly skip AppData, package caches and source-control internals.
         if (!string.IsNullOrWhiteSpace(userProfile) && Directory.Exists(userProfile))
             roots.Add(userProfile);
 
@@ -290,21 +447,31 @@ public sealed class DesktopSearchIndexService : IDisposable
     private static string NormalizeQuery(string query) =>
         string.Join(' ', query.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries)).ToLowerInvariant();
 
-    private static int Score(string query, string name, string path, int appBoost)
+    private static string NormalizeAlias(string value)
     {
-        var nameValue = name.ToLowerInvariant();
-        var pathValue = path.ToLowerInvariant();
+        if (string.IsNullOrWhiteSpace(value)) return string.Empty;
+        var buffer = new char[value.Length];
+        var count = 0;
+        foreach (var character in value.ToLowerInvariant())
+        {
+            if (char.IsLetterOrDigit(character))
+                buffer[count++] = character;
+        }
+        return new string(buffer, 0, count);
+    }
 
-        if (nameValue.Equals(query, StringComparison.Ordinal)) return 1200 + appBoost;
-        if (nameValue.StartsWith(query, StringComparison.Ordinal)) return 950 + appBoost;
-        if (nameValue.Contains(query, StringComparison.Ordinal)) return 720 + appBoost;
-        if (pathValue.Contains(query, StringComparison.Ordinal)) return 480 + appBoost;
+    private static int Score(string query, string normalizedName, string normalizedPath)
+    {
+        if (normalizedName.Equals(query, StringComparison.Ordinal)) return 1200;
+        if (normalizedName.StartsWith(query, StringComparison.Ordinal)) return 950;
+        if (normalizedName.Contains(query, StringComparison.Ordinal)) return 720;
+        if (normalizedPath.Contains(query, StringComparison.Ordinal)) return 480;
 
         var tokens = query.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-        if (tokens.Length > 1 && tokens.All(token => nameValue.Contains(token, StringComparison.Ordinal)))
-            return 620 + appBoost;
-        if (tokens.Length > 1 && tokens.All(token => pathValue.Contains(token, StringComparison.Ordinal)))
-            return 360 + appBoost;
+        if (tokens.Length > 1 && tokens.All(token => normalizedName.Contains(token, StringComparison.Ordinal)))
+            return 620;
+        if (tokens.Length > 1 && tokens.All(token => normalizedPath.Contains(token, StringComparison.Ordinal)))
+            return 360;
 
         return 0;
     }
@@ -315,9 +482,7 @@ public sealed class DesktopSearchIndexService : IDisposable
         var directory = Path.GetDirectoryName(path) ?? string.Empty;
         var userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         if (!string.IsNullOrWhiteSpace(userProfile) && directory.StartsWith(userProfile, StringComparison.OrdinalIgnoreCase))
-        {
             directory = "~" + directory[userProfile.Length..];
-        }
 
         return string.IsNullOrWhiteSpace(extension)
             ? directory
@@ -345,5 +510,32 @@ public sealed class DesktopSearchIndexService : IDisposable
         _lifetime.Dispose();
     }
 
-    private sealed record IndexedTextFile(string Name, string Path, string Subtitle);
+    private sealed record IndexedApp(
+        string Name,
+        string Target,
+        string Category,
+        ImageSource? Icon,
+        string NormalizedName,
+        string Pinyin,
+        string Initials)
+    {
+        public IEnumerable<string> Aliases
+        {
+            get
+            {
+                yield return NormalizedName;
+                if (!string.IsNullOrWhiteSpace(Pinyin) && !Pinyin.Equals(NormalizedName, StringComparison.Ordinal))
+                    yield return Pinyin;
+                if (!string.IsNullOrWhiteSpace(Initials) && !Initials.Equals(NormalizedName, StringComparison.Ordinal))
+                    yield return Initials;
+            }
+        }
+    }
+
+    private sealed record IndexedTextFile(
+        string Name,
+        string Path,
+        string Subtitle,
+        string NormalizedName,
+        string NormalizedPath);
 }
