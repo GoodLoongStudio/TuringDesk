@@ -21,13 +21,16 @@ public partial class DesktopSearchBarWindow : Window
 
     private readonly MainWindow _host;
     private readonly DesktopSearchIndexService _searchIndex;
+    private readonly DesktopQuickAnswerService _quickAnswer = new();
     private HwndSource? _source;
     private bool _hotkeyRegistered;
     private bool _fallbackHotkeyRegistered;
     private bool _busy;
     private bool _modelsInitializing;
     private CancellationTokenSource? _activeRequest;
-    private CancellationTokenSource? _searchDebounce;
+    private CancellationTokenSource? _searchPipeline;
+    private long _searchGeneration;
+    private string? _pendingDeepQuery;
     private DesktopAiModelChoice? _selectedModel;
 
     public DesktopSearchBarWindow(MainWindow host)
@@ -50,9 +53,6 @@ public partial class DesktopSearchBarWindow : Window
         };
         LocationChanged += (_, _) => DesktopSearchReservedArea.Publish(this);
 
-        // A WPF top-level window is raised when it receives activation. Re-pin
-        // after the activation transaction so clicking/focusing the desktop
-        // search never turns it into an application-level overlay.
         Activated += (_, _) => Dispatcher.BeginInvoke(
             new Action(RefreshPosition),
             DispatcherPriority.ContextIdle);
@@ -85,10 +85,6 @@ public partial class DesktopSearchBarWindow : Window
     internal void FocusSearch()
     {
         if (!IsVisible) Show();
-
-        // Activate only long enough to give the TextBox keyboard focus, then
-        // immediately return the HWND to the desktop Z-order band. This keeps
-        // Alt+Space useful without leaving the bar above normal applications.
         Activate();
         SearchBox.Focus();
         Keyboard.Focus(SearchBox);
@@ -101,8 +97,6 @@ public partial class DesktopSearchBarWindow : Window
         var hwnd = new WindowInteropHelper(this).Handle;
         _source = HwndSource.FromHwnd(hwnd);
         _source?.AddHook(WndProc);
-
-        // Place the HWND in the desktop band before the first WPF paint.
         RefreshPosition();
 
         _hotkeyRegistered = RegisterHotKey(hwnd, HotkeyId, ModAlt | ModNoRepeat, VkSpace);
@@ -124,17 +118,13 @@ public partial class DesktopSearchBarWindow : Window
         _activeRequest?.Cancel();
         _activeRequest?.Dispose();
         _activeRequest = null;
-        _searchDebounce?.Cancel();
-        _searchDebounce?.Dispose();
-        _searchDebounce = null;
+        CancelSearchPipeline();
         _searchIndex.Dispose();
 
         DesktopSearchReservedArea.Clear();
         var hwnd = new WindowInteropHelper(this).Handle;
         if ((_hotkeyRegistered || _fallbackHotkeyRegistered) && hwnd != IntPtr.Zero)
-        {
             _ = UnregisterHotKey(hwnd, HotkeyId);
-        }
         _source?.RemoveHook(WndProc);
         _source = null;
     }
@@ -170,12 +160,12 @@ public partial class DesktopSearchBarWindow : Window
     {
         if (_selectedModel is null)
         {
-            ModelSelector.ToolTip = "没有可用 AI 模型；点击配置。";
+            ModelSelector.ToolTip = "没有可用 AI 模型；点击配置。应用/文件搜索和计算仍可使用。";
             return;
         }
 
         ModelSelector.ToolTip = _selectedModel.IsAvailable
-            ? $"AI 模型：{_selectedModel.DisplayName}\n{_selectedModel.Detail}"
+            ? $"轻量翻译/解释模型：{_selectedModel.DisplayName}\n{_selectedModel.Detail}\n复杂任务只有点击“深度处理”才启动 Harness。"
             : _selectedModel.Detail;
     }
 
@@ -203,47 +193,51 @@ public partial class DesktopSearchBarWindow : Window
             ? Visibility.Visible
             : Visibility.Collapsed;
 
-        _searchDebounce?.Cancel();
-        _searchDebounce?.Dispose();
-        _searchDebounce = null;
-
+        CancelSearchPipeline();
+        var generation = Interlocked.Increment(ref _searchGeneration);
         var query = SearchBox.Text.Trim();
         if (string.IsNullOrWhiteSpace(query))
         {
             CollapseSearchResults();
+            CollapseReply();
             return;
         }
 
         CollapseReply();
-        var debounce = new CancellationTokenSource();
-        _searchDebounce = debounce;
-        _ = RefreshLocalResultsAsync(query, debounce.Token);
+
+        // Level 1: render RAM-only application matches immediately. No debounce,
+        // disk access, Task.Run or Runtime/Harness activation is allowed here.
+        var apps = _searchIndex.SearchApps(query, 5);
+        ApplySearchResults(query, generation, apps);
+
+        // Level 2: file scoring runs on a pool thread and is cancellable. A newer
+        // keystroke invalidates both its token and generation before it can update UI.
+        var pipeline = new CancellationTokenSource();
+        _searchPipeline = pipeline;
+        _ = StreamFileResultsAsync(query, apps, generation, pipeline.Token);
     }
 
-    private async Task RefreshLocalResultsAsync(string query, CancellationToken cancellationToken)
+    private async Task StreamFileResultsAsync(
+        string query,
+        IReadOnlyList<DesktopSearchResult> apps,
+        long generation,
+        CancellationToken cancellationToken)
     {
         try
         {
-            await Task.Delay(85, cancellationToken);
-            var results = await _searchIndex.SearchAsync(query, 8, cancellationToken);
+            await Task.Yield();
+            var files = await _searchIndex.SearchFilesAsync(query, 6, cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
 
-            if (!string.Equals(SearchBox.Text.Trim(), query, StringComparison.Ordinal)) return;
+            var merged = apps
+                .Concat(files)
+                .OrderByDescending(item => item.Score)
+                .ThenBy(item => item.Level)
+                .ThenBy(item => item.Name, StringComparer.CurrentCultureIgnoreCase)
+                .Take(8)
+                .ToArray();
 
-            SearchResultsList.ItemsSource = results;
-            if (results.Count == 0)
-            {
-                CollapseSearchResults();
-                return;
-            }
-
-            // Exact/prefix application matches behave like a launcher: typing an
-            // app name and pressing Enter opens it. Fuzzy/path results remain
-            // unselected so Enter naturally goes to AI instead.
-            SearchResultsList.SelectedIndex = results[0].Kind == DesktopSearchResultKind.App && results[0].Score >= 950
-                ? 0
-                : -1;
-            ExpandSearchResults(results.Count);
+            ApplySearchResults(query, generation, merged);
         }
         catch (OperationCanceledException)
         {
@@ -251,8 +245,38 @@ public partial class DesktopSearchBarWindow : Window
         }
         catch
         {
-            CollapseSearchResults();
+            // Keep already-rendered Level 1 app results if the file provider fails.
         }
+    }
+
+    private void ApplySearchResults(
+        string query,
+        long generation,
+        IReadOnlyList<DesktopSearchResult> results)
+    {
+        if (generation != Volatile.Read(ref _searchGeneration)) return;
+        if (!string.Equals(SearchBox.Text.Trim(), query, StringComparison.Ordinal)) return;
+
+        SearchResultsList.ItemsSource = results;
+        if (results.Count == 0)
+        {
+            CollapseSearchResults();
+            return;
+        }
+
+        SearchResultsList.SelectedIndex =
+            results[0].Kind == DesktopSearchResultKind.App && results[0].Score >= 990
+                ? 0
+                : -1;
+        ExpandSearchResults(results.Count);
+    }
+
+    private void CancelSearchPipeline()
+    {
+        var previous = Interlocked.Exchange(ref _searchPipeline, null);
+        if (previous is null) return;
+        previous.Cancel();
+        previous.Dispose();
     }
 
     private async void SearchBox_KeyDown(object sender, KeyEventArgs e)
@@ -284,14 +308,19 @@ public partial class DesktopSearchBarWindow : Window
         {
             e.Handled = true;
 
-            var forceAi = Keyboard.Modifiers.HasFlag(ModifierKeys.Control);
-            if (!forceAi && SearchResultsList.SelectedItem is DesktopSearchResult selected)
+            if (Keyboard.Modifiers.HasFlag(ModifierKeys.Control))
+            {
+                OpenDeepProcessing(SearchBox.Text.Trim());
+                return;
+            }
+
+            if (SearchResultsList.SelectedItem is DesktopSearchResult selected)
             {
                 OpenLocalResult(selected);
                 return;
             }
 
-            await SubmitAsync();
+            await SubmitQuickAsync();
         }
     }
 
@@ -323,6 +352,7 @@ public partial class DesktopSearchBarWindow : Window
             ReplyTitle.Text = "无法打开";
             ReplyText.Text = result.Target;
             ReplyDot.Fill = new SolidColorBrush(Color.FromRgb(240, 125, 125));
+            DeepProcessButton.Visibility = Visibility.Collapsed;
             CollapseSearchResults();
             ExpandReply(92);
             return;
@@ -334,23 +364,22 @@ public partial class DesktopSearchBarWindow : Window
         Keyboard.ClearFocus();
     }
 
-    private async Task SubmitAsync()
+    /// <summary>
+    /// Level 3 only. This method must never call RuntimeClient/Harness directly.
+    /// Complex requests are converted into an explicit deep-processing offer.
+    /// </summary>
+    private async Task SubmitQuickAsync()
     {
         var prompt = SearchBox.Text.Trim();
         if (_busy || string.IsNullOrWhiteSpace(prompt)) return;
 
-        if (_selectedModel is null || !_selectedModel.IsAvailable || _selectedModel.Settings is null)
-        {
-            ShowNoModelHint();
-            return;
-        }
-
         _busy = true;
         SearchBox.IsEnabled = false;
         ModelSelector.IsEnabled = false;
-        ReplyTitle.Text = $"{_selectedModel.DisplayName} · 正在处理";
+        ReplyTitle.Text = "轻量直答 · 正在处理";
         ReplyText.Text = prompt;
         ReplyDot.Fill = new SolidColorBrush(Color.FromRgb(127, 143, 255));
+        DeepProcessButton.Visibility = Visibility.Collapsed;
         CollapseSearchResults();
         ExpandReply();
 
@@ -359,32 +388,47 @@ public partial class DesktopSearchBarWindow : Window
 
         try
         {
-            var reply = await _host.SubmitSearchCommandWithModelAsync(prompt, _selectedModel, request.Token);
+            var result = await _quickAnswer.TryAnswerAsync(prompt, _selectedModel, request.Token);
             if (request.IsCancellationRequested) return;
 
-            ReplyTitle.Text = _selectedModel.DisplayName;
-            ReplyText.Text = string.IsNullOrWhiteSpace(reply) ? "没有返回内容。" : reply;
-            ReplyDot.Fill = new SolidColorBrush(Color.FromRgb(99, 230, 190));
-            SearchBox.Clear();
+            switch (result.Disposition)
+            {
+                case DesktopQuickAnswerDisposition.Answered:
+                    _pendingDeepQuery = null;
+                    ReplyTitle.Text = result.Title;
+                    ReplyText.Text = result.Message;
+                    ReplyDot.Fill = new SolidColorBrush(Color.FromRgb(99, 230, 190));
+                    DeepProcessButton.Visibility = Visibility.Collapsed;
+                    SearchBox.Clear();
+                    ExpandReply();
+                    break;
+
+                case DesktopQuickAnswerDisposition.RequiresModel:
+                    _pendingDeepQuery = null;
+                    ReplyTitle.Text = result.Title;
+                    ReplyText.Text = result.Message;
+                    ReplyDot.Fill = new SolidColorBrush(Color.FromRgb(241, 182, 106));
+                    DeepProcessButton.Visibility = Visibility.Collapsed;
+                    ExpandReply(120);
+                    break;
+
+                default:
+                    ShowDeepProcessingOffer(prompt, result.Title, result.Message);
+                    break;
+            }
         }
         catch (OperationCanceledException) when (request.IsCancellationRequested)
         {
-            // A desktop entry must never look permanently stuck. After 30 seconds
-            // (or Escape) cancel the request and restore the compact idle search UI.
-            RestoreIdleState(clearText: true);
+            RestoreIdleState(clearText: false);
         }
         catch (Exception error)
         {
-            ReplyTitle.Text = $"{_selectedModel.DisplayName} · 未完成";
-            ReplyText.Text = error.Message;
-            ReplyDot.Fill = new SolidColorBrush(Color.FromRgb(240, 125, 125));
+            ShowDeepProcessingOffer(prompt, "轻量直答未完成", error.Message);
         }
         finally
         {
             if (ReferenceEquals(_activeRequest, request))
-            {
                 _activeRequest = null;
-            }
             request.Dispose();
             _busy = false;
             SearchBox.IsEnabled = true;
@@ -397,13 +441,27 @@ public partial class DesktopSearchBarWindow : Window
         }
     }
 
-    private void ShowNoModelHint()
+    private void ShowDeepProcessingOffer(string prompt, string title, string message)
     {
-        ReplyTitle.Text = "需要 AI 模型";
-        ReplyText.Text = "还没有可用模型。点击搜索框左侧“未配置 AI”，粘贴 API Key 或配置 Ollama / LM Studio 后即可直接对话。应用和文件搜索不受影响。";
-        ReplyDot.Fill = new SolidColorBrush(Color.FromRgb(241, 182, 106));
+        _pendingDeepQuery = prompt;
+        ReplyTitle.Text = title;
+        ReplyText.Text = message;
+        ReplyDot.Fill = new SolidColorBrush(Color.FromRgb(99, 102, 241));
+        DeepProcessButton.Visibility = Visibility.Visible;
         CollapseSearchResults();
-        ExpandReply(110);
+        ExpandReply(175);
+    }
+
+    private void DeepProcess_Click(object sender, RoutedEventArgs e) =>
+        OpenDeepProcessing(_pendingDeepQuery ?? SearchBox.Text.Trim());
+
+    private void OpenDeepProcessing(string query)
+    {
+        if (string.IsNullOrWhiteSpace(query)) return;
+        _pendingDeepQuery = query;
+        _host.ShowHarnessConsoleFromSearch(query);
+        CollapseReply();
+        CollapseSearchResults();
     }
 
     private void RestoreIdleState(bool clearText)
@@ -411,6 +469,8 @@ public partial class DesktopSearchBarWindow : Window
         if (clearText) SearchBox.Clear();
         ReplyTitle.Text = "图灵";
         ReplyText.Text = string.Empty;
+        DeepProcessButton.Visibility = Visibility.Collapsed;
+        _pendingDeepQuery = null;
         CollapseSearchResults();
         CollapseReply();
         SearchBox.IsEnabled = true;
@@ -444,6 +504,8 @@ public partial class DesktopSearchBarWindow : Window
     {
         ReplyPanel.Visibility = Visibility.Collapsed;
         ReplyRow.Height = new GridLength(0);
+        DeepProcessButton.Visibility = Visibility.Collapsed;
+        _pendingDeepQuery = null;
         UpdateExpandedHeight();
     }
 
@@ -467,7 +529,7 @@ public partial class DesktopSearchBarWindow : Window
         FocusSearch();
         ShellNotificationService.Publish(
             "语音已常驻",
-            "直接说“图灵桌面”再说你的需求；识别结果会交给同一个 AI Runtime。",
+            "直接说“图灵桌面”再说你的需求；简单检索保持轻量，复杂任务按需启动 Agent。",
             "voice");
     }
 
