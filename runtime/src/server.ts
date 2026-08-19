@@ -33,7 +33,7 @@ async function readJson(req: IncomingMessage): Promise<any> {
 const server = createServer(async (req, res) => {
   try {
     if (req.method === 'GET' && req.url === '/health') {
-      json(res, 200, { ok: true, mode: models.mode, version: '0.4.0', model: models.current })
+      json(res, 200, { ok: true, mode: models.mode, version: '0.5.0', model: models.current })
       return
     }
 
@@ -44,6 +44,15 @@ const server = createServer(async (req, res) => {
 
     if (req.method === 'GET' && req.url === '/v1/config/model') {
       json(res, 200, models.current)
+      return
+    }
+
+    if (req.method === 'POST' && req.url === '/v1/runtime/shutdown') {
+      // RuntimeHostService uses this only for an owned process after its idle
+      // timeout. Respond before closing so the desktop can distinguish graceful
+      // shutdown from a crashed/unreachable child.
+      json(res, 202, { ok: true, shuttingDown: true })
+      setImmediate(() => void shutdown())
       return
     }
 
