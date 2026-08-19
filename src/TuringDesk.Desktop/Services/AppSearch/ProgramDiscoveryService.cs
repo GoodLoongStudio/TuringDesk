@@ -23,6 +23,14 @@ internal sealed class ProgramDiscoveryService
         ".lnk", ".url", ".appref-ms"
     };
 
+    private static readonly string[] AppUrlPrefixes =
+    [
+        "steam://rungameid/",
+        "steam://run/",
+        "steam://open/",
+        "com.epicgames.launcher://apps/"
+    ];
+
     public IReadOnlyList<string> WatchRoots => BuildLaunchRoots()
         .Select(root => root.Path)
         .Where(Directory.Exists)
@@ -35,7 +43,9 @@ internal sealed class ProgramDiscoveryService
 
         AddBuiltIns(programs);
         DiscoverClassicShortcuts(programs);
-        DiscoverPackagedApps(programs);
+
+        foreach (var packaged in DiscoverPackagedAppsBounded())
+            Add(programs, packaged);
 
         return programs.Values
             .OrderBy(program => program.Name, StringComparer.CurrentCultureIgnoreCase)
@@ -79,6 +89,8 @@ internal sealed class ProgramDiscoveryService
                 {
                     var extension = Path.GetExtension(file);
                     if (!LaunchExtensions.Contains(extension) || ShouldHide(file)) continue;
+                    if (extension.Equals(".url", StringComparison.OrdinalIgnoreCase) && !IsApplicationInternetShortcut(file))
+                        continue;
 
                     var name = Path.GetFileNameWithoutExtension(file).Trim();
                     if (string.IsNullOrWhiteSpace(name)) continue;
@@ -112,8 +124,32 @@ internal sealed class ProgramDiscoveryService
         }
     }
 
-    private static void DiscoverPackagedApps(Dictionary<string, DiscoveredProgram> programs)
+    private static IReadOnlyList<DiscoveredProgram> DiscoverPackagedAppsBounded()
     {
+        IReadOnlyList<DiscoveredProgram>? result = null;
+        var thread = new Thread(() => result = DiscoverPackagedAppsSta())
+        {
+            IsBackground = true,
+            Name = "TuringDesk AppsFolder discovery"
+        };
+
+        try
+        {
+            thread.SetApartmentState(ApartmentState.STA);
+            thread.Start();
+            return thread.Join(TimeSpan.FromSeconds(2))
+                ? result ?? Array.Empty<DiscoveredProgram>()
+                : Array.Empty<DiscoveredProgram>();
+        }
+        catch
+        {
+            return Array.Empty<DiscoveredProgram>();
+        }
+    }
+
+    private static IReadOnlyList<DiscoveredProgram> DiscoverPackagedAppsSta()
+    {
+        var discovered = new List<DiscoveredProgram>();
         object? shell = null;
         object? folder = null;
         object? items = null;
@@ -121,18 +157,18 @@ internal sealed class ProgramDiscoveryService
         try
         {
             var shellType = Type.GetTypeFromProgID("Shell.Application");
-            if (shellType is null) return;
+            if (shellType is null) return discovered;
 
             shell = Activator.CreateInstance(shellType);
-            if (shell is null) return;
+            if (shell is null) return discovered;
 
             dynamic shellDynamic = shell;
             folder = shellDynamic.NameSpace("shell:AppsFolder");
-            if (folder is null) return;
+            if (folder is null) return discovered;
 
             dynamic folderDynamic = folder;
             items = folderDynamic.Items();
-            if (items is null) return;
+            if (items is null) return discovered;
 
             dynamic itemsDynamic = items;
             var count = Convert.ToInt32(itemsDynamic.Count);
@@ -151,7 +187,7 @@ internal sealed class ProgramDiscoveryService
                     var appUserModelId = Convert.ToString(app.ExtendedProperty("System.AppUserModel.ID"))?.Trim() ?? string.Empty;
                     if (string.IsNullOrWhiteSpace(appUserModelId)) continue;
 
-                    Add(programs, new DiscoveredProgram(
+                    discovered.Add(new DiscoveredProgram(
                         name,
                         "aumid:" + appUserModelId,
                         "Windows 应用",
@@ -179,6 +215,27 @@ internal sealed class ProgramDiscoveryService
             ReleaseCom(folder);
             ReleaseCom(shell);
         }
+
+        return discovered;
+    }
+
+    private static bool IsApplicationInternetShortcut(string path)
+    {
+        try
+        {
+            foreach (var line in File.ReadLines(path).Take(32))
+            {
+                if (!line.StartsWith("URL=", StringComparison.OrdinalIgnoreCase)) continue;
+                var url = line[4..].Trim();
+                return AppUrlPrefixes.Any(prefix => url.StartsWith(prefix, StringComparison.OrdinalIgnoreCase));
+            }
+        }
+        catch
+        {
+            // Incomplete shortcut during install/update: skip until next refresh.
+        }
+
+        return false;
     }
 
     private static IReadOnlyList<LaunchRoot> BuildLaunchRoots()
