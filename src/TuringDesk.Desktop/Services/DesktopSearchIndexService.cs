@@ -39,7 +39,7 @@ public sealed class DesktopSearchIndexService : IDisposable
         _ = _everything.InitializeAsync();
     }
 
-    public bool IsInitialIndexComplete => _apps.IsReady && _everything.InitializationCompleted;
+    public bool IsInitialIndexComplete => _apps.InitializationCompleted && _everything.InitializationCompleted;
     public bool AppSearchReady => _apps.IsReady;
     public bool UsesEverything => _everything.IsReady;
     public bool FileSearchReady => _everything.IsReady;
