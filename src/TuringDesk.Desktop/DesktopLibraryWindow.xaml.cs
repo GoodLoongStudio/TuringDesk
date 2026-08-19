@@ -86,25 +86,56 @@ public partial class DesktopLibraryWindow : Window
         ExportSceneButton.IsEnabled = !scene.IsBuiltIn;
     }
 
-    private void ApplyScene_Click(object sender, RoutedEventArgs e)
+    private async void ApplyScene_Click(object sender, RoutedEventArgs e)
     {
         if (SceneList.SelectedItem is not SceneManifest scene) return;
 
-        // A direct scene selection must win over a previously active playlist or
-        // multi-monitor profile. Persist those overrides first so the wallpaper
-        // host sees the cleared policy when ShellSettingsChanged fires. The host
-        // also polls these files once per second, so this remains deterministic
-        // when the Library is opened from a second TuringDesk process.
-        _playback.ActivePlaylistId = null;
-        _playback.ActiveProfileId = null;
-        _playbackStore.Save(_playback);
+        ApplySceneButton.IsEnabled = false;
+        try
+        {
+            // A direct scene selection must win over a previously active playlist or
+            // multi-monitor profile. Persist those overrides first so the wallpaper
+            // host sees the cleared policy when ShellSettingsChanged fires. The host
+            // also polls these files once per second, so this remains deterministic
+            // when the Library is opened from a second TuringDesk process.
+            _playback.ActivePlaylistId = null;
+            _playback.ActiveProfileId = null;
+            _playbackStore.Save(_playback);
 
-        var shell = _shellStore.Load();
-        shell.Appearance.SceneId = scene.Id;
-        _shellStore.Save(shell);
+            var shell = _shellStore.Load();
+            shell.Appearance.SceneId = scene.Id;
+            _shellStore.Save(shell);
 
-        CurrentSceneText.Text = scene.Title;
-        ShellNotificationService.Publish("桌面场景已应用", $"{scene.Title} · 最迟 1 秒同步到桌面", "shell");
+            CurrentSceneText.Text = scene.Title;
+            ShellNotificationService.Publish("正在应用桌面场景", scene.Title, "shell");
+
+            // Do not report success just because the settings file was written. The
+            // live wallpaper host must acknowledge that the primary monitor is both
+            // attached and rendering the requested scene.
+            var applied = await DesktopEngineProbe.WaitForPrimarySceneAsync(
+                scene.Id,
+                TimeSpan.FromSeconds(2.5));
+
+            if (applied)
+            {
+                ShellNotificationService.Publish("桌面场景已应用", scene.Title, "shell");
+            }
+            else
+            {
+                ShellNotificationService.Publish(
+                    "场景已保存，但桌面渲染未确认",
+                    $"{scene.Title} · TuringDesk 正在重新连接 Explorer 桌面层。",
+                    "warning");
+            }
+        }
+        catch (Exception error)
+        {
+            ShellNotificationService.Publish("应用桌面场景失败", error.Message, "warning");
+        }
+        finally
+        {
+            ApplySceneButton.IsEnabled = SceneList.SelectedItem is SceneManifest;
+        }
     }
 
     private void Import_Click(object sender, RoutedEventArgs e)
