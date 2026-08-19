@@ -8,14 +8,34 @@ namespace TuringDesk.Desktop;
 public partial class SceneRendererControl
 {
     private bool _nativePropertyHooked;
+    private bool _nativeLifecycleHooked;
 
     protected override void OnInitialized(EventArgs e)
     {
         base.OnInitialized(e);
+        if (_nativeLifecycleHooked) return;
+        _nativeLifecycleHooked = true;
+        Loaded += NativeProperties_Loaded;
+        Unloaded += NativeProperties_Unloaded;
+        HookNativeProperties();
+    }
+
+    private void NativeProperties_Loaded(object sender, RoutedEventArgs e) => HookNativeProperties();
+
+    private void NativeProperties_Unloaded(object sender, RoutedEventArgs e) => UnhookNativeProperties();
+
+    private void HookNativeProperties()
+    {
         if (_nativePropertyHooked) return;
         _nativePropertyHooked = true;
         SceneInstanceSettingsStore.SceneSettingsChanged += NativeSceneSettingsChanged;
-        Unloaded += (_, _) => SceneInstanceSettingsStore.SceneSettingsChanged -= NativeSceneSettingsChanged;
+    }
+
+    private void UnhookNativeProperties()
+    {
+        if (!_nativePropertyHooked) return;
+        _nativePropertyHooked = false;
+        SceneInstanceSettingsStore.SceneSettingsChanged -= NativeSceneSettingsChanged;
     }
 
     private void NativeSceneSettingsChanged(string sceneId)
@@ -34,7 +54,8 @@ public partial class SceneRendererControl
         var preset = _scene.Tags.FirstOrDefault(tag => tag is "aurora" or "neon" or "orbit") ?? "aurora";
 
         GpuSurface.Configure(preset, intensity, motion);
-        if (!motion) GpuSurface.SetPaused(true);
+        if (!motion || _paused || _stopped)
+            GpuSurface.SetPaused(true);
 
         if (BuiltInScene.Visibility == Visibility.Visible)
         {
@@ -49,7 +70,7 @@ public partial class SceneRendererControl
                     (byte)Math.Clamp((int)(color.B * 0.78 + 32), 0, 255));
             }
 
-            if (motion)
+            if (motion && !_paused && !_stopped)
             {
                 StartGlowAnimation(GlowA, 24, 18, 11);
                 StartGlowAnimation(GlowB, -20, -14, 13);
