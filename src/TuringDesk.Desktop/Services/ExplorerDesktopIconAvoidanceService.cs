@@ -6,7 +6,7 @@ namespace TuringDesk.Desktop.Services;
 /// <summary>
 /// Best-effort Explorer desktop icon avoidance. It only moves icon positions that
 /// intersect TuringDesk's reserved search-bar area and never changes the shell.
-/// All native failures are ignored so Explorer remains authoritative and safe.
+/// Native ListView positions and the reserved rectangle are both physical pixels.
 /// </summary>
 public static class ExplorerDesktopIconAvoidanceService
 {
@@ -24,9 +24,9 @@ public static class ExplorerDesktopIconAvoidanceService
     private const uint MemRelease = 0x8000;
     private const uint PageReadWrite = 0x04;
 
-    private const int ApproxIconWidth = 104;
-    private const int ApproxIconHeight = 104;
-    private const int RelocateGap = 24;
+    private const int BaseIconWidth = 104;
+    private const int BaseIconHeight = 104;
+    private const int BaseRelocateGap = 24;
 
     public static void ApplyBestEffort(Rect reservedScreenPixels)
     {
@@ -34,6 +34,12 @@ public static class ExplorerDesktopIconAvoidanceService
         {
             var listView = FindDesktopListView();
             if (listView == IntPtr.Zero || !GetWindowRect(listView, out var listRect)) return;
+
+            var dpi = Math.Max(96u, GetDpiForWindow(listView));
+            var scale = dpi / 96d;
+            var iconWidth = Math.Max(1, (int)Math.Ceiling(BaseIconWidth * scale));
+            var iconHeight = Math.Max(1, (int)Math.Ceiling(BaseIconHeight * scale));
+            var relocateGap = Math.Max(1, (int)Math.Ceiling(BaseRelocateGap * scale));
 
             _ = GetWindowThreadProcessId(listView, out var processId);
             if (processId == 0) return;
@@ -63,21 +69,19 @@ public static class ExplorerDesktopIconAvoidanceService
                         var itemRect = new Rect(
                             listRect.Left + point.X,
                             listRect.Top + point.Y,
-                            ApproxIconWidth,
-                            ApproxIconHeight);
+                            iconWidth,
+                            iconHeight);
                         if (!itemRect.IntersectsWith(reservedScreenPixels)) continue;
 
                         var targetX = point.X;
-                        var targetY = (int)Math.Ceiling(reservedScreenPixels.Bottom + RelocateGap - listRect.Top);
-                        targetY = Math.Max(0, Math.Min(targetY, Math.Max(0, listRect.Bottom - listRect.Top - ApproxIconHeight)));
+                        var targetY = (int)Math.Ceiling(reservedScreenPixels.Bottom + relocateGap - listRect.Top);
+                        targetY = Math.Max(0, Math.Min(targetY, Math.Max(0, listRect.Bottom - listRect.Top - iconHeight)));
 
-                        // If moving straight down would still be inside the reserved area,
-                        // place the icon immediately to the right of it instead.
-                        var candidate = new Rect(listRect.Left + targetX, listRect.Top + targetY, ApproxIconWidth, ApproxIconHeight);
+                        var candidate = new Rect(listRect.Left + targetX, listRect.Top + targetY, iconWidth, iconHeight);
                         if (candidate.IntersectsWith(reservedScreenPixels))
                         {
-                            targetX = (int)Math.Ceiling(reservedScreenPixels.Right + RelocateGap - listRect.Left);
-                            targetX = Math.Max(0, Math.Min(targetX, Math.Max(0, listRect.Right - listRect.Left - ApproxIconWidth)));
+                            targetX = (int)Math.Ceiling(reservedScreenPixels.Right + relocateGap - listRect.Left);
+                            targetX = Math.Max(0, Math.Min(targetX, Math.Max(0, listRect.Right - listRect.Left - iconWidth)));
                             targetY = point.Y;
                         }
 
@@ -161,6 +165,9 @@ public static class ExplorerDesktopIconAvoidanceService
 
     [DllImport("user32.dll")]
     private static extern bool GetWindowRect(IntPtr hWnd, out NativeRect lpRect);
+
+    [DllImport("user32.dll")]
+    private static extern uint GetDpiForWindow(IntPtr hWnd);
 
     [DllImport("user32.dll")]
     private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
