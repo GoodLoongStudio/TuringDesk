@@ -72,9 +72,9 @@ public sealed class DesktopSearchIndexService : IDisposable
 
     public DesktopSearchIndexService()
     {
-        // Shell icon extraction and pinyin conversion are paid once during index
-        // construction. After this point L1 TextChanged queries are pure RAM reads.
-        _apps = ShellSurfaceCatalog.LoadStartApps()
+        // The desktop search result template does not render per-app icons. Avoid
+        // decoding hundreds of shell bitmaps into the always-resident RAM index.
+        _apps = ShellSurfaceCatalog.LoadStartApps(includeIcons: false)
             .Select(CreateIndexedApp)
             .ToArray();
         _appPrefixIndex = BuildAppPrefixIndex(_apps);
@@ -223,8 +223,6 @@ public sealed class DesktopSearchIndexService : IDisposable
             }
         }
 
-        // Path-token or substring queries may not have a filename prefix bucket;
-        // retain a complete-snapshot fallback on the pool thread for correctness.
         return _files.Values;
     }
 
