@@ -86,14 +86,15 @@ public static class ShellSurfaceCatalog
     }
 
     /// <summary>
-    /// Enumerate Start Menu entries. Search callers pass includeIcons:false so the
-    /// always-resident RAM index does not decode hundreds of shell bitmaps that its
-    /// compact result template never renders. Existing richer surfaces keep the
-    /// default true behavior.
+    /// Enumerate launchable application shortcuts from the Windows Start Menu,
+    /// desktop and taskbar-pinned shortcut locations. Search callers pass
+    /// includeIcons:false so the always-resident RAM index does not decode hundreds
+    /// of shell bitmaps. This intentionally avoids a full executable scan.
     /// </summary>
     public static IReadOnlyList<StartAppItem> LoadStartApps(bool includeIcons = true)
     {
         var userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        var appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
         var documents = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
         var downloads = Path.Combine(userProfile, "Downloads");
 
@@ -142,28 +143,43 @@ public static class ShellSurfaceCatalog
                 "Folder")
         };
 
-        var roots = new[]
+        var launchRoots = new[]
         {
-            Environment.GetFolderPath(Environment.SpecialFolder.StartMenu),
-            Environment.GetFolderPath(Environment.SpecialFolder.CommonStartMenu)
+            new LaunchRoot(Environment.GetFolderPath(Environment.SpecialFolder.StartMenu), "开始菜单", recursive: true),
+            new LaunchRoot(Environment.GetFolderPath(Environment.SpecialFolder.CommonStartMenu), "公共开始菜单", recursive: true),
+            new LaunchRoot(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), "桌面快捷方式", recursive: false),
+            new LaunchRoot(Environment.GetFolderPath(Environment.SpecialFolder.CommonDesktopDirectory), "公共桌面快捷方式", recursive: false),
+            new LaunchRoot(
+                Path.Combine(appData, "Microsoft", "Internet Explorer", "Quick Launch", "User Pinned", "TaskBar"),
+                "任务栏固定",
+                recursive: true)
         };
 
-        foreach (var root in roots.Where(Directory.Exists).Distinct(StringComparer.OrdinalIgnoreCase))
+        foreach (var launchRoot in launchRoots
+                     .Where(root => Directory.Exists(root.Path))
+                     .DistinctBy(root => root.Path, StringComparer.OrdinalIgnoreCase))
         {
             try
             {
-                foreach (var file in Directory.EnumerateFiles(root, "*.*", SearchOption.AllDirectories))
+                var option = launchRoot.Recursive ? SearchOption.AllDirectories : SearchOption.TopDirectoryOnly;
+                foreach (var file in Directory.EnumerateFiles(launchRoot.Path, "*.*", option))
                 {
                     var extension = Path.GetExtension(file);
                     if (!StartMenuExtensions.Contains(extension, StringComparer.OrdinalIgnoreCase)) continue;
+                    if (ShouldHide(file)) continue;
 
                     var name = Path.GetFileNameWithoutExtension(file).Trim();
                     if (string.IsNullOrWhiteSpace(name)) continue;
 
-                    var relativeDirectory = Path.GetDirectoryName(Path.GetRelativePath(root, file)) ?? string.Empty;
-                    var category = string.IsNullOrWhiteSpace(relativeDirectory) || relativeDirectory == "."
-                        ? "应用"
-                        : relativeDirectory.Split(Path.DirectorySeparatorChar)[0];
+                    var category = launchRoot.Label;
+                    if (launchRoot.Recursive &&
+                        launchRoot.Label.Contains("开始菜单", StringComparison.Ordinal) &&
+                        Path.GetDirectoryName(file) is { } directory)
+                    {
+                        var relativeDirectory = Path.GetDirectoryName(Path.GetRelativePath(launchRoot.Path, file)) ?? string.Empty;
+                        if (!string.IsNullOrWhiteSpace(relativeDirectory) && relativeDirectory != ".")
+                            category = relativeDirectory.Split(Path.DirectorySeparatorChar)[0];
+                    }
 
                     items.TryAdd(name, new StartAppItem(
                         name,
@@ -176,13 +192,13 @@ public static class ShellSurfaceCatalog
             }
             catch
             {
-                // A Start Menu entry can disappear while it is being indexed.
+                // Shortcut locations can change while the index is being built.
             }
         }
 
         return items.Values
             .OrderBy(item => item.Name, StringComparer.CurrentCultureIgnoreCase)
-            .Take(600)
+            .Take(800)
             .ToArray();
     }
 
@@ -295,4 +311,6 @@ public static class ShellSurfaceCatalog
         "" => "文件",
         _ => $"{extension.TrimStart('.').ToUpperInvariant()} 文件"
     };
+
+    private sealed record LaunchRoot(string Path, string Label, bool Recursive);
 }
