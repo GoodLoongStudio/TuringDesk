@@ -1,6 +1,6 @@
 using System.IO;
 using System.Windows.Media;
-using PinyinNet;
+using TuringDesk.Desktop.Services.AppSearch;
 
 namespace TuringDesk.Desktop.Services;
 
@@ -23,73 +23,49 @@ public sealed record DesktopSearchResult(
 }
 
 /// <summary>
-/// Two lightweight local search tiers:
-/// Level 1 keeps only installed application/shortcut aliases in RAM.
-/// Level 2 delegates all filename/path indexing and querying to Everything.
-///
-/// TuringDesk intentionally does not enumerate user directories, maintain a file
-/// database or attach recursive FileSystemWatchers. Everything owns that job.
+/// Search coordinator only:
+/// L1 delegates application discovery/ranking to AppSearchProvider.
+/// L2 delegates global filename/path indexing and querying to Everything.
+/// The coordinator never crawls disks and never starts Node/Harness.
 /// </summary>
 public sealed class DesktopSearchIndexService : IDisposable
 {
-    private const int MaxIndexedAliasLength = 48;
-
-    private readonly IndexedApp[] _apps;
-    private readonly IReadOnlyDictionary<string, int[]> _appPrefixIndex;
+    private readonly AppSearchProvider _apps = new();
     private readonly EverythingFileSearchProvider _everything = new();
-    private readonly Task _everythingInitialization;
     private int _disposed;
 
     public DesktopSearchIndexService()
     {
-        _apps = ShellSurfaceCatalog.LoadStartApps(includeIcons: false)
-            .Select(CreateIndexedApp)
-            .ToArray();
-        _appPrefixIndex = BuildAppPrefixIndex(_apps);
-
-        // This only starts/attaches to Everything. It never scans disks in the
-        // TuringDesk process and never wakes the Node/Harness runtime.
-        _everythingInitialization = _everything.InitializeAsync();
+        _ = _everything.InitializeAsync();
     }
 
-    public bool IsInitialIndexComplete => _everything.InitializationCompleted;
+    public bool IsInitialIndexComplete => _apps.IsReady && _everything.InitializationCompleted;
+    public bool AppSearchReady => _apps.IsReady;
     public bool UsesEverything => _everything.IsReady;
     public bool FileSearchReady => _everything.IsReady;
+    public string AppSearchStatus => _apps.Status;
     public string FileSearchProviderName => _everything.ProviderName;
     public string FileSearchStatus => _everything.Status;
-    public int AppCount => _apps.Length;
+    public int AppCount => _apps.Count;
 
-    // Retained for UI/source compatibility. TuringDesk deliberately owns zero
-    // filename index entries now; Everything owns the file database.
+    // Compatibility property retained for the existing status UI. TuringDesk owns
+    // no filename database; Everything owns the file index.
     public int IndexedFileCount => 0;
 
     /// <summary>
-    /// Level 1: synchronous RAM-only application search. No disk/registry/IPC work.
+    /// Level 1: RAM-only application search. Discovery is performed asynchronously
+    /// and results come from an immutable snapshot.
     /// </summary>
     public IReadOnlyList<DesktopSearchResult> SearchApps(string query, int limit = 5)
     {
-        var normalized = NormalizeAlias(query);
-        if (normalized.Length == 0 || _apps.Length == 0)
-            return Array.Empty<DesktopSearchResult>();
-
-        limit = Math.Clamp(limit, 1, 12);
-        IEnumerable<int> candidates = _appPrefixIndex.TryGetValue(normalized, out var indexedCandidates)
-            ? indexedCandidates
-            : Enumerable.Range(0, _apps.Length);
-
-        return candidates
-            .Select(index => (_apps[index], ScoreApp(normalized, _apps[index])))
-            .Where(pair => pair.Item2 > 0)
-            .OrderByDescending(pair => pair.Item2)
-            .ThenBy(pair => pair.Item1.Name, StringComparer.CurrentCultureIgnoreCase)
-            .Take(limit)
-            .Select(pair => new DesktopSearchResult(
-                pair.Item1.Name,
-                pair.Item1.Target,
+        return _apps.Search(query, limit)
+            .Select(hit => new DesktopSearchResult(
+                hit.Name,
+                hit.Target,
                 DesktopSearchResultKind.App,
-                string.IsNullOrWhiteSpace(pair.Item1.Category) ? "已安装应用" : pair.Item1.Category,
-                pair.Item1.Icon,
-                pair.Item2,
+                BuildAppSubtitle(hit.Category, hit.Source),
+                null,
+                hit.Score,
                 Level: 1))
             .ToArray();
     }
@@ -155,7 +131,7 @@ public sealed class DesktopSearchIndexService : IDisposable
 
             var normalizedName = NormalizeQuery(name);
             var normalizedPath = NormalizeQuery(path);
-            var score = Score(normalizedQuery, normalizedName, normalizedPath);
+            var score = ScoreFile(normalizedQuery, normalizedName, normalizedPath);
             if (score <= 0) score = 700;
 
             results.Add(new DesktopSearchResult(
@@ -175,96 +151,18 @@ public sealed class DesktopSearchIndexService : IDisposable
             .ToArray();
     }
 
-    private static IndexedApp CreateIndexedApp(StartAppItem app)
+    private static string BuildAppSubtitle(string category, string source)
     {
-        var normalizedName = NormalizeAlias(app.Name);
-        var pinyin = string.Empty;
-        var initials = string.Empty;
-
-        try
-        {
-            pinyin = NormalizeAlias(PinyinConvert.GetPinyin(app.Name) ?? string.Empty);
-            initials = NormalizeAlias(PinyinConvert.GetPinyinFirstLetter(app.Name) ?? string.Empty);
-        }
-        catch
-        {
-            // One malformed shell display name must not invalidate the launcher.
-        }
-
-        return new IndexedApp(
-            app.Name,
-            app.Target,
-            app.Category,
-            app.Icon,
-            normalizedName,
-            pinyin,
-            initials);
-    }
-
-    private static IReadOnlyDictionary<string, int[]> BuildAppPrefixIndex(IndexedApp[] apps)
-    {
-        var mutable = new Dictionary<string, List<int>>(StringComparer.Ordinal);
-        for (var index = 0; index < apps.Length; index++)
-        {
-            foreach (var alias in apps[index].Aliases)
-            {
-                if (string.IsNullOrWhiteSpace(alias)) continue;
-                var max = Math.Min(alias.Length, MaxIndexedAliasLength);
-                for (var length = 1; length <= max; length++)
-                {
-                    var prefix = alias[..length];
-                    if (!mutable.TryGetValue(prefix, out var list))
-                    {
-                        list = new List<int>(4);
-                        mutable[prefix] = list;
-                    }
-
-                    if (list.Count == 0 || list[^1] != index)
-                        list.Add(index);
-                }
-            }
-        }
-
-        return mutable.ToDictionary(
-            pair => pair.Key,
-            pair => pair.Value.Distinct().ToArray(),
-            StringComparer.Ordinal);
-    }
-
-    private static int ScoreApp(string query, IndexedApp app)
-    {
-        var nameScore = ScoreAlias(query, app.NormalizedName, exact: 1320, prefix: 1080, contains: 760);
-        var pinyinScore = ScoreAlias(query, app.Pinyin, exact: 1240, prefix: 1010, contains: 690);
-        var initialsScore = ScoreAlias(query, app.Initials, exact: 1210, prefix: 990, contains: 650);
-        return Math.Max(nameScore, Math.Max(pinyinScore, initialsScore));
-    }
-
-    private static int ScoreAlias(string query, string value, int exact, int prefix, int contains)
-    {
-        if (string.IsNullOrEmpty(value)) return 0;
-        if (value.Equals(query, StringComparison.Ordinal)) return exact;
-        if (value.StartsWith(query, StringComparison.Ordinal)) return prefix;
-        if (value.Contains(query, StringComparison.Ordinal)) return contains;
-        return 0;
+        if (string.IsNullOrWhiteSpace(category)) return "已安装应用";
+        if (string.IsNullOrWhiteSpace(source) || category.Equals(source, StringComparison.OrdinalIgnoreCase))
+            return category;
+        return $"{category} · {source}";
     }
 
     private static string NormalizeQuery(string query) =>
         string.Join(' ', query.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries)).ToLowerInvariant();
 
-    private static string NormalizeAlias(string value)
-    {
-        if (string.IsNullOrWhiteSpace(value)) return string.Empty;
-        var buffer = new char[value.Length];
-        var count = 0;
-        foreach (var character in value.ToLowerInvariant())
-        {
-            if (char.IsLetterOrDigit(character))
-                buffer[count++] = character;
-        }
-        return new string(buffer, 0, count);
-    }
-
-    private static int Score(string query, string normalizedName, string normalizedPath)
+    private static int ScoreFile(string query, string normalizedName, string normalizedPath)
     {
         if (normalizedName.Equals(query, StringComparison.Ordinal)) return 1200;
         if (normalizedName.StartsWith(query, StringComparison.Ordinal)) return 950;
@@ -296,28 +194,7 @@ public sealed class DesktopSearchIndexService : IDisposable
     public void Dispose()
     {
         if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
+        _apps.Dispose();
         _everything.Dispose();
-    }
-
-    private sealed record IndexedApp(
-        string Name,
-        string Target,
-        string Category,
-        ImageSource? Icon,
-        string NormalizedName,
-        string Pinyin,
-        string Initials)
-    {
-        public IEnumerable<string> Aliases
-        {
-            get
-            {
-                yield return NormalizedName;
-                if (!string.IsNullOrWhiteSpace(Pinyin) && !Pinyin.Equals(NormalizedName, StringComparison.Ordinal))
-                    yield return Pinyin;
-                if (!string.IsNullOrWhiteSpace(Initials) && !Initials.Equals(NormalizedName, StringComparison.Ordinal))
-                    yield return Initials;
-            }
-        }
     }
 }
