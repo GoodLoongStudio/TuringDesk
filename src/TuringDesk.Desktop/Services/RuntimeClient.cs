@@ -11,11 +11,14 @@ public sealed class RuntimeClient
         Timeout = TimeSpan.FromSeconds(120)
     };
 
-    public async Task<RuntimeHealth?> GetHealthAsync()
+    /// <summary>
+    /// Passive heartbeat. It never wakes a sleeping Runtime.
+    /// </summary>
+    public async Task<RuntimeHealth?> GetHealthAsync(CancellationToken cancellationToken = default)
     {
         try
         {
-            return await _http.GetFromJsonAsync<RuntimeHealth>("health");
+            return await _http.GetFromJsonAsync<RuntimeHealth>("health", cancellationToken);
         }
         catch
         {
@@ -23,11 +26,14 @@ public sealed class RuntimeClient
         }
     }
 
-    public async Task<AgentActivityState?> GetAgentStateAsync()
+    /// <summary>
+    /// Passive state probe. Polling UI must not accidentally spawn Node/Harness.
+    /// </summary>
+    public async Task<AgentActivityState?> GetAgentStateAsync(CancellationToken cancellationToken = default)
     {
         try
         {
-            return await _http.GetFromJsonAsync<AgentActivityState>("v1/agent/state");
+            return await _http.GetFromJsonAsync<AgentActivityState>("v1/agent/state", cancellationToken);
         }
         catch
         {
@@ -37,11 +43,16 @@ public sealed class RuntimeClient
 
     public async Task<string?> ChatAsync(string message, CancellationToken cancellationToken = default)
     {
+        await using var lease = await RuntimeHostService.AcquireAsync(
+            RuntimeStartReason.AgentRequest,
+            cancellationToken);
+
         try
         {
             using var response = await _http.PostAsJsonAsync("v1/chat", new ChatRequest(message), cancellationToken);
             response.EnsureSuccessStatusCode();
             var body = await response.Content.ReadFromJsonAsync<ChatResponse>(cancellationToken: cancellationToken);
+            RuntimeHostService.MarkActivity(RuntimeStartReason.AgentRequest);
             return body?.Reply;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -54,8 +65,15 @@ public sealed class RuntimeClient
         }
     }
 
-    public async Task<RuntimeModelSettings?> ConfigureModelAsync(ModelSettings settings, string? apiKey)
+    public async Task<RuntimeModelSettings?> ConfigureModelAsync(
+        ModelSettings settings,
+        string? apiKey,
+        CancellationToken cancellationToken = default)
     {
+        await using var lease = await RuntimeHostService.AcquireAsync(
+            RuntimeStartReason.ModelConfiguration,
+            cancellationToken);
+
         try
         {
             var request = new RuntimeModelSettings(
@@ -64,9 +82,15 @@ public sealed class RuntimeClient
                 settings.BaseUrl,
                 settings.Model,
                 apiKey);
-            using var response = await _http.PostAsJsonAsync("v1/config/model", request);
+            using var response = await _http.PostAsJsonAsync("v1/config/model", request, cancellationToken);
             response.EnsureSuccessStatusCode();
-            return await response.Content.ReadFromJsonAsync<RuntimeModelSettings>();
+            var configured = await response.Content.ReadFromJsonAsync<RuntimeModelSettings>(cancellationToken: cancellationToken);
+            RuntimeHostService.MarkActivity(RuntimeStartReason.ModelConfiguration);
+            return configured;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
         }
         catch
         {
@@ -74,14 +98,23 @@ public sealed class RuntimeClient
         }
     }
 
-    public async Task<string?> TestModelAsync()
+    public async Task<string?> TestModelAsync(CancellationToken cancellationToken = default)
     {
+        await using var lease = await RuntimeHostService.AcquireAsync(
+            RuntimeStartReason.ModelConfiguration,
+            cancellationToken);
+
         try
         {
-            using var response = await _http.PostAsync("v1/config/model/test", null);
+            using var response = await _http.PostAsync("v1/config/model/test", null, cancellationToken);
             response.EnsureSuccessStatusCode();
-            var body = await response.Content.ReadFromJsonAsync<ModelTestResponse>();
+            var body = await response.Content.ReadFromJsonAsync<ModelTestResponse>(cancellationToken: cancellationToken);
+            RuntimeHostService.MarkActivity(RuntimeStartReason.ModelConfiguration);
             return body?.Reply;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
         }
         catch
         {
