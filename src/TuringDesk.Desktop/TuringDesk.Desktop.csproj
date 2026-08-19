@@ -7,6 +7,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>TuringDesk.Desktop</AssemblyName>
     <RootNamespace>TuringDesk.Desktop</RootNamespace>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
     <TuringDeskApplicationIcon>$(MSBuildProjectDirectory)\$(IntermediateOutputPath)TuringDesk.ico</TuringDeskApplicationIcon>
     <ApplicationIcon>$(TuringDeskApplicationIcon)</ApplicationIcon>
   </PropertyGroup>
