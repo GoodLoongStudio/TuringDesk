@@ -17,6 +17,7 @@ public partial class DesktopSearchBarWindow : Window
     private const uint ModNoRepeat = 0x4000;
     private const uint VkSpace = 0x20;
     private const double CompactHeight = 78;
+    private static readonly TimeSpan FileSearchDebounce = TimeSpan.FromMilliseconds(45);
     private static readonly TimeSpan SearchResponseTimeout = TimeSpan.FromSeconds(30);
 
     private readonly MainWindow _host;
@@ -68,9 +69,8 @@ public partial class DesktopSearchBarWindow : Window
         if (hwnd == IntPtr.Zero) return;
 
         var monitor = DisplayManager.GetPrimary();
-        var dpi = VisualTreeHelper.GetDpi(this);
-        var width = Math.Max(1, (int)Math.Round(Width * dpi.DpiScaleX));
-        var height = Math.Max(1, (int)Math.Round(Height * dpi.DpiScaleY));
+        var width = Math.Max(1, (int)Math.Round(Width * monitor.ScaleX));
+        var height = Math.Max(1, (int)Math.Round(Height * monitor.ScaleY));
         const int marginPixels = 10;
         const int topOffsetPixels = 38;
 
@@ -115,8 +115,9 @@ public partial class DesktopSearchBarWindow : Window
 
     private void OnClosed(object? sender, EventArgs e)
     {
+        // Do not Dispose a CTS while its async operation can still be registering
+        // callbacks against the token. The owning async method disposes it in finally.
         _activeRequest?.Cancel();
-        _activeRequest?.Dispose();
         _activeRequest = null;
         CancelSearchPipeline();
         _searchIndex.Dispose();
@@ -205,29 +206,32 @@ public partial class DesktopSearchBarWindow : Window
 
         CollapseReply();
 
-        // Level 1: render RAM-only application matches immediately. No debounce,
-        // disk access, Task.Run or Runtime/Harness activation is allowed here.
+        // Level 1: RAM-only application/pinyin prefix search. It is intentionally
+        // synchronous because this path does no disk, registry, COM or IPC work.
         var apps = _searchIndex.SearchApps(query, 5);
         ApplySearchResults(query, generation, apps);
 
-        // Level 2: file scoring runs on a pool thread and is cancellable. A newer
-        // keystroke invalidates both its token and generation before it can update UI.
+        // Level 2 owns its CTS. A new keystroke only Cancels the old source; the
+        // corresponding async task disposes it after all token users have unwound.
         var pipeline = new CancellationTokenSource();
         _searchPipeline = pipeline;
-        _ = StreamFileResultsAsync(query, apps, generation, pipeline.Token);
+        _ = StreamFileResultsAsync(query, apps, generation, pipeline);
     }
 
     private async Task StreamFileResultsAsync(
         string query,
         IReadOnlyList<DesktopSearchResult> apps,
         long generation,
-        CancellationToken cancellationToken)
+        CancellationTokenSource pipeline)
     {
         try
         {
-            await Task.Yield();
-            var files = await _searchIndex.SearchFilesAsync(query, 6, cancellationToken);
-            cancellationToken.ThrowIfCancellationRequested();
+            // L1 has already painted. Delay only the heavier file tier so a burst of
+            // keyboard input collapses into one file query rather than one Task.Run
+            // per character.
+            await Task.Delay(FileSearchDebounce, pipeline.Token);
+            var files = await _searchIndex.SearchFilesAsync(query, 6, pipeline.Token);
+            pipeline.Token.ThrowIfCancellationRequested();
 
             var merged = apps
                 .Concat(files)
@@ -243,9 +247,19 @@ public partial class DesktopSearchBarWindow : Window
         {
             // A newer keystroke superseded this query.
         }
+        catch (ObjectDisposedException)
+        {
+            // Window teardown can race the final continuation; no UI update is valid.
+        }
         catch
         {
             // Keep already-rendered Level 1 app results if the file provider fails.
+        }
+        finally
+        {
+            if (ReferenceEquals(_searchPipeline, pipeline))
+                Interlocked.CompareExchange(ref _searchPipeline, null, pipeline);
+            pipeline.Dispose();
         }
     }
 
@@ -275,8 +289,7 @@ public partial class DesktopSearchBarWindow : Window
     {
         var previous = Interlocked.Exchange(ref _searchPipeline, null);
         if (previous is null) return;
-        previous.Cancel();
-        previous.Dispose();
+        try { previous.Cancel(); } catch (ObjectDisposedException) { }
     }
 
     private async void SearchBox_KeyDown(object sender, KeyEventArgs e)
@@ -399,8 +412,6 @@ public partial class DesktopSearchBarWindow : Window
                     ReplyText.Text = result.Message;
                     ReplyDot.Fill = new SolidColorBrush(Color.FromRgb(99, 230, 190));
                     DeepProcessButton.Visibility = Visibility.Collapsed;
-                    // Keep the query in the textbox while showing the answer. Clearing
-                    // it would fire TextChanged and immediately collapse this reply.
                     ExpandReply();
                     break;
 
