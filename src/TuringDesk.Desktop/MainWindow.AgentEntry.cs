@@ -6,9 +6,8 @@ namespace TuringDesk.Desktop;
 public partial class MainWindow
 {
     /// <summary>
-    /// Entry point used by the desktop-native top search bar. It reuses the
-    /// existing Runtime/Harness-backed chat path and floating trace cards while
-    /// returning the reply so the search bar can remain the primary conversation UI.
+    /// Explicit Agent entry point. RuntimeClient owns the lazy Runtime lease, so
+    /// callers do not need to pre-warm Node/Harness themselves.
     /// </summary>
     internal async Task<string> SubmitSearchCommandAsync(string text, CancellationToken cancellationToken = default)
     {
@@ -29,7 +28,7 @@ public partial class MainWindow
             var reply = await _runtime.ChatAsync(prompt, cancellationToken);
             if (reply is null)
             {
-                const string offline = "AI Runtime 离线或当前模型无法响应。请从搜索框左侧选择模型，或进入 AI 配置。";
+                const string offline = "AI Runtime 离线或当前模型无法响应。请检查模型配置后重试。";
                 AddActivity("ai", offline);
                 SetAgentState("这次没有完成", offline, Color.FromRgb(240, 125, 125));
                 AgentFloatingCardsService.Fail(offline);
@@ -43,20 +42,16 @@ public partial class MainWindow
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            AddActivity("ai", "Desktop search request timed out after 30 seconds and was cancelled.");
-            SetAgentState("等待下一条指令", "上一次请求超过 30 秒未响应，搜索框已恢复。", Color.FromRgb(135, 150, 255));
+            AddActivity("ai", "Agent request was cancelled.");
+            SetAgentState("等待下一条指令", "上一次请求已取消。", Color.FromRgb(135, 150, 255));
             AgentFloatingCardsService.Hide();
             throw;
         }
     }
 
     /// <summary>
-    /// The search bar calls this overload so its visible model selection is the
-    /// model that actually answers the prompt. This avoids the old failure mode
-    /// where the UI displayed one model while Runtime still used another one.
-    /// The selection is transient unless the user explicitly saves it in model
-    /// settings; the persisted beginner/Harness configuration remains the source
-    /// of truth for the next launch.
+    /// Full Agent path used by explicit deep surfaces. RuntimeClient.ConfigureModelAsync
+    /// now acquires the lazy Runtime lease itself; do not pre-start Runtime here.
     /// </summary>
     internal async Task<string> SubmitSearchCommandWithModelAsync(
         string text,
@@ -68,8 +63,7 @@ public partial class MainWindow
 
         try
         {
-            await RuntimeHostService.EnsureRunningAsync();
-            var configured = await _runtime.ConfigureModelAsync(choice.Settings, choice.Credential);
+            var configured = await _runtime.ConfigureModelAsync(choice.Settings, choice.Credential, cancellationToken);
             if (configured is null)
             {
                 var failed = $"{choice.DisplayName} 暂时不可用。请检查 API Key、模型 ID 或本地模型服务。";
@@ -119,6 +113,29 @@ public partial class MainWindow
         _ = dialog.ShowDialog();
         _modelSettings = dialog.SavedSettings ?? _modelStore.Load();
         UpdateModelStatus();
+    }
+
+    /// <summary>
+    /// The search bar calls this only after the user explicitly presses
+    /// "深度处理" (or Ctrl+Enter). The query is carried into Harness and this is
+    /// the deliberate boundary where the heavy Agent stack may be started.
+    /// </summary>
+    internal void ShowHarnessConsoleFromSearch(string query)
+    {
+        if (!Dispatcher.CheckAccess())
+        {
+            Dispatcher.Invoke(() => ShowHarnessConsoleFromSearch(query));
+            return;
+        }
+
+        var prompt = query.Trim();
+        if (string.IsNullOrWhiteSpace(prompt)) return;
+
+        var dialog = new HarnessConsoleWindow(prompt)
+        {
+            Owner = IsVisible ? this : null
+        };
+        _ = dialog.ShowDialog();
     }
 
     internal async Task SubmitExternalCommandAsync(string text)
