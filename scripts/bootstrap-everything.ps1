@@ -60,6 +60,10 @@ Download-IfMissing "https://www.voidtools.com/$everythingArchiveName" $everythin
 Download-IfMissing "https://www.voidtools.com/$esArchiveName" $esArchive
 Download-IfMissing "https://www.voidtools.com/Everything-$EverythingVersion.sha256" $shaListPath
 
+# Verify against the official checksum manifest when this exact architecture is
+# present. The Everything 1.4 ARM/ARM64 portable builds were added separately and
+# are not present in every 1.4.1.1032 checksum manifest, so Authenticode below is
+# the mandatory verification for every architecture.
 $shaLines = @(Get-Content $shaListPath)
 $fileIndex = -1
 for ($index = 0; $index -lt $shaLines.Count; $index++) {
@@ -69,10 +73,8 @@ for ($index = 0; $index -lt $shaLines.Count; $index++) {
     }
 }
 
-$shaMatch = $null
 if ($fileIndex -ge 0) {
-    # voidtools checksum manifests have used more than one text layout over time.
-    # Prefer the filename line, then the immediately following line, then previous.
+    $shaMatch = $null
     foreach ($candidateIndex in @($fileIndex, $fileIndex + 1, $fileIndex - 1)) {
         if ($candidateIndex -lt 0 -or $candidateIndex -ge $shaLines.Count) { continue }
         $candidate = [regex]::Match($shaLines[$candidateIndex], '(?i)(?<![0-9a-f])[0-9a-f]{64}(?![0-9a-f])')
@@ -81,18 +83,22 @@ if ($fileIndex -ge 0) {
             break
         }
     }
-}
 
-if ($fileIndex -lt 0 -or -not $shaMatch -or -not $shaMatch.Success) {
-    throw "Official Everything SHA256 entry was not found for $everythingArchiveName"
+    if (-not $shaMatch -or -not $shaMatch.Success) {
+        throw "Official Everything SHA256 entry was malformed for $everythingArchiveName"
+    }
+
+    $expectedSha = $shaMatch.Value.ToUpperInvariant()
+    $actualSha = (Get-FileHash $everythingArchive -Algorithm SHA256).Hash.ToUpperInvariant()
+    if ($actualSha -ne $expectedSha) {
+        Remove-Item $everythingArchive -Force -ErrorAction SilentlyContinue
+        throw "Everything archive SHA256 mismatch. Expected $expectedSha, got $actualSha"
+    }
+    Write-Host "Verified Everything archive SHA256: $actualSha" -ForegroundColor DarkGray
 }
-$expectedSha = $shaMatch.Value.ToUpperInvariant()
-$actualSha = (Get-FileHash $everythingArchive -Algorithm SHA256).Hash.ToUpperInvariant()
-if ($actualSha -ne $expectedSha) {
-    Remove-Item $everythingArchive -Force -ErrorAction SilentlyContinue
-    throw "Everything archive SHA256 mismatch. Expected $expectedSha, got $actualSha"
+else {
+    Write-Host "Official checksum manifest has no $EverythingArchToken portable entry; verifying signed executable instead." -ForegroundColor DarkGray
 }
-Write-Host "Verified Everything archive SHA256: $actualSha" -ForegroundColor DarkGray
 
 $tempEverything = Join-Path $cacheRoot "extract-everything-$Architecture"
 $tempEs = Join-Path $cacheRoot "extract-es-$Architecture"
@@ -107,6 +113,12 @@ $downloadedEs = Get-ChildItem $tempEs -Filter "es.exe" -Recurse | Select-Object 
 if (-not $downloadedEverything -or -not $downloadedEs) {
     throw "Everything component archives did not contain the expected executables."
 }
+
+$signature = Get-AuthenticodeSignature $downloadedEverything
+if ($signature.Status -ne [System.Management.Automation.SignatureStatus]::Valid) {
+    throw "Everything.exe Authenticode signature is not valid: $($signature.Status)"
+}
+Write-Host "Verified Everything.exe signer: $($signature.SignerCertificate.Subject)" -ForegroundColor DarkGray
 
 Copy-Item $downloadedEverything $everythingExe -Force
 Copy-Item $downloadedEs $esExe -Force
