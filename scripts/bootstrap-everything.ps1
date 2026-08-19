@@ -18,13 +18,29 @@ $EsVersion = "1.1.0.37"
 $EverythingArchToken = if ($Architecture -eq "arm64") { "ARM64" } else { "x64" }
 $EsArchToken = if ($Architecture -eq "arm64") { "ARM64" } else { "x64" }
 
-$componentRoot = Join-Path $Root "src\TuringDesk.Desktop\ThirdParty\Everything\$Architecture"
+$sharedComponentRoot = Join-Path $Root "src\TuringDesk.Desktop\ThirdParty\Everything"
+$componentRoot = Join-Path $sharedComponentRoot $Architecture
 $cacheRoot = Join-Path $Root ".tools\third-party\everything"
 $downloadRoot = Join-Path $cacheRoot "downloads"
 $markerPath = Join-Path $componentRoot ".component-version"
 $everythingExe = Join-Path $componentRoot "Everything.exe"
 $esExe = Join-Path $componentRoot "es.exe"
+$everythingLicense = Join-Path $sharedComponentRoot "LICENSE-Everything.txt"
+$esLicense = Join-Path $sharedComponentRoot "LICENSE-ES.txt"
 $expectedMarker = "Everything=$EverythingVersion`nES=$EsVersion`nArchitecture=$Architecture"
+
+New-Item -ItemType Directory -Force -Path $componentRoot | Out-Null
+New-Item -ItemType Directory -Force -Path $downloadRoot | Out-Null
+
+function Download-IfMissing([string]$Url, [string]$Path) {
+    if (Test-Path $Path) { return }
+    Write-Host "Downloading $([IO.Path]::GetFileName($Path)) from official source..." -ForegroundColor Cyan
+    Invoke-WebRequest -UseBasicParsing -Uri $Url -OutFile $Path
+}
+
+# Redistribution notices are part of the component, not optional documentation.
+Download-IfMissing "https://www.voidtools.com/License.txt" $everythingLicense
+Download-IfMissing "https://raw.githubusercontent.com/voidtools/ES/master/LICENSE" $esLicense
 
 if ((Test-Path $everythingExe) -and (Test-Path $esExe) -and (Test-Path $markerPath)) {
     $currentMarker = (Get-Content $markerPath -Raw).Trim()
@@ -34,20 +50,11 @@ if ((Test-Path $everythingExe) -and (Test-Path $esExe) -and (Test-Path $markerPa
     }
 }
 
-New-Item -ItemType Directory -Force -Path $componentRoot | Out-Null
-New-Item -ItemType Directory -Force -Path $downloadRoot | Out-Null
-
 $everythingArchiveName = "Everything-$EverythingVersion.$EverythingArchToken.zip"
 $esArchiveName = "ES-$EsVersion.$EsArchToken.zip"
 $everythingArchive = Join-Path $downloadRoot $everythingArchiveName
 $esArchive = Join-Path $downloadRoot $esArchiveName
 $shaListPath = Join-Path $downloadRoot "Everything-$EverythingVersion.sha256"
-
-function Download-IfMissing([string]$Url, [string]$Path) {
-    if (Test-Path $Path) { return }
-    Write-Host "Downloading $([IO.Path]::GetFileName($Path)) from voidtools..." -ForegroundColor Cyan
-    Invoke-WebRequest -UseBasicParsing -Uri $Url -OutFile $Path
-}
 
 Download-IfMissing "https://www.voidtools.com/$everythingArchiveName" $everythingArchive
 Download-IfMissing "https://www.voidtools.com/$esArchiveName" $esArchive
