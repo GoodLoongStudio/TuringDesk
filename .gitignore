@@ -13,7 +13,10 @@ dist/
 # Repository-local verified toolchain cache
 .tools/
 
-# Bootstrapped third-party binaries (licenses/notices remain tracked)
+# Bootstrapped third-party payload. Root THIRD-PARTY-NOTICES.md remains tracked;
+# official component licenses are downloaded and packaged by the bootstrap script.
+src/TuringDesk.Desktop/ThirdParty/Everything/LICENSE-Everything.txt
+src/TuringDesk.Desktop/ThirdParty/Everything/LICENSE-ES.txt
 src/TuringDesk.Desktop/ThirdParty/Everything/arm64/Everything.exe
 src/TuringDesk.Desktop/ThirdParty/Everything/arm64/es.exe
 src/TuringDesk.Desktop/ThirdParty/Everything/arm64/.component-version
