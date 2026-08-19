@@ -399,7 +399,8 @@ public partial class DesktopSearchBarWindow : Window
                     ReplyText.Text = result.Message;
                     ReplyDot.Fill = new SolidColorBrush(Color.FromRgb(99, 230, 190));
                     DeepProcessButton.Visibility = Visibility.Collapsed;
-                    SearchBox.Clear();
+                    // Keep the query in the textbox while showing the answer. Clearing
+                    // it would fire TextChanged and immediately collapse this reply.
                     ExpandReply();
                     break;
 
