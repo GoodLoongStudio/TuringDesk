@@ -28,6 +28,7 @@ internal sealed class SystemAudioSpectrumService : IDisposable
     private int _leaseCount;
     private long _lastAnalysisMs;
     private int _analysisInFlight;
+    private int _restartScheduled;
     private bool _disposed;
 
     public static SystemAudioSpectrumService Shared { get; } = new();
@@ -46,22 +47,7 @@ internal sealed class SystemAudioSpectrumService : IDisposable
             if (_disposed) return;
             _leaseCount++;
             if (_capture is not null) return;
-
-            try
-            {
-#pragma warning disable CS0618
-                var capture = new WasapiLoopbackCapture();
-#pragma warning restore CS0618
-                _sampleRate = Math.Max(8000, capture.WaveFormat.SampleRate);
-                capture.DataAvailable += Capture_DataAvailable;
-                capture.RecordingStopped += Capture_RecordingStopped;
-                capture.StartRecording();
-                _capture = capture;
-            }
-            catch
-            {
-                _capture = null;
-            }
+            _ = TryStartCaptureNoLock();
         }
     }
 
@@ -74,8 +60,39 @@ internal sealed class SystemAudioSpectrumService : IDisposable
             if (_leaseCount != 0 || _capture is null) return;
             capture = _capture;
             _capture = null;
+            DetachCaptureHandlers(capture);
         }
+
         StopAndDispose(capture);
+    }
+
+    private bool TryStartCaptureNoLock()
+    {
+        if (_disposed || _leaseCount <= 0 || _capture is not null) return false;
+
+        WasapiLoopbackCapture? capture = null;
+        try
+        {
+#pragma warning disable CS0618
+            capture = new WasapiLoopbackCapture();
+#pragma warning restore CS0618
+            _sampleRate = Math.Max(8000, capture.WaveFormat.SampleRate);
+            capture.DataAvailable += Capture_DataAvailable;
+            capture.RecordingStopped += Capture_RecordingStopped;
+            _capture = capture;
+            capture.StartRecording();
+            return true;
+        }
+        catch
+        {
+            if (capture is not null)
+            {
+                if (ReferenceEquals(_capture, capture)) _capture = null;
+                DetachCaptureHandlers(capture);
+                try { capture.Dispose(); } catch { }
+            }
+            return false;
+        }
     }
 
     private void Capture_DataAvailable(object? sender, WaveInEventArgs e)
@@ -89,6 +106,8 @@ internal sealed class SystemAudioSpectrumService : IDisposable
 
         lock (_gate)
         {
+            if (!ReferenceEquals(_capture, capture) || _disposed || _leaseCount <= 0) return;
+
             for (var offset = 0; offset + frameBytes <= e.BytesRecorded; offset += frameBytes)
             {
                 var left = ReadSample(e.Buffer, offset, bytesPerChannelSample);
@@ -111,6 +130,12 @@ internal sealed class SystemAudioSpectrumService : IDisposable
         int sampleRate;
         lock (_gate)
         {
+            if (_disposed || _leaseCount <= 0)
+            {
+                Volatile.Write(ref _analysisInFlight, 0);
+                return;
+            }
+
             sampleRate = _sampleRate;
             for (var i = 0; i < WindowSize; i++)
             {
@@ -122,8 +147,18 @@ internal sealed class SystemAudioSpectrumService : IDisposable
 
         _ = Task.Run(() =>
         {
-            try { Analyze(leftCopy, rightCopy, sampleRate); }
-            finally { Volatile.Write(ref _analysisInFlight, 0); }
+            try
+            {
+                lock (_gate)
+                {
+                    if (_disposed || _leaseCount <= 0) return;
+                }
+                Analyze(leftCopy, rightCopy, sampleRate);
+            }
+            finally
+            {
+                Volatile.Write(ref _analysisInFlight, 0);
+            }
         });
     }
 
@@ -135,10 +170,9 @@ internal sealed class SystemAudioSpectrumService : IDisposable
 
         lock (_gate)
         {
+            if (_disposed || _leaseCount <= 0) return;
             for (var i = 0; i < values.Length; i++)
             {
-                // Fast attack, slower release keeps visualizers stable without
-                // turning beats into a sluggish average.
                 var alpha = values[i] > _smoothed[i] ? 0.58f : 0.22f;
                 _smoothed[i] += (values[i] - _smoothed[i]) * alpha;
                 values[i] = _smoothed[i];
@@ -149,6 +183,11 @@ internal sealed class SystemAudioSpectrumService : IDisposable
         var mid = AverageStereo(values, 10, 34);
         var treble = AverageStereo(values, 34, 64);
         var rms = ComputeRms(left, right);
+
+        lock (_gate)
+        {
+            if (_disposed || _leaseCount <= 0) return;
+        }
         SpectrumAvailable?.Invoke(new AudioSpectrumFrame(values, bass, mid, treble, rms));
     }
 
@@ -183,9 +222,6 @@ internal sealed class SystemAudioSpectrumService : IDisposable
             }
 
             var magnitude = Math.Sqrt(re * re + im * im) * (2.0 / WindowSize);
-            // Convert to a useful visualizer range. Values are intentionally not
-            // hard-clamped to 1 so web wallpapers may apply Wallpaper Engine's
-            // documented Math.min(value, 1) behavior themselves.
             destination[destinationOffset + bin] = (float)Math.Min(2.5, Math.Pow(magnitude * 5.5, 0.72));
         }
     }
@@ -217,9 +253,6 @@ internal sealed class SystemAudioSpectrumService : IDisposable
 
     private static float Read32Bit(byte[] buffer, int offset)
     {
-        // Windows shared-mode loopback is normally 32-bit IEEE float. If a
-        // device exposes 32-bit integer PCM, reject implausible float decoding
-        // and fall back to signed integer normalization.
         var value = BitConverter.ToSingle(buffer, offset);
         if (float.IsFinite(value) && Math.Abs(value) <= 4f) return value;
         return BitConverter.ToInt32(buffer, offset) / 2147483648f;
@@ -250,10 +283,46 @@ internal sealed class SystemAudioSpectrumService : IDisposable
 
     private void Capture_RecordingStopped(object? sender, StoppedEventArgs e)
     {
+        if (sender is not WasapiLoopbackCapture capture) return;
+
+        var shouldRestart = false;
         lock (_gate)
         {
-            if (ReferenceEquals(_capture, sender)) _capture = null;
+            if (!ReferenceEquals(_capture, capture)) return;
+            _capture = null;
+            DetachCaptureHandlers(capture);
+            shouldRestart = !_disposed && _leaseCount > 0;
         }
+
+        try { capture.Dispose(); } catch { }
+        if (shouldRestart) ScheduleRestart();
+    }
+
+    private void ScheduleRestart()
+    {
+        if (Interlocked.Exchange(ref _restartScheduled, 1) != 0) return;
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await Task.Delay(350).ConfigureAwait(false);
+                lock (_gate)
+                {
+                    if (_disposed || _leaseCount <= 0 || _capture is not null) return;
+                    _ = TryStartCaptureNoLock();
+                }
+            }
+            finally
+            {
+                Volatile.Write(ref _restartScheduled, 0);
+            }
+        });
+    }
+
+    private void DetachCaptureHandlers(WasapiLoopbackCapture capture)
+    {
+        try { capture.DataAvailable -= Capture_DataAvailable; } catch { }
+        try { capture.RecordingStopped -= Capture_RecordingStopped; } catch { }
     }
 
     private static float[] CreateHannWindow()
@@ -280,6 +349,7 @@ internal sealed class SystemAudioSpectrumService : IDisposable
             _leaseCount = 0;
             capture = _capture;
             _capture = null;
+            if (capture is not null) DetachCaptureHandlers(capture);
         }
         if (capture is not null) StopAndDispose(capture);
     }
