@@ -14,6 +14,8 @@ public partial class SceneRendererControl
 
     private void UpdateAudioLeaseForCurrentScene()
     {
+        if (_paused || _stopped) return;
+
         var wantsAudio = _scene is not null &&
                          (_scene.AudioReactive ||
                           _webAudioListenerRequested ||
@@ -33,11 +35,13 @@ public partial class SceneRendererControl
 
     private void ReleaseAudioBridge()
     {
+        _scriptAudioFrame = null;
+        GpuSurface.SetAudioLevel(0, 0, 0);
         if (!_audioLeaseActive) return;
+
         _audioLeaseActive = false;
         SystemAudioSpectrumService.Shared.SpectrumAvailable -= OnAudioSpectrumAvailable;
         SystemAudioSpectrumService.Shared.Release();
-        GpuSurface.SetAudioLevel(0, 0, 0);
     }
 
     private void ShutdownAudioBridge()
@@ -113,6 +117,7 @@ public partial class SceneRendererControl
         }
 
         if (_scene is null || _paused || _stopped) return;
+        _scriptAudioFrame = frame;
         GpuSurface.SetAudioLevel(frame.Bass, frame.Mid, frame.Treble);
         ApplyAudioToSceneGraph(frame);
 
