@@ -69,7 +69,7 @@ jobs:
           }
 
           $searchCode = Get-Content "src/TuringDesk.Desktop/DesktopSearchBarWindow.xaml.cs" -Raw
-          foreach ($marker in @("DesktopSearchIndexService", "DesktopQuickAnswerService", "SearchApps(", "SearchFilesAsync(", "CancellationTokenSource", "ShowHarnessConsoleFromSearch")) {
+          foreach ($marker in @("DesktopSearchIndexService", "DesktopQuickAnswerService", "SearchApps(", "SearchFilesAsync(", "CancellationTokenSource", "FileSearchDebounce", "Task.Delay(FileSearchDebounce", "ShowHarnessConsoleFromSearch")) {
             if ($searchCode -notmatch [regex]::Escape($marker)) { throw "Tiered desktop search contract missing: $marker" }
           }
           if ($searchCode -match "SubmitSearchCommandWithModelAsync") {
@@ -85,6 +85,11 @@ jobs:
           if ($desktopProject -notmatch 'PackageReference Include="PinyinNet" Version="1.0.0"') {
             throw "Desktop pinyin index must use the pinned PinyinNet package"
           }
+          if ($desktopProject -notmatch '<ApplicationManifest>app.manifest</ApplicationManifest>') {
+            throw "Desktop process must embed the PerMonitorV2 manifest"
+          }
+          $manifest = Get-Content "src/TuringDesk.Desktop/app.manifest" -Raw
+          if ($manifest -notmatch 'PerMonitorV2,PerMonitor') { throw "Desktop process is not PerMonitorV2 DPI-aware" }
 
           $quick = Get-Content "src/TuringDesk.Desktop/Services/DesktopQuickAnswerService.cs" -Raw
           if ($quick -match "RuntimeHostService|HarnessWebUiService") {
@@ -122,7 +127,7 @@ jobs:
             if ($mcp -notmatch [regex]::Escape($marker)) { throw "Windows MCP routing metadata missing: $marker" }
           }
 
-      - name: Verify scene host contract
+      - name: Verify mixed-DPI desktop host and zero-power scene contract
         shell: pwsh
         run: |
           $catalog = Get-Content "src/TuringDesk.Desktop/Services/SceneEngine/SceneCatalogService.cs" -Raw
@@ -130,14 +135,41 @@ jobs:
             if ($catalog -notmatch [regex]::Escape($id)) { throw "Missing built-in scene: $id" }
           }
 
+          $display = Get-Content "src/TuringDesk.Desktop/Services/DisplayManager.cs" -Raw
+          foreach ($marker in @("DeviceName", "DpiX", "DpiY", "GetDpiForMonitor", "GetSignature", "ScaleX", "ScaleY")) {
+            if ($display -notmatch [regex]::Escape($marker)) { throw "Mixed-DPI display contract missing: $marker" }
+          }
+
           $desktopHost = Get-Content "src/TuringDesk.Desktop/Services/ExplorerDesktopHost.cs" -Raw
-          foreach ($marker in @("workerw/progman-child", "workerw/classic-sibling", "BringWindowToTop", "VerifyAttachment", "HwndTop")) {
-            if ($desktopHost -notmatch [regex]::Escape($marker)) { throw "Explorer scene host visibility contract missing: $marker" }
+          foreach ($marker in @("progman/behind-defview", "workerw/progman-child", "workerw/classic-sibling", "SysListView32", "ExplorerProcessId", "CaptureDesktopGeneration", "InvalidateAll", "MapWindowPoints", "BringWindowToTop", "VerifyAttachment", "HwndTop")) {
+            if ($desktopHost -notmatch [regex]::Escape($marker)) { throw "Explorer desktop-generation contract missing: $marker" }
           }
           if ($desktopHost -match "HwndBottom") { throw "Scene HWND must not be pushed under Explorer's wallpaper child with HWND_BOTTOM" }
 
           $wallpaperHost = Get-Content "src/TuringDesk.Desktop/EnhancementWallpaperWindow.xaml.cs" -Raw
-          if ($wallpaperHost -notmatch "AppearanceRequiresReload") { throw "Wallpaper host does not force reload when SceneId changes" }
+          foreach ($marker in @("WmDpiChanged", "WmDisplayChange", "UpdateMonitor", "_sceneLoadGate", "WaitAsync(cancellation.Token)", "AppearanceRequiresReload")) {
+            if ($wallpaperHost -notmatch [regex]::Escape($marker)) { throw "Wallpaper rebind/lifecycle contract missing: $marker" }
+          }
+
+          $enhancement = Get-Content "src/TuringDesk.Desktop/MainWindow.EnhancementMode.cs" -Raw
+          foreach ($marker in @("TaskbarCreated", "WtsSessionUnlock", "WmDisplayChange", "WmDpiChanged", "ReconcileEnhancementMonitors", "ExplorerDesktopHost.InvalidateAll")) {
+            if ($enhancement -notmatch [regex]::Escape($marker)) { throw "Enhancement recovery contract missing: $marker" }
+          }
+
+          $renderer = Get-Content "src/TuringDesk.Desktop/SceneRendererControl.xaml.cs" -Raw
+          foreach ($marker in @("StopSceneScript", "ShutdownAudioBridge", "GpuSurface.StopRendering", "ReleaseAudioBridge", "_desktopInputTimer.Stop")) {
+            if ($renderer -notmatch [regex]::Escape($marker)) { throw "Scene teardown/pause contract missing: $marker" }
+          }
+
+          $gpu = Get-Content "src/TuringDesk.Desktop/GpuSceneSurface.cs" -Raw
+          foreach ($marker in @("AlwaysRefresh = false", "UpdateRefreshMode", "StopRendering", "SetPaused")) {
+            if ($gpu -notmatch [regex]::Escape($marker)) { throw "GPU zero-refresh contract missing: $marker" }
+          }
+
+          $fullscreen = Get-Content "src/TuringDesk.Desktop/Services/DesktopScenePerformancePolicy.cs" -Raw
+          foreach ($marker in @("DwmwaExtendedFrameBounds", "DwmwaCloaked", "MonitorFromWindow", "GetDpiForWindow", "coverage >= 0.995")) {
+            if ($fullscreen -notmatch [regex]::Escape($marker)) { throw "Fullscreen detection contract missing: $marker" }
+          }
 
       - name: Build Desktop and ShellHost
         shell: pwsh
