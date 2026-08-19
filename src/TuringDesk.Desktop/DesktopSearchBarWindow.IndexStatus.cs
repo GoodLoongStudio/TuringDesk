@@ -22,11 +22,21 @@ public partial class DesktopSearchBarWindow
         _indexStatusTimer.Tick += IndexStatusTimer_Tick;
         RefreshIndexStatus();
 
+        if (_searchIndex.UsesEverything)
+        {
+            _indexReadyNotified = true;
+            ShellNotificationService.Publish(
+                "Everything 文件索引已连接",
+                $"应用 {_searchIndex.AppCount:N0} 个已进入内存索引；文件搜索直接使用 Everything，不再扫描整机。",
+                "search");
+            return;
+        }
+
         if (!_searchIndex.IsInitialIndexComplete)
         {
             ShellNotificationService.Publish(
-                "正在建立本地搜索索引",
-                $"应用 {_searchIndex.AppCount:N0} 个已可搜索；文件索引在后台渐进建立，不会阻塞桌面。",
+                "正在建立轻量本地索引",
+                $"应用 {_searchIndex.AppCount:N0} 个已可搜索；仅扫描桌面、文档和下载，不会遍历整个用户目录。",
                 "search");
             _indexStatusTimer.Start();
         }
@@ -43,8 +53,12 @@ public partial class DesktopSearchBarWindow
 
     private void RefreshIndexStatus()
     {
-        var complete = _searchIndex.IsInitialIndexComplete;
-        if (complete)
+        if (_searchIndex.UsesEverything)
+        {
+            PlaceholderText.Text = "Everything 已连接 · 搜索应用、文件，或直接问 AI…";
+            _indexStatusTimer.Stop();
+        }
+        else if (_searchIndex.IsInitialIndexComplete)
         {
             PlaceholderText.Text = "搜索应用、文件，或直接问 AI…";
             _indexStatusTimer.Stop();
@@ -53,15 +67,15 @@ public partial class DesktopSearchBarWindow
             {
                 _indexReadyNotified = true;
                 ShellNotificationService.Publish(
-                    "本地搜索索引已就绪",
-                    $"应用 {_searchIndex.AppCount:N0} · 文件 {_searchIndex.IndexedFileCount:N0}",
+                    "轻量本地索引已就绪",
+                    $"应用 {_searchIndex.AppCount:N0} · 本地文件 {_searchIndex.IndexedFileCount:N0}",
                     "search");
             }
         }
         else
         {
             PlaceholderText.Text =
-                $"正在建立本地索引… 应用 {_searchIndex.AppCount:N0} · 文件 {_searchIndex.IndexedFileCount:N0}";
+                $"正在建立轻量索引… 应用 {_searchIndex.AppCount:N0} · 文件 {_searchIndex.IndexedFileCount:N0}";
         }
 
         PlaceholderText.Visibility = string.IsNullOrWhiteSpace(SearchBox.Text)
