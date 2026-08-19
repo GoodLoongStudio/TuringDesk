@@ -28,6 +28,7 @@ jobs:
         with:
           node-version: 22.19.0
       - run: corepack enable
+      - run: corepack prepare pnpm@11.7.0 --activate
       - run: pnpm install --no-frozen-lockfile
       - run: pnpm typecheck
       - run: pnpm build
@@ -42,7 +43,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: 8.0.x
+          dotnet-version: 8.0.424
 
       - name: Verify desktop search and Harness contract
         shell: pwsh
@@ -126,8 +127,9 @@ jobs:
           architecture: arm64
       - uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: 8.0.x
+          dotnet-version: 8.0.424
       - run: corepack enable
+      - run: corepack prepare pnpm@11.7.0 --activate
       - name: Build Windows ARM64 MSI
         shell: pwsh
         run: ./scripts/package-installer.ps1 -Version "v0.14.4" -RuntimeIdentifier "win-arm64"
