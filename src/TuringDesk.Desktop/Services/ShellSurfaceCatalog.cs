@@ -145,14 +145,14 @@ public static class ShellSurfaceCatalog
 
         var launchRoots = new[]
         {
-            new LaunchRoot(Environment.GetFolderPath(Environment.SpecialFolder.StartMenu), "开始菜单", recursive: true),
-            new LaunchRoot(Environment.GetFolderPath(Environment.SpecialFolder.CommonStartMenu), "公共开始菜单", recursive: true),
-            new LaunchRoot(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), "桌面快捷方式", recursive: false),
-            new LaunchRoot(Environment.GetFolderPath(Environment.SpecialFolder.CommonDesktopDirectory), "公共桌面快捷方式", recursive: false),
+            new LaunchRoot(Environment.GetFolderPath(Environment.SpecialFolder.StartMenu), "开始菜单", Recursive: true),
+            new LaunchRoot(Environment.GetFolderPath(Environment.SpecialFolder.CommonStartMenu), "公共开始菜单", Recursive: true),
+            new LaunchRoot(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), "桌面快捷方式", Recursive: false),
+            new LaunchRoot(Environment.GetFolderPath(Environment.SpecialFolder.CommonDesktopDirectory), "公共桌面快捷方式", Recursive: false),
             new LaunchRoot(
                 Path.Combine(appData, "Microsoft", "Internet Explorer", "Quick Launch", "User Pinned", "TaskBar"),
                 "任务栏固定",
-                recursive: true)
+                Recursive: true)
         };
 
         foreach (var launchRoot in launchRoots
