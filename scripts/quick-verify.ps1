@@ -1,16 +1,27 @@
 param(
     [switch]$SkipPull,
     [switch]$SkipRuntimeInstall,
-    [switch]$BuildOnly
+    [switch]$BuildOnly,
+    [switch]$ResetEnvironment
 )
 
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $PSScriptRoot
 $ToolsRoot = Join-Path $Root ".tools\quick-verify"
-$NodeVersion = "22.19.0"
-$PnpmVersion = "11.7.0"
 $ForceBootstrap = $env:TURINGDESK_FORCE_BOOTSTRAP -eq "1"
 Set-Location $Root
+
+# The quick verification environment is repository-pinned. Do not silently use
+# whatever Node/.NET happens to be installed globally on the target machine.
+$NodeVersion = (Get-Content (Join-Path $Root ".node-version") -Raw).Trim()
+$DotnetConfig = Get-Content (Join-Path $Root "global.json") -Raw | ConvertFrom-Json
+$DotnetVersion = [string]$DotnetConfig.sdk.version
+$RuntimePackage = Get-Content (Join-Path $Root "runtime\package.json") -Raw | ConvertFrom-Json
+$PnpmVersion = ([string]$RuntimePackage.packageManager) -replace '^pnpm@', ''
+
+if ([string]::IsNullOrWhiteSpace($NodeVersion)) { throw ".node-version is empty." }
+if ([string]::IsNullOrWhiteSpace($DotnetVersion)) { throw "global.json does not pin a .NET SDK version." }
+if ([string]::IsNullOrWhiteSpace($PnpmVersion)) { throw "runtime/package.json does not pin pnpm." }
 
 function Resolve-CommandPath([string]$Name, [string[]]$Candidates = @()) {
     $command = Get-Command $Name -ErrorAction SilentlyContinue
@@ -34,7 +45,6 @@ function Resolve-Git {
     )
     if ($direct) { return $direct }
 
-    # GitHub Desktop ships its own Git, but does not always add it to PATH.
     $desktopRoot = Join-Path $env:LOCALAPPDATA "GitHubDesktop"
     if (Test-Path $desktopRoot) {
         $desktopGit = Get-ChildItem $desktopRoot -Directory -Filter "app-*" -ErrorAction SilentlyContinue |
@@ -63,80 +73,53 @@ function Get-WindowsArchitecture {
     }
 }
 
-function Test-NodeVersion([string]$NodePath) {
+function Test-ExactNode([string]$NodePath) {
     if (-not $NodePath -or -not (Test-Path $NodePath)) { return $false }
-    try {
-        $versionText = (& $NodePath -p "process.versions.node").Trim()
-        return ([version]$versionText -ge [version]$NodeVersion)
-    }
-    catch {
-        return $false
-    }
+    try { return ((& $NodePath -p "process.versions.node").Trim() -eq $NodeVersion) }
+    catch { return $false }
 }
 
-function Install-LocalNode([string]$Architecture) {
+function Ensure-LocalNode([string]$Architecture) {
     $nodeRoot = Join-Path $ToolsRoot "node-v$NodeVersion-win-$Architecture"
     $nodeExe = Join-Path $nodeRoot "node.exe"
-    if ((Test-Path $nodeExe) -and (Test-NodeVersion $nodeExe)) {
+    if (Test-ExactNode $nodeExe) {
+        Write-Host "Using cached Node.js $NodeVersion." -ForegroundColor DarkGray
         return $nodeExe
     }
 
     New-Item -ItemType Directory -Force -Path $ToolsRoot | Out-Null
     $zipPath = Join-Path $ToolsRoot "node-v$NodeVersion-win-$Architecture.zip"
     $download = "https://nodejs.org/dist/v$NodeVersion/node-v$NodeVersion-win-$Architecture.zip"
-
-    Write-Host "Node.js $NodeVersion was not found. Bootstrapping local Node.js $Architecture..." -ForegroundColor Yellow
-    Write-Host "  $download" -ForegroundColor DarkGray
-    if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
+    Write-Host "Initializing pinned Node.js $NodeVersion ($Architecture) once..." -ForegroundColor Yellow
     Invoke-WebRequest $download -OutFile $zipPath -UseBasicParsing | Out-Null
-
     if (Test-Path $nodeRoot) { Remove-Item $nodeRoot -Recurse -Force }
     Expand-Archive $zipPath -DestinationPath $ToolsRoot -Force
     Remove-Item $zipPath -Force -ErrorAction SilentlyContinue
-
-    if (-not (Test-Path $nodeExe)) { throw "Local Node.js bootstrap did not produce $nodeExe" }
+    if (-not (Test-ExactNode $nodeExe)) { throw "Pinned Node.js bootstrap failed: $nodeExe" }
     return $nodeExe
-}
-
-function Resolve-Node([string]$Architecture) {
-    if (-not $ForceBootstrap) {
-        $candidate = Resolve-CommandPath "node" @(
-            "$env:ProgramFiles\nodejs\node.exe",
-            "$env:LOCALAPPDATA\Programs\nodejs\node.exe"
-        )
-        if ($candidate -and (Test-NodeVersion $candidate)) {
-            return $candidate
-        }
-    }
-
-    return Install-LocalNode $Architecture
 }
 
 function Resolve-Npm([string]$NodePath) {
     $nodeDir = Split-Path $NodePath -Parent
-    foreach ($candidate in @(
-        (Join-Path $nodeDir "npm.cmd"),
-        (Resolve-CommandPath "npm" @("$env:ProgramFiles\nodejs\npm.cmd"))
-    )) {
-        if ($candidate -and (Test-Path $candidate)) { return $candidate }
-    }
-    throw "npm was not found next to Node.js: $NodePath"
+    $candidate = Join-Path $nodeDir "npm.cmd"
+    if (Test-Path $candidate) { return $candidate }
+    throw "npm was not found next to pinned Node.js: $NodePath"
 }
 
-function Install-LocalPnpm([string]$NpmPath) {
+function Ensure-LocalPnpm([string]$NpmPath) {
     $pnpmRoot = Join-Path $ToolsRoot "pnpm-$PnpmVersion"
     $pnpmCmd = Join-Path $pnpmRoot "pnpm.cmd"
-
-    if (-not $ForceBootstrap -and (Test-Path $pnpmCmd)) {
+    if (Test-Path $pnpmCmd) {
         try {
-            if ((& $pnpmCmd --version).Trim() -eq $PnpmVersion) { return $pnpmCmd }
+            if ((& $pnpmCmd --version).Trim() -eq $PnpmVersion) {
+                Write-Host "Using cached pnpm $PnpmVersion." -ForegroundColor DarkGray
+                return $pnpmCmd
+            }
         }
-        catch {
-            # Reinstall below.
-        }
+        catch { }
     }
 
-    Write-Host "pnpm $PnpmVersion was not found. Bootstrapping local pnpm..." -ForegroundColor Yellow
+    Write-Host "Initializing pinned pnpm $PnpmVersion once..." -ForegroundColor Yellow
     if (Test-Path $pnpmRoot) { Remove-Item $pnpmRoot -Recurse -Force }
     New-Item -ItemType Directory -Force -Path $pnpmRoot | Out-Null
     & $NpmPath install --global --prefix $pnpmRoot "pnpm@$PnpmVersion" --no-audit --no-fund | Out-Host
@@ -145,56 +128,54 @@ function Install-LocalPnpm([string]$NpmPath) {
     return $pnpmCmd
 }
 
-function Test-Dotnet8Sdk([string]$DotnetPath) {
+function Test-ExactDotnet([string]$DotnetPath) {
     if (-not $DotnetPath -or -not (Test-Path $DotnetPath)) { return $false }
-    try {
-        $sdks = & $DotnetPath --list-sdks
-        return [bool]($sdks | Where-Object { $_ -match '^8\.' } | Select-Object -First 1)
-    }
-    catch {
-        return $false
-    }
+    try { return ((& $DotnetPath --version).Trim() -eq $DotnetVersion) }
+    catch { return $false }
 }
 
-function Install-LocalDotnet8([string]$Architecture) {
+function Ensure-LocalDotnet([string]$Architecture) {
+    # Keep the historical folder name so already-bootstrapped target machines can
+    # reuse their existing SDK without another ~280 MB download.
     $dotnetRoot = Join-Path $ToolsRoot "dotnet8-$Architecture"
     $dotnetExe = Join-Path $dotnetRoot "dotnet.exe"
-    if ((Test-Path $dotnetExe) -and (Test-Dotnet8Sdk $dotnetExe)) {
+    if (Test-ExactDotnet $dotnetExe) {
+        Write-Host "Using cached .NET SDK $DotnetVersion." -ForegroundColor DarkGray
         return $dotnetExe
     }
 
     New-Item -ItemType Directory -Force -Path $ToolsRoot | Out-Null
     $installer = Join-Path $ToolsRoot "dotnet-install.ps1"
-    Write-Host ".NET 8 SDK was not found. Bootstrapping a local SDK ($Architecture)..." -ForegroundColor Yellow
+    Write-Host "Initializing pinned .NET SDK $DotnetVersion ($Architecture) once..." -ForegroundColor Yellow
     Invoke-WebRequest "https://dot.net/v1/dotnet-install.ps1" -OutFile $installer -UseBasicParsing | Out-Null
-
     if (Test-Path $dotnetRoot) { Remove-Item $dotnetRoot -Recurse -Force }
     $powershell = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
-    & $powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File $installer -Channel 8.0 -Architecture $Architecture -InstallDir $dotnetRoot -NoPath | Out-Host
-    if ($LASTEXITCODE -ne 0) { throw ".NET 8 SDK bootstrap failed with exit code $LASTEXITCODE" }
-    if (-not (Test-Dotnet8Sdk $dotnetExe)) { throw "Local .NET bootstrap did not produce a usable .NET 8 SDK." }
+    & $powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File $installer -Version $DotnetVersion -Architecture $Architecture -InstallDir $dotnetRoot -NoPath | Out-Host
+    if ($LASTEXITCODE -ne 0) { throw ".NET SDK bootstrap failed with exit code $LASTEXITCODE" }
+    if (-not (Test-ExactDotnet $dotnetExe)) { throw "Pinned .NET SDK bootstrap did not produce $DotnetVersion." }
     return $dotnetExe
 }
 
-function Resolve-Dotnet8([string]$Architecture) {
-    if (-not $ForceBootstrap) {
-        $candidate = Resolve-CommandPath "dotnet" @(
-            "$env:ProgramFiles\dotnet\dotnet.exe"
-        )
-        if ($candidate -and (Test-Dotnet8Sdk $candidate)) {
-            return $candidate
-        }
-    }
+function Get-RuntimeDependencyFingerprint {
+    param([string]$Architecture)
+    $inputs = @(
+        (Join-Path $Root "runtime\package.json"),
+        (Join-Path $Root "runtime\pnpm-workspace.yaml")
+    )
+    $lock = Join-Path $Root "runtime\pnpm-lock.yaml"
+    if (Test-Path $lock) { $inputs += $lock }
 
-    return Install-LocalDotnet8 $Architecture
+    $parts = @("node=$NodeVersion", "pnpm=$PnpmVersion", "arch=$Architecture")
+    foreach ($input in $inputs) {
+        $parts += "$(Split-Path $input -Leaf)=$((Get-FileHash $input -Algorithm SHA256).Hash)"
+    }
+    return ($parts -join "|")
 }
 
 Write-Host "=== TuringDesk quick verification (main) ===" -ForegroundColor Cyan
 $architecture = Get-WindowsArchitecture
 $git = Resolve-Git
 
-# Update source first when Git is available. Dependency bootstrap happens after
-# the pull so the script itself can evolve without requiring local prerequisites.
 if ($git) {
     Write-Host "Git: $git" -ForegroundColor DarkGray
     if (-not $SkipPull) {
@@ -213,18 +194,35 @@ if ($git) {
 }
 else {
     if (-not $SkipPull) {
-        Write-Host "Git was not found. Continuing with the current checkout instead of failing." -ForegroundColor Yellow
-        Write-Host "If you use GitHub Desktop, press Fetch origin / Pull origin before running this launcher." -ForegroundColor Yellow
+        Write-Host "Git was not found. Continuing with the current checkout." -ForegroundColor Yellow
+        Write-Host "Use GitHub Desktop -> Fetch origin / Pull origin before verification." -ForegroundColor Yellow
     }
     $commit = "current-checkout"
 }
 
+if ($ResetEnvironment -or $ForceBootstrap) {
+    if (Test-Path $ToolsRoot) {
+        Write-Host "Resetting repository-local verified toolchain..." -ForegroundColor Yellow
+        Remove-Item $ToolsRoot -Recurse -Force
+    }
+}
+
 Write-Host "Commit: $commit" -ForegroundColor Green
-Write-Host "Checking build prerequisites..." -ForegroundColor Cyan
-$node = Resolve-Node $architecture
+Write-Host "Pinned environment: Node $NodeVersion | pnpm $PnpmVersion | .NET SDK $DotnetVersion | $architecture" -ForegroundColor Cyan
+Write-Host "Toolchain cache: $ToolsRoot" -ForegroundColor DarkGray
+
+$node = Ensure-LocalNode $architecture
+$nodeDir = Split-Path $node -Parent
+$env:PATH = "$nodeDir;$env:PATH"
 $npm = Resolve-Npm $node
-$pnpm = Install-LocalPnpm $npm
-$dotnet = Resolve-Dotnet8 $architecture
+$pnpm = Ensure-LocalPnpm $npm
+$pnpmDir = Split-Path $pnpm -Parent
+$env:PATH = "$nodeDir;$pnpmDir;$env:PATH"
+$dotnet = Ensure-LocalDotnet $architecture
+$dotnetDir = Split-Path $dotnet -Parent
+$env:DOTNET_ROOT = $dotnetDir
+$env:PATH = "$nodeDir;$pnpmDir;$dotnetDir;$env:PATH"
+
 Write-Host "Node: $((& $node -p 'process.versions.node').Trim()) [$node]" -ForegroundColor DarkGray
 Write-Host "pnpm: $((& $pnpm --version).Trim()) [$pnpm]" -ForegroundColor DarkGray
 Write-Host ".NET: $((& $dotnet --version).Trim()) [$dotnet]" -ForegroundColor DarkGray
@@ -246,14 +244,42 @@ foreach ($connection in $connections) {
 }
 
 $statusPath = Join-Path $env:LOCALAPPDATA "TuringDesk\desktop-engine-status.json"
+$sceneLogPath = Join-Path $env:LOCALAPPDATA "TuringDesk\logs\scene-engine.log"
 if (Test-Path $statusPath) { Remove-Item $statusPath -Force }
+if (Test-Path $sceneLogPath) { Remove-Item $sceneLogPath -Force }
 
 Write-Host "Building Runtime..." -ForegroundColor Cyan
-Push-Location (Join-Path $Root "runtime")
+$runtimeDir = Join-Path $Root "runtime"
+$runtimeModules = Join-Path $runtimeDir "node_modules"
+$runtimeMarker = Join-Path $runtimeModules ".turingdesk-verified-environment"
+$runtimeFingerprint = Get-RuntimeDependencyFingerprint $architecture
+$needRuntimeInstall = -not (Test-Path $runtimeModules)
+if (-not $needRuntimeInstall -and -not $SkipRuntimeInstall) {
+    if (-not (Test-Path $runtimeMarker)) {
+        $needRuntimeInstall = $true
+    }
+    else {
+        $existingFingerprint = (Get-Content $runtimeMarker -Raw).Trim()
+        $needRuntimeInstall = $existingFingerprint -ne $runtimeFingerprint
+    }
+}
+
+Push-Location $runtimeDir
 try {
-    if (-not $SkipRuntimeInstall) {
+    if (-not $SkipRuntimeInstall -and $needRuntimeInstall) {
+        Write-Host "Runtime dependency fingerprint changed or cache is missing; installing once..." -ForegroundColor Yellow
+        $lockPath = Join-Path $runtimeDir "pnpm-lock.yaml"
+        $lockExisted = Test-Path $lockPath
         & $pnpm install --no-frozen-lockfile
         if ($LASTEXITCODE -ne 0) { throw "pnpm install failed" }
+        New-Item -ItemType Directory -Force -Path $runtimeModules | Out-Null
+        Set-Content -Path $runtimeMarker -Value $runtimeFingerprint -NoNewline
+        if (-not $lockExisted -and (Test-Path $lockPath)) {
+            Remove-Item $lockPath -Force
+        }
+    }
+    elseif (-not $SkipRuntimeInstall) {
+        Write-Host "Using existing runtime node_modules; dependency fingerprint matches." -ForegroundColor DarkGray
     }
 
     & $pnpm build
@@ -263,12 +289,11 @@ finally {
     Pop-Location
 }
 
-Write-Host "Building Desktop Release..." -ForegroundColor Cyan
-$env:DOTNET_ROOT = Split-Path $dotnet -Parent
+Write-Host "Building Desktop Release with pinned .NET SDK $DotnetVersion..." -ForegroundColor Cyan
 & $dotnet build "src/TuringDesk.Desktop/TuringDesk.Desktop.csproj" --configuration Release
 if ($LASTEXITCODE -ne 0) { throw "Desktop build failed" }
 
-$exe = Join-Path $Root "src\TuringDesk.Desktop\bin\Release\net8.0-windows\TuringDesk.Desktop.exe"
+$exe = Join-Path $Root "src\TuringDesk.Desktop\bin\Release\net8.0-windows10.0.19041.0\TuringDesk.Desktop.exe"
 if (-not (Test-Path $exe)) {
     $exe = Get-ChildItem (Join-Path $Root "src\TuringDesk.Desktop\bin\Release") -Filter "TuringDesk.Desktop.exe" -Recurse |
         Select-Object -First 1 -ExpandProperty FullName
@@ -290,6 +315,9 @@ Write-Host ""
 Write-Host "=== LIVE CHECK ===" -ForegroundColor Green
 Write-Host "Desktop PID: $($process.Id)"
 Write-Host "Commit: $commit"
+Write-Host "Pinned environment: Node $NodeVersion | pnpm $PnpmVersion | .NET $DotnetVersion"
+Write-Host "Scene log: $sceneLogPath" -ForegroundColor Cyan
+Write-Host "Scene status: $statusPath" -ForegroundColor Cyan
 
 $runtimeReady = Get-NetTCPConnection -LocalPort 4317 -State Listen -ErrorAction SilentlyContinue
 Write-Host ("Runtime 4317: " + $(if ($runtimeReady) { "LISTENING" } else { "NOT READY YET" }))
@@ -304,11 +332,8 @@ else {
 }
 
 Write-Host ""
-Write-Host "Verify these four things now:" -ForegroundColor Cyan
-Write-Host "  1. Top-right button is a SETTINGS GEAR, not the old design/personalize icon."
-Write-Host "  2. Settings -> Library -> apply Aurora / Neon / Orbital; PRIMARY DESKTOP must visibly change within ~1 second."
-Write-Host "  3. After each scene switch rerun: Get-Content '$statusPath'"
-Write-Host "     Primary monitor should show Attached=true and SceneId matching the selected scene."
-Write-Host "  4. Submit an AI request. If no response arrives for 30 seconds, the search bar must collapse back to idle automatically."
+Write-Host "Scene debugging:" -ForegroundColor Cyan
+Write-Host "  Double-click SCENE-LOG.cmd and then apply Aurora / Neon / Orbital."
+Write-Host "  The fixed toolchain is reused on future runs unless the pinned config changes."
 Write-Host ""
 Write-Host "To relaunch after another pull, just double-click QUICK-VERIFY.cmd again." -ForegroundColor DarkGray
