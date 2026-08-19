@@ -5,9 +5,10 @@ using Vortice.Wpf;
 namespace TuringDesk.Desktop;
 
 /// <summary>
-/// Real Direct3D11 render surface for the desktop Scene backend. This is the GPU
-/// foundation that SceneGraph image/particle/effect passes migrate onto. WPF is
-/// retained above it as a compatibility/editor layer while that migration lands.
+/// Real Direct3D11 render surface for the desktop Scene backend. Continuous
+/// refresh is enabled only while motion is actively running. Paused/fullscreen
+/// scenes do not submit a D3D frame loop; one-shot invalidation is still available
+/// for configuration/audio changes while active.
 /// </summary>
 public sealed class GpuSceneSurface : DrawingSurface
 {
@@ -15,15 +16,17 @@ public sealed class GpuSceneSurface : DrawingSurface
     private string _preset = "aurora";
     private float _intensity = 0.85f;
     private bool _motion = true;
-    private bool _paused;
+    private bool _paused = true;
     private float _bass;
     private float _mid;
     private float _treble;
 
     public GpuSceneSurface()
     {
-        AlwaysRefresh = true;
+        AlwaysRefresh = false;
         Draw += OnDraw;
+        IsVisibleChanged += (_, _) => UpdateRefreshMode();
+        Unloaded += (_, _) => StopRendering();
     }
 
     public void Configure(string? preset, double intensity, bool motion)
@@ -32,13 +35,32 @@ public sealed class GpuSceneSurface : DrawingSurface
         _intensity = (float)Math.Clamp(intensity, 0.2, 1.0);
         _motion = motion;
         _paused = false;
+        _clock.Restart();
+        UpdateRefreshMode();
         Invalidate();
     }
 
     public void SetPaused(bool paused)
     {
+        if (_paused == paused)
+        {
+            UpdateRefreshMode();
+            return;
+        }
+
         _paused = paused;
+        if (!paused) _clock.Restart();
+        UpdateRefreshMode();
         Invalidate();
+    }
+
+    public void StopRendering()
+    {
+        _paused = true;
+        _bass = 0;
+        _mid = 0;
+        _treble = 0;
+        AlwaysRefresh = false;
     }
 
     public void SetAudioLevel(float bass, float mid, float treble)
@@ -46,7 +68,14 @@ public sealed class GpuSceneSurface : DrawingSurface
         _bass = Math.Clamp(bass, 0, 1.5f);
         _mid = Math.Clamp(mid, 0, 1.5f);
         _treble = Math.Clamp(treble, 0, 1.5f);
-        Invalidate();
+        if (!_paused) Invalidate();
+    }
+
+    private void UpdateRefreshMode()
+    {
+        // Static scenes need only an explicit Invalidate. Motion scenes continuously
+        // refresh only while visible and not paused.
+        AlwaysRefresh = IsVisible && _motion && !_paused;
     }
 
     private void OnDraw(object? sender, DrawEventArgs e)
