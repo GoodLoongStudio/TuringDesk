@@ -251,15 +251,19 @@ $runtimeDir = Join-Path $Root "runtime"
 $runtimeModules = Join-Path $runtimeDir "node_modules"
 $runtimeMarker = Join-Path $runtimeModules ".turingdesk-verified-environment"
 $runtimeLockPath = Join-Path $runtimeDir "pnpm-lock.yaml"
-# Older quick-verify versions could leave an untracked lockfile behind. This repo
-# intentionally pins direct runtime versions in package.json instead; remove the
-# generated local lock so it cannot force a reinstall on every verification run.
+# Older quick-verify versions could leave an untracked lockfile behind. Remove it
+# so the verification launcher never mutates or follows a local dependency config.
 if (Test-Path $runtimeLockPath) { Remove-Item $runtimeLockPath -Force }
 $runtimeFingerprint = Get-RuntimeDependencyFingerprint $architecture
 $needRuntimeInstall = -not (Test-Path $runtimeModules)
+$adoptExistingRuntime = $false
 if (-not $needRuntimeInstall -and -not $SkipRuntimeInstall) {
     if (-not (Test-Path $runtimeMarker)) {
-        $needRuntimeInstall = $true
+        # This is the migration path for machines that already ran the old verifier.
+        # Keep the known-good node_modules and validate it before doing any download.
+        $adoptExistingRuntime = $true
+        $needRuntimeInstall = $false
+        Write-Host "Found existing runtime node_modules; validating and adopting it without reinstalling." -ForegroundColor DarkGray
     }
     else {
         $existingFingerprint = (Get-Content $runtimeMarker -Raw).Trim()
@@ -270,19 +274,36 @@ if (-not $needRuntimeInstall -and -not $SkipRuntimeInstall) {
 Push-Location $runtimeDir
 try {
     if (-not $SkipRuntimeInstall -and $needRuntimeInstall) {
-        Write-Host "Runtime dependency fingerprint changed or cache is missing; installing once..." -ForegroundColor Yellow
+        Write-Host "Runtime dependency config changed or cache is missing; installing once..." -ForegroundColor Yellow
         & $pnpm install --no-frozen-lockfile
         if ($LASTEXITCODE -ne 0) { throw "pnpm install failed" }
         New-Item -ItemType Directory -Force -Path $runtimeModules | Out-Null
         Set-Content -Path $runtimeMarker -Value $runtimeFingerprint -NoNewline
         if (Test-Path $runtimeLockPath) { Remove-Item $runtimeLockPath -Force }
     }
-    elseif (-not $SkipRuntimeInstall) {
+    elseif (-not $SkipRuntimeInstall -and -not $adoptExistingRuntime) {
         Write-Host "Using existing runtime node_modules; dependency fingerprint matches." -ForegroundColor DarkGray
     }
 
     & $pnpm build
-    if ($LASTEXITCODE -ne 0) { throw "Runtime build failed" }
+    if ($LASTEXITCODE -ne 0) {
+        if ($adoptExistingRuntime -and -not $SkipRuntimeInstall) {
+            Write-Host "Existing runtime cache did not validate; repairing dependencies once..." -ForegroundColor Yellow
+            & $pnpm install --no-frozen-lockfile
+            if ($LASTEXITCODE -ne 0) { throw "pnpm repair install failed" }
+            if (Test-Path $runtimeLockPath) { Remove-Item $runtimeLockPath -Force }
+            & $pnpm build
+            if ($LASTEXITCODE -ne 0) { throw "Runtime build failed after dependency repair" }
+        }
+        else {
+            throw "Runtime build failed"
+        }
+    }
+
+    if (-not $SkipRuntimeInstall -and $adoptExistingRuntime) {
+        Set-Content -Path $runtimeMarker -Value $runtimeFingerprint -NoNewline
+        Write-Host "Existing runtime dependency tree is now registered as the verified environment." -ForegroundColor DarkGray
+    }
 }
 finally {
     Pop-Location
