@@ -61,10 +61,11 @@ Download-IfMissing "https://www.voidtools.com/$esArchiveName" $esArchive
 Download-IfMissing "https://www.voidtools.com/Everything-$EverythingVersion.sha256" $shaListPath
 
 $shaLine = Get-Content $shaListPath | Where-Object { $_ -match [regex]::Escape($everythingArchiveName) } | Select-Object -First 1
-if (-not $shaLine -or $shaLine -notmatch '^([0-9A-Fa-f]{64})') {
+$shaMatch = if ($shaLine) { [regex]::Match($shaLine, '(?i)[0-9a-f]{64}') } else { $null }
+if (-not $shaLine -or -not $shaMatch -or -not $shaMatch.Success) {
     throw "Official Everything SHA256 entry was not found for $everythingArchiveName"
 }
-$expectedSha = $Matches[1].ToUpperInvariant()
+$expectedSha = $shaMatch.Value.ToUpperInvariant()
 $actualSha = (Get-FileHash $everythingArchive -Algorithm SHA256).Hash.ToUpperInvariant()
 if ($actualSha -ne $expectedSha) {
     Remove-Item $everythingArchive -Force -ErrorAction SilentlyContinue
