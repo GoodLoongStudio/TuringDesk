@@ -7,13 +7,18 @@ namespace TuringDesk.Desktop.Services;
 internal sealed record ForegroundAppSnapshot(string ExeName, bool IsFullscreen, bool IsMaximized);
 
 /// <summary>
-/// Lightweight Win32 foreground-app detection used by the desktop engine. It is
-/// intentionally independent from the Agent runtime so wallpaper playback rules
-/// keep working even when Harness or a model is offline.
+/// Lightweight Win32/DWM foreground-app detection used by the desktop engine.
+/// It is independent from the Agent runtime. Fullscreen detection uses physical
+/// monitor bounds plus DWM extended-frame bounds so borderless games/F11 windows
+/// are not missed because of invisible resize borders.
 /// </summary>
 internal static class DesktopScenePerformancePolicy
 {
     private const uint MonitorDefaultToNearest = 2;
+    private const int GwlStyle = -16;
+    private const long WsPopup = unchecked((long)0x80000000);
+    private const int DwmwaExtendedFrameBounds = 9;
+    private const int DwmwaCloaked = 14;
     private static readonly int CurrentProcessId = Environment.ProcessId;
 
     public static bool ShouldPauseVisualScene() => GetForegroundApp()?.IsFullscreen == true;
@@ -22,6 +27,7 @@ internal static class DesktopScenePerformancePolicy
     {
         var foreground = GetForegroundWindow();
         if (foreground == IntPtr.Zero || !IsWindowVisible(foreground) || IsIconic(foreground)) return null;
+        if (IsCloaked(foreground)) return null;
 
         _ = GetWindowThreadProcessId(foreground, out var processId);
         if (processId == 0 || processId == CurrentProcessId) return null;
@@ -40,20 +46,33 @@ internal static class DesktopScenePerformancePolicy
             exeName = string.Empty;
         }
 
-        if (!GetWindowRect(foreground, out var windowRect)) return new(exeName, false, IsZoomed(foreground));
+        var maximized = IsZoomed(foreground);
+        if (!GetWindowRect(foreground, out var windowRect))
+            return new(exeName, false, maximized);
+
         var monitor = MonitorFromWindow(foreground, MonitorDefaultToNearest);
-        if (monitor == IntPtr.Zero) return new(exeName, false, IsZoomed(foreground));
+        if (monitor == IntPtr.Zero) return new(exeName, false, maximized);
 
         var monitorInfo = new MonitorInfo { Size = Marshal.SizeOf<MonitorInfo>() };
-        if (!GetMonitorInfo(monitor, ref monitorInfo)) return new(exeName, false, IsZoomed(foreground));
+        if (!GetMonitorInfo(monitor, ref monitorInfo)) return new(exeName, false, maximized);
 
-        const int tolerance = 3;
+        var dpi = Math.Max(96u, GetDpiForWindow(foreground));
+        var tolerance = Math.Max(3, (int)Math.Ceiling(4d * dpi / 96d));
         var bounds = monitorInfo.Monitor;
-        var fullscreen = Math.Abs(windowRect.Left - bounds.Left) <= tolerance &&
-                         Math.Abs(windowRect.Top - bounds.Top) <= tolerance &&
-                         Math.Abs(windowRect.Right - bounds.Right) <= tolerance &&
-                         Math.Abs(windowRect.Bottom - bounds.Bottom) <= tolerance;
-        return new(exeName, fullscreen, IsZoomed(foreground));
+
+        var extended = TryGetExtendedFrameBounds(foreground, out var dwmRect)
+            ? dwmRect
+            : windowRect;
+        var style = GetWindowStyle(foreground);
+        var popup = (style & WsPopup) != 0;
+
+        // A normal maximized desktop window is not fullscreen just because its
+        // invisible resize border reaches monitor bounds. Borderless/exclusive
+        // windows are generally not WS_MAXIMIZE state and/or use WS_POPUP.
+        var coversMonitor = Covers(bounds, extended, tolerance) || Covers(bounds, windowRect, tolerance);
+        var fullscreen = coversMonitor && (!maximized || popup);
+
+        return new(exeName, fullscreen, maximized && !fullscreen);
     }
 
     public static bool IsProcessRunning(string exeName)
@@ -70,6 +89,67 @@ internal static class DesktopScenePerformancePolicy
             return false;
         }
     }
+
+    private static bool Covers(Rect monitor, Rect window, int tolerance)
+    {
+        if (Math.Abs(window.Left - monitor.Left) <= tolerance &&
+            Math.Abs(window.Top - monitor.Top) <= tolerance &&
+            Math.Abs(window.Right - monitor.Right) <= tolerance &&
+            Math.Abs(window.Bottom - monitor.Bottom) <= tolerance)
+            return true;
+
+        var intersectionLeft = Math.Max(window.Left, monitor.Left);
+        var intersectionTop = Math.Max(window.Top, monitor.Top);
+        var intersectionRight = Math.Min(window.Right, monitor.Right);
+        var intersectionBottom = Math.Min(window.Bottom, monitor.Bottom);
+        var intersectionWidth = Math.Max(0, intersectionRight - intersectionLeft);
+        var intersectionHeight = Math.Max(0, intersectionBottom - intersectionTop);
+        var monitorWidth = Math.Max(1, monitor.Right - monitor.Left);
+        var monitorHeight = Math.Max(1, monitor.Bottom - monitor.Top);
+        var coverage = (intersectionWidth * (double)intersectionHeight) / (monitorWidth * (double)monitorHeight);
+        return coverage >= 0.995;
+    }
+
+    private static bool TryGetExtendedFrameBounds(IntPtr hwnd, out Rect rect)
+    {
+        rect = default;
+        try
+        {
+            return DwmGetWindowAttribute(
+                hwnd,
+                DwmwaExtendedFrameBounds,
+                out rect,
+                Marshal.SizeOf<Rect>()) == 0;
+        }
+        catch (DllNotFoundException)
+        {
+            return false;
+        }
+        catch (EntryPointNotFoundException)
+        {
+            return false;
+        }
+    }
+
+    private static bool IsCloaked(IntPtr hwnd)
+    {
+        try
+        {
+            return DwmGetWindowAttribute(
+                       hwnd,
+                       DwmwaCloaked,
+                       out int cloaked,
+                       sizeof(int)) == 0 && cloaked != 0;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static long GetWindowStyle(IntPtr hwnd) => IntPtr.Size == 8
+        ? GetWindowLongPtr(hwnd, GwlStyle).ToInt64()
+        : GetWindowLong(hwnd, GwlStyle);
 
     private static string GetClassName(IntPtr hwnd)
     {
@@ -124,6 +204,21 @@ internal static class DesktopScenePerformancePolicy
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool GetMonitorInfo(IntPtr monitor, ref MonitorInfo monitorInfo);
 
+    [DllImport("user32.dll")]
+    private static extern uint GetDpiForWindow(IntPtr hwnd);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern int GetWindowLong(IntPtr hwnd, int index);
+
+    [DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW", SetLastError = true)]
+    private static extern IntPtr GetWindowLongPtr(IntPtr hwnd, int index);
+
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     private static extern int GetClassNameW(IntPtr hwnd, StringBuilder className, int maxCount);
+
+    [DllImport("dwmapi.dll")]
+    private static extern int DwmGetWindowAttribute(IntPtr hwnd, int attribute, out Rect value, int size);
+
+    [DllImport("dwmapi.dll", EntryPoint = "DwmGetWindowAttribute")]
+    private static extern int DwmGetWindowAttributeInt(IntPtr hwnd, int attribute, out int value, int size);
 }
