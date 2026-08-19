@@ -20,20 +20,23 @@ public sealed record DesktopQuickAnswerResult(
     string Message);
 
 /// <summary>
-/// Level 3 search-bar answers. This service is intentionally isolated from the
-/// heavy Agent process stack. Local arithmetic stays in-process; translation and
-/// tiny explanations call the selected OpenAI-compatible model endpoint directly
-/// with a very small response budget.
+/// Lightweight search-bar answers. This service is intentionally isolated from the
+/// heavy Agent process stack. Arithmetic stays in-process and all ordinary AI Q&A,
+/// translation and keyword explanations call the selected OpenAI-compatible model
+/// endpoint directly. Harness is only offered after this lightweight route cannot
+/// complete the request or when the user explicitly asks for deep processing.
 /// </summary>
 public sealed class DesktopQuickAnswerService
 {
+    private const int MaxDirectQuestionLength = 6000;
+
     private static readonly Regex FormulaPattern = new(
         @"^[\s=0-9\.\+\-\*\/\%\^\(\)]+$",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     private static readonly HttpClient Http = new()
     {
-        Timeout = TimeSpan.FromSeconds(12)
+        Timeout = TimeSpan.FromSeconds(20)
     };
 
     public async Task<DesktopQuickAnswerResult> TryAnswerAsync(
@@ -43,7 +46,12 @@ public sealed class DesktopQuickAnswerService
     {
         var text = query.Trim();
         if (string.IsNullOrWhiteSpace(text))
-            return Deep(text);
+        {
+            return new DesktopQuickAnswerResult(
+                DesktopQuickAnswerDisposition.Answered,
+                "AI 直答",
+                "请输入你想搜索或询问的内容。");
+        }
 
         if (TryCalculate(text, out var calculation))
         {
@@ -53,19 +61,20 @@ public sealed class DesktopQuickAnswerService
                 calculation);
         }
 
-        if (text.Length > 180)
-            return Deep(text);
-
-        var intent = Classify(text);
-        if (intent == QuickIntent.None)
-            return Deep(text);
+        if (text.Length > MaxDirectQuestionLength)
+        {
+            return new DesktopQuickAnswerResult(
+                DesktopQuickAnswerDisposition.RequiresDeepProcessing,
+                "内容较长",
+                "这段内容超出了顶部快速问答的输入范围。可以点击“深度处理”交给 Harness 工作台继续。" );
+        }
 
         if (model is null || !model.IsAvailable || model.Settings is null)
         {
             return new DesktopQuickAnswerResult(
                 DesktopQuickAnswerDisposition.RequiresModel,
                 "需要 AI 模型",
-                "这个轻量请求需要一个已配置模型。应用/文件搜索和计算仍可离线使用。也可以点击“深度处理”进入 Harness。" );
+                "请先在设置中配置一个可用模型。应用/文件搜索和本地计算仍可直接使用；Harness 只用于后续需要工具或 Agent 的复杂任务。" );
         }
 
         var settings = model.Settings;
@@ -74,14 +83,18 @@ public sealed class DesktopQuickAnswerService
             return new DesktopQuickAnswerResult(
                 DesktopQuickAnswerDisposition.RequiresModel,
                 "模型配置不完整",
-                "请补充 Base URL 和模型 ID，或点击“深度处理”进入 Harness 工作台。" );
+                "请先补充 Base URL 和模型 ID。顶部搜索会优先使用普通 AI 直答，不会因为普通问答自动启动 Harness。" );
         }
 
+        var intent = Classify(text);
         var systemPrompt = intent switch
         {
-            QuickIntent.Translate => "You are the lightweight translation route of a desktop search bar. Follow the user's requested translation direction. Return only the translation, with no analysis or extra commentary.",
-            QuickIntent.Explain => "You are the lightweight explanation route of a desktop search bar. Explain the requested keyword in at most three concise sentences, using the user's language. Do not perform multi-step planning or tool use.",
-            _ => throw new InvalidOperationException("Unsupported quick intent.")
+            QuickIntent.Translate =>
+                "You are TuringDesk's lightweight translation assistant. Follow the user's requested translation direction. Return the translation directly, without analysis, tool calls, or agent planning.",
+            QuickIntent.Explain =>
+                "You are TuringDesk's lightweight desktop Q&A assistant. Explain the requested concept clearly and concisely in the user's language. Do not call tools and do not claim to have operated the computer.",
+            _ =>
+                "You are TuringDesk's lightweight desktop AI assistant. Answer the user's question directly and helpfully in the user's language. Keep the answer concise unless detail is useful. Do not call tools, browse local files, execute commands, or claim that you changed the computer. If the user asks for an action that actually requires operating the system, explain what would need to be done; the user can choose the separate Deep Processing/Harness action afterward."
         };
 
         try
@@ -91,11 +104,17 @@ public sealed class DesktopQuickAnswerService
                 model.Credential,
                 systemPrompt,
                 text,
+                intent == QuickIntent.Translate ? 384 : 1024,
                 cancellationToken).ConfigureAwait(false);
 
             return new DesktopQuickAnswerResult(
                 DesktopQuickAnswerDisposition.Answered,
-                intent == QuickIntent.Translate ? "快速翻译" : "快速解释",
+                intent switch
+                {
+                    QuickIntent.Translate => "快速翻译",
+                    QuickIntent.Explain => "AI 解释",
+                    _ => "AI 直答"
+                },
                 reply);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -106,8 +125,8 @@ public sealed class DesktopQuickAnswerService
         {
             return new DesktopQuickAnswerResult(
                 DesktopQuickAnswerDisposition.RequiresDeepProcessing,
-                "轻量直答未完成",
-                $"{error.Message} 可以点击“深度处理”交给 Harness。" );
+                "普通 AI 问答未完成",
+                $"{error.Message} 你可以重试，或点击“深度处理”交给 Harness。" );
         }
     }
 
@@ -116,6 +135,7 @@ public sealed class DesktopQuickAnswerService
         string? credential,
         string systemPrompt,
         string userText,
+        int maxTokens,
         CancellationToken cancellationToken)
     {
         var baseUrl = settings.BaseUrl.Trim();
@@ -134,8 +154,8 @@ public sealed class DesktopQuickAnswerService
                 new { role = "system", content = systemPrompt },
                 new { role = "user", content = userText }
             },
-            temperature = 0.1,
-            max_tokens = 256,
+            temperature = 0.2,
+            max_tokens = maxTokens,
             stream = false
         });
 
@@ -179,7 +199,7 @@ public sealed class DesktopQuickAnswerService
             value.StartsWith("define ", StringComparison.OrdinalIgnoreCase))
             return QuickIntent.Explain;
 
-        return QuickIntent.None;
+        return QuickIntent.General;
     }
 
     private static bool TryCalculate(string text, out string result)
@@ -204,16 +224,9 @@ public sealed class DesktopQuickAnswerService
         }
     }
 
-    private static DesktopQuickAnswerResult Deep(string query) => new(
-        DesktopQuickAnswerDisposition.RequiresDeepProcessing,
-        "需要深度处理",
-        string.IsNullOrWhiteSpace(query)
-            ? "请输入任务。"
-            : "顶部搜索只做应用/文件检索、计算、翻译和极简解释。这个请求可以交给 Harness Agent 工作台继续处理。" );
-
     private enum QuickIntent
     {
-        None,
+        General,
         Translate,
         Explain
     }
