@@ -397,39 +397,35 @@ internal static class ExplorerDesktopHost
     {
         var targets = new List<DesktopHostTarget>();
         var seen = new HashSet<IntPtr>();
-
-        // Windows 11 may place DefView directly under Progman. This is the safest
-        // modern path: our child is explicitly inserted immediately behind the real
-        // icon view instead of guessing which sibling WorkerW is the wallpaper host.
-        if (GetParent(generation.DefView) == generation.Progman && seen.Add(generation.Progman))
-        {
-            targets.Add(new DesktopHostTarget(
-                generation.Progman,
-                generation.DefView,
-                "progman/behind-defview",
-                RequireTopChild: false));
-        }
-
-        // Classic layout: find the WorkerW immediately following the exact top-level
-        // window that owns this generation's DefView. This ties the candidate to the
-        // live icon host instead of accepting arbitrary WorkerW windows.
         var defViewOwner = GetParent(generation.DefView);
-        if (defViewOwner != IntPtr.Zero && defViewOwner != generation.Progman)
+
+        // Canonical Explorer wallpaper topology: after Progman receives 0x052C,
+        // Explorer creates an empty top-level WorkerW immediately behind the
+        // top-level window that owns SHELLDLL_DefView. Parenting the renderer into
+        // this WorkerW places it above the system wallpaper compositor but below
+        // the icon view. This must be preferred even on Windows 11 where DefView is
+        // hosted directly by Progman; inserting a child into Progman itself can be
+        // hidden behind Windows' own wallpaper composition while still looking like
+        // a valid HWND attachment.
+        if (defViewOwner != IntPtr.Zero)
         {
             var worker = FindWindowEx(IntPtr.Zero, defViewOwner, "WorkerW", null);
-            if (worker != IntPtr.Zero && seen.Add(worker))
+            if (worker != IntPtr.Zero &&
+                IsWindow(worker) &&
+                FindWindowEx(worker, IntPtr.Zero, "SHELLDLL_DefView", null) == IntPtr.Zero &&
+                seen.Add(worker))
             {
                 targets.Add(new DesktopHostTarget(
                     worker,
                     HwndTop,
-                    "workerw/classic-sibling",
+                    "workerw/desktop-sibling",
                     RequireTopChild: true));
             }
         }
 
-        // Raised-desktop fallback. Do not prefer these over the direct Progman path:
-        // Windows 11 can keep several no-DefView WorkerW children alive after a
-        // wallpaper transition, and SetParent succeeds on all of them.
+        // Some Windows 11 layouts expose an empty WorkerW as a Progman child rather
+        // than a top-level sibling. It is still a real wallpaper host and should be
+        // preferred over the direct-Progman fallback.
         var childAfter = IntPtr.Zero;
         while (true)
         {
@@ -444,6 +440,20 @@ internal static class ExplorerDesktopHost
                 HwndTop,
                 "workerw/progman-child",
                 RequireTopChild: true));
+        }
+
+        // Last-resort compatibility fallback only. It preserves functionality on
+        // unusual Explorer builds where 0x052C does not expose a usable WorkerW, but
+        // it is intentionally no longer the preferred Windows 11 path because a
+        // renderer child placed directly in Progman can be completely occluded by
+        // the system wallpaper layer.
+        if (GetParent(generation.DefView) == generation.Progman && seen.Add(generation.Progman))
+        {
+            targets.Add(new DesktopHostTarget(
+                generation.Progman,
+                generation.DefView,
+                "progman/behind-defview-fallback",
+                RequireTopChild: false));
         }
 
         return targets;
