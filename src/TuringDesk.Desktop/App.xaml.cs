@@ -15,21 +15,10 @@ public partial class App : Application
         // covered on 125%/150% scaled desktops.
         CompactToolWindowService.Install();
 
-        // Harness is a core desktop service, not an advanced-console feature.
-        // Start its process before constructing MainWindow so the Agent kernel,
-        // Models page and Windows MCP boot in parallel with the visible desktop.
-        // StartEarly() reaches Process.Start synchronously and returns only the
-        // readiness task, so this does not make the Windows shell wait 20 seconds.
-        Task<Uri> harnessStartup;
-        try
-        {
-            harnessStartup = HarnessWebUiService.StartEarly();
-        }
-        catch (Exception error)
-        {
-            harnessStartup = Task.FromException<Uri>(error);
-        }
-
+        // Runtime and DeepSeek Harness are intentionally NOT started here.
+        // Enhancement mode, the wallpaper engine and the RAM search index must be
+        // usable with the heavy Agent stack completely cold. HarnessConsoleWindow,
+        // an Agent request or an explicit MCP flow is responsible for waking it.
         var shellMode = e.Args.Any(arg => string.Equals(arg, "--shell", StringComparison.OrdinalIgnoreCase));
         var controlOnly = e.Args.Any(arg => string.Equals(arg, "--control-only", StringComparison.OrdinalIgnoreCase));
         var window = new MainWindow();
@@ -37,35 +26,13 @@ public partial class App : Application
 
         if (shellMode)
         {
-            // Advanced mode: TuringDesk becomes the current user's replacement shell.
             window.EnableShellMode();
         }
         else if (!controlOnly)
         {
-            // Default mode: Wallpaper Engine-style integration. Explorer remains
-            // the Windows shell while TuringDesk attaches only its scene layer
-            // behind Explorer desktop icons and keeps AI services in user space.
             window.EnableEnhancementMode();
         }
 
         window.Show();
-        _ = ObserveHarnessStartupAsync(harnessStartup);
-    }
-
-    private static async Task ObserveHarnessStartupAsync(Task<Uri> startup)
-    {
-        try
-        {
-            _ = await startup;
-        }
-        catch (Exception error)
-        {
-            // Never block Explorer/TuringDesk desktop availability on a transient
-            // Agent service failure, but surface the actual startup error.
-            ShellNotificationService.Publish(
-                "DeepSeek Harness 启动失败",
-                error.Message,
-                "error");
-        }
     }
 }
