@@ -20,14 +20,25 @@ public partial class SceneRendererControl
             _desktopInputTimer.Tick += DesktopInputTimer_Tick;
             _desktopInputHooked = true;
         }
-        _desktopInputTimer.Start();
+
+        if (_scene is not null && !_stopped && !_paused)
+        {
+            _desktopInputTimer.Start();
+            ResumeSceneScript();
+            UpdateAudioLeaseForCurrentScene();
+            if (_scene.Kind == SceneKind.Scene) GpuSurface.SetPaused(false);
+        }
     }
 
     private void Renderer_Unloaded(object sender, RoutedEventArgs e)
     {
         _desktopInputTimer.Stop();
+        PauseSceneScript();
+        ReleaseAudioBridge();
+        GpuSurface.SetPaused(true);
         ShutdownAudioBridge();
         ShutdownPropertyBridge();
+        _lastInput = null;
     }
 
     private async void DesktopInputTimer_Tick(object? sender, EventArgs e)
