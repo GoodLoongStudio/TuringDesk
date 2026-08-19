@@ -5,17 +5,53 @@ import { CapabilityClient } from './capability-client.js'
 
 const capabilities = new CapabilityClient()
 const server = new Server(
-  { name: 'turingdesk-windows', version: '0.3.0' },
+  { name: 'turingdesk-windows', version: '0.4.0' },
   { capabilities: { tools: {} } }
 )
 
-const tools: Tool[] = [
-  {
+type ToolExecutionClass = 'instant' | 'interactive' | 'agentic'
+type ToolRoutingMetadata = {
+  executionClass: ToolExecutionClass
+  stateless: boolean
+  expectedLatencyMs: string
+  requiresAgentPlanning: boolean
+}
+type ClassifiedTool = Tool & {
+  _meta: {
+    turingdesk: ToolRoutingMetadata
+  }
+}
+
+function routed(tool: Tool, routing: ToolRoutingMetadata): ClassifiedTool {
+  return {
+    ...tool,
+    _meta: {
+      turingdesk: routing
+    }
+  }
+}
+
+const instantRead = (expectedLatencyMs = '<50'): ToolRoutingMetadata => ({
+  executionClass: 'instant',
+  stateless: true,
+  expectedLatencyMs,
+  requiresAgentPlanning: false
+})
+
+const interactive = (expectedLatencyMs = '<250'): ToolRoutingMetadata => ({
+  executionClass: 'interactive',
+  stateless: true,
+  expectedLatencyMs,
+  requiresAgentPlanning: false
+})
+
+const tools: ClassifiedTool[] = [
+  routed({
     name: 'desktop_snapshot',
     description: 'Read one coherent snapshot of the current Windows desktop: monitors, visible application windows and the foreground window. Use this before multi-window desktop planning when current screen state matters.',
     inputSchema: { type: 'object', additionalProperties: false, properties: {} }
-  },
-  {
+  }, instantRead('<80')),
+  routed({
     name: 'app_launch',
     description: 'Launch an allow-listed Windows desktop application. Allowed app aliases: chrome, code, terminal.',
     inputSchema: {
@@ -26,13 +62,13 @@ const tools: Tool[] = [
       },
       required: ['app']
     }
-  },
-  {
+  }, interactive()),
+  routed({
     name: 'window_list',
     description: 'List visible top-level Windows application windows. TuringDesk itself is excluded.',
     inputSchema: { type: 'object', additionalProperties: false, properties: {} }
-  },
-  {
+  }, instantRead()),
+  routed({
     name: 'window_find',
     description: 'Find the first visible top-level window whose title or process name contains a query.',
     inputSchema: {
@@ -41,8 +77,8 @@ const tools: Tool[] = [
       properties: { query: { type: 'string', description: 'Window title or process-name fragment.' } },
       required: ['query']
     }
-  },
-  {
+  }, instantRead()),
+  routed({
     name: 'window_focus',
     description: 'Restore and focus a visible top-level window by handle returned by window_list/window_find.',
     inputSchema: {
@@ -51,8 +87,8 @@ const tools: Tool[] = [
       properties: { handle: { type: 'string', description: 'Opaque window handle returned by TuringDesk.' } },
       required: ['handle']
     }
-  },
-  {
+  }, interactive()),
+  routed({
     name: 'window_move',
     description: 'Move a visible top-level window. Coordinates are clamped to the current work area.',
     inputSchema: {
@@ -65,8 +101,8 @@ const tools: Tool[] = [
       },
       required: ['handle', 'x', 'y']
     }
-  },
-  {
+  }, interactive()),
+  routed({
     name: 'window_resize',
     description: 'Resize a visible top-level window. Size is clamped to safe minimums and the work area.',
     inputSchema: {
@@ -79,8 +115,8 @@ const tools: Tool[] = [
       },
       required: ['handle', 'width', 'height']
     }
-  },
-  {
+  }, interactive()),
+  routed({
     name: 'window_tile',
     description: 'Tile two visible top-level windows side by side using handles returned by window_list/window_find.',
     inputSchema: {
@@ -92,7 +128,7 @@ const tools: Tool[] = [
       },
       required: ['leftHandle', 'rightHandle']
     }
-  }
+  }, interactive('<350'))
 ]
 
 server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools }))
