@@ -61,9 +61,8 @@ Download-IfMissing "https://www.voidtools.com/$esArchiveName" $esArchive
 Download-IfMissing "https://www.voidtools.com/Everything-$EverythingVersion.sha256" $shaListPath
 
 # Verify against the official checksum manifest when this exact architecture is
-# present. The Everything 1.4 ARM/ARM64 portable builds were added separately and
-# are not present in every 1.4.1.1032 checksum manifest, so Authenticode below is
-# the mandatory verification for every architecture.
+# present. ARM/ARM64 portable entries are not present in every 1.4.1.1032 manifest;
+# Authenticode verification below is mandatory for all architectures.
 $shaLines = @(Get-Content $shaListPath)
 $fileIndex = -1
 for ($index = 0; $index -lt $shaLines.Count; $index++) {
@@ -108,17 +107,28 @@ New-Item -ItemType Directory -Force -Path $tempEverything, $tempEs | Out-Null
 Expand-Archive -Path $everythingArchive -DestinationPath $tempEverything -Force
 Expand-Archive -Path $esArchive -DestinationPath $tempEs -Force
 
-$downloadedEverything = Get-ChildItem $tempEverything -Filter "Everything.exe" -Recurse | Select-Object -First 1 -ExpandProperty FullName
-$downloadedEs = Get-ChildItem $tempEs -Filter "es.exe" -Recurse | Select-Object -First 1 -ExpandProperty FullName
-if (-not $downloadedEverything -or -not $downloadedEs) {
-    throw "Everything component archives did not contain the expected executables."
+# Normalize archive-internal names into the stable names expected by TuringDesk.
+# ARM packages may use architecture-specific executable names.
+$downloadedEverything = Get-ChildItem $tempEverything -Filter "*.exe" -Recurse -File |
+    Where-Object { $_.Name -like "Everything*.exe" } |
+    Select-Object -First 1 -ExpandProperty FullName
+$downloadedEs = Get-ChildItem $tempEs -Filter "*.exe" -Recurse -File |
+    Select-Object -First 1 -ExpandProperty FullName
+
+if (-not $downloadedEverything) {
+    $names = (Get-ChildItem $tempEverything -Recurse -File | Select-Object -ExpandProperty Name) -join ", "
+    throw "Everything archive did not contain an Everything executable. Files: $names"
+}
+if (-not $downloadedEs) {
+    $names = (Get-ChildItem $tempEs -Recurse -File | Select-Object -ExpandProperty Name) -join ", "
+    throw "ES archive did not contain a CLI executable. Files: $names"
 }
 
 $signature = Get-AuthenticodeSignature $downloadedEverything
 if ($signature.Status -ne [System.Management.Automation.SignatureStatus]::Valid) {
-    throw "Everything.exe Authenticode signature is not valid: $($signature.Status)"
+    throw "Everything executable Authenticode signature is not valid: $($signature.Status)"
 }
-Write-Host "Verified Everything.exe signer: $($signature.SignerCertificate.Subject)" -ForegroundColor DarkGray
+Write-Host "Verified Everything signer: $($signature.SignerCertificate.Subject)" -ForegroundColor DarkGray
 
 Copy-Item $downloadedEverything $everythingExe -Force
 Copy-Item $downloadedEs $esExe -Force
