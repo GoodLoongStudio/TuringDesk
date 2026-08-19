@@ -135,7 +135,8 @@ public partial class MainWindow
         {
             Owner = IsVisible ? this : null
         };
-        _ = dialog.ShowDialog();
+        dialog.Show();
+        dialog.Activate();
     }
 
     internal async Task SubmitExternalCommandAsync(string text)
