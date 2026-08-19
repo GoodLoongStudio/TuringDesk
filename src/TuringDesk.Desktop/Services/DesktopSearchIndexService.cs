@@ -35,8 +35,14 @@ public sealed class DesktopSearchIndexService : IDisposable
     private int _disposed;
 
     public DesktopSearchIndexService()
+        : this(initializeFileSearch: true)
     {
-        _ = _everything.InitializeAsync();
+    }
+
+    internal DesktopSearchIndexService(bool initializeFileSearch)
+    {
+        if (initializeFileSearch)
+            _ = _everything.InitializeAsync();
     }
 
     public bool IsInitialIndexComplete => _apps.InitializationCompleted && _everything.InitializationCompleted;
@@ -47,6 +53,7 @@ public sealed class DesktopSearchIndexService : IDisposable
     public string FileSearchProviderName => _everything.ProviderName;
     public string FileSearchStatus => _everything.Status;
     public int AppCount => _apps.Count;
+    internal Task AppSearchInitialization => _apps.Initialization;
 
     // Compatibility property retained for the existing status UI. TuringDesk owns
     // no filename database; Everything owns the file index.
