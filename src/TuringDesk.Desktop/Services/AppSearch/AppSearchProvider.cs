@@ -21,8 +21,9 @@ internal sealed class AppSearchProvider : IDisposable
     private readonly Timer _refreshDebounce;
     private readonly Timer _periodicRefresh;
     private AppSearchEntry[] _snapshot = [];
-    private Task _initializationTask;
+    private readonly Task _initializationTask;
     private volatile bool _isReady;
+    private volatile bool _initializationCompleted;
     private volatile string _status = "正在建立应用索引…";
     private int _disposed;
 
@@ -35,6 +36,7 @@ internal sealed class AppSearchProvider : IDisposable
     }
 
     public bool IsReady => _isReady;
+    public bool InitializationCompleted => _initializationCompleted;
     public int Count => Volatile.Read(ref _snapshot).Length;
     public string Status => _status;
     public Task Initialization => _initializationTask;
@@ -73,9 +75,13 @@ internal sealed class AppSearchProvider : IDisposable
     private async Task RefreshCoreAsync(CancellationToken cancellationToken)
     {
         if (Volatile.Read(ref _disposed) != 0) return;
-        await _refreshGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+
+        var entered = false;
         try
         {
+            await _refreshGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+            entered = true;
+
             if (Volatile.Read(ref _disposed) != 0) return;
             _status = _isReady ? "正在刷新应用索引…" : "正在建立应用索引…";
 
@@ -95,6 +101,10 @@ internal sealed class AppSearchProvider : IDisposable
         {
             _status = "应用索引已停止";
         }
+        catch (ObjectDisposedException)
+        {
+            // Window teardown raced a queued refresh. No state mutation is needed.
+        }
         catch (Exception error)
         {
             // Preserve the last known-good immutable snapshot if refresh fails.
@@ -104,7 +114,11 @@ internal sealed class AppSearchProvider : IDisposable
         }
         finally
         {
-            _refreshGate.Release();
+            _initializationCompleted = true;
+            if (entered)
+            {
+                try { _refreshGate.Release(); } catch (ObjectDisposedException) { }
+            }
         }
     }
 
@@ -115,6 +129,7 @@ internal sealed class AppSearchProvider : IDisposable
         {
             try { await RefreshCoreAsync(_lifetime.Token).ConfigureAwait(false); }
             catch (OperationCanceledException) { }
+            catch (ObjectDisposedException) { }
         });
     }
 
@@ -176,7 +191,9 @@ internal sealed class AppSearchProvider : IDisposable
 
         try { _refreshDebounce.Dispose(); } catch { }
         try { _periodicRefresh.Dispose(); } catch { }
-        _lifetime.Dispose();
-        _refreshGate.Dispose();
+
+        // Do not dispose the CTS/gate while a background COM discovery or queued
+        // refresh can still be unwinding. They are managed objects and are collected
+        // naturally once the provider and its final task references are released.
     }
 }
