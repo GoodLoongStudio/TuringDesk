@@ -60,9 +60,30 @@ Download-IfMissing "https://www.voidtools.com/$everythingArchiveName" $everythin
 Download-IfMissing "https://www.voidtools.com/$esArchiveName" $esArchive
 Download-IfMissing "https://www.voidtools.com/Everything-$EverythingVersion.sha256" $shaListPath
 
-$shaLine = Get-Content $shaListPath | Where-Object { $_ -match [regex]::Escape($everythingArchiveName) } | Select-Object -First 1
-$shaMatch = if ($shaLine) { [regex]::Match($shaLine, '(?i)[0-9a-f]{64}') } else { $null }
-if (-not $shaLine -or -not $shaMatch -or -not $shaMatch.Success) {
+$shaLines = @(Get-Content $shaListPath)
+$fileIndex = -1
+for ($index = 0; $index -lt $shaLines.Count; $index++) {
+    if ($shaLines[$index] -match [regex]::Escape($everythingArchiveName)) {
+        $fileIndex = $index
+        break
+    }
+}
+
+$shaMatch = $null
+if ($fileIndex -ge 0) {
+    # voidtools checksum manifests have used more than one text layout over time.
+    # Prefer the filename line, then the immediately following line, then previous.
+    foreach ($candidateIndex in @($fileIndex, $fileIndex + 1, $fileIndex - 1)) {
+        if ($candidateIndex -lt 0 -or $candidateIndex -ge $shaLines.Count) { continue }
+        $candidate = [regex]::Match($shaLines[$candidateIndex], '(?i)(?<![0-9a-f])[0-9a-f]{64}(?![0-9a-f])')
+        if ($candidate.Success) {
+            $shaMatch = $candidate
+            break
+        }
+    }
+}
+
+if ($fileIndex -lt 0 -or -not $shaMatch -or -not $shaMatch.Success) {
     throw "Official Everything SHA256 entry was not found for $everythingArchiveName"
 }
 $expectedSha = $shaMatch.Value.ToUpperInvariant()
@@ -71,6 +92,7 @@ if ($actualSha -ne $expectedSha) {
     Remove-Item $everythingArchive -Force -ErrorAction SilentlyContinue
     throw "Everything archive SHA256 mismatch. Expected $expectedSha, got $actualSha"
 }
+Write-Host "Verified Everything archive SHA256: $actualSha" -ForegroundColor DarkGray
 
 $tempEverything = Join-Path $cacheRoot "extract-everything-$Architecture"
 $tempEs = Join-Path $cacheRoot "extract-es-$Architecture"
