@@ -13,12 +13,14 @@ public partial class DesktopSearchBarWindow
     private bool _indexStatusStarted;
     private bool _indexReadyNotified;
     private bool _indexFailureNotified;
+    private bool _lastAppSearchReady;
 
     protected override void OnContentRendered(EventArgs e)
     {
         base.OnContentRendered(e);
         if (_indexStatusStarted) return;
         _indexStatusStarted = true;
+        _lastAppSearchReady = _searchIndex.AppSearchReady;
 
         _indexStatusTimer.Tick += IndexStatusTimer_Tick;
         RefreshIndexStatus();
@@ -49,6 +51,8 @@ public partial class DesktopSearchBarWindow
     {
         var appReady = _searchIndex.AppSearchReady;
         var fileReady = _searchIndex.FileSearchReady;
+        var appJustBecameReady = !_lastAppSearchReady && appReady;
+        _lastAppSearchReady = appReady;
 
         if (appReady && fileReady)
         {
@@ -80,6 +84,24 @@ public partial class DesktopSearchBarWindow
         PlaceholderText.Visibility = string.IsNullOrWhiteSpace(SearchBox.Text)
             ? Visibility.Visible
             : Visibility.Collapsed;
+
+        if (appJustBecameReady && !string.IsNullOrWhiteSpace(SearchBox.Text))
+            RefreshCurrentQueryAfterIndexReady();
+    }
+
+    private void RefreshCurrentQueryAfterIndexReady()
+    {
+        CancelSearchPipeline();
+        var generation = Interlocked.Increment(ref _searchGeneration);
+        var query = SearchBox.Text.Trim();
+        if (string.IsNullOrWhiteSpace(query)) return;
+
+        var apps = _searchIndex.SearchApps(query, 5);
+        ApplySearchResults(query, generation, apps);
+
+        var pipeline = new CancellationTokenSource();
+        _searchPipeline = pipeline;
+        _ = StreamFileResultsAsync(query, apps, generation, pipeline);
     }
 
     private void NotifySearchReady()
