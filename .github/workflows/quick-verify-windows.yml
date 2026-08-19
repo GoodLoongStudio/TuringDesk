@@ -3,7 +3,12 @@ name: Quick Verify Windows
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - .ci/quick-verify-status.json
   workflow_dispatch:
+
+permissions:
+  contents: write
 
 concurrency:
   group: turingdesk-quick-verify-${{ github.ref }}
@@ -36,3 +41,27 @@ jobs:
       - name: Re-run with the existing pinned environment
         shell: powershell
         run: .\scripts\quick-verify.ps1 -SkipPull -BuildOnly
+
+      - name: Persist verification result
+        if: ${{ always() }}
+        shell: powershell
+        env:
+          QUICK_VERIFY_JOB_STATUS: ${{ job.status }}
+        run: |
+          New-Item -ItemType Directory -Force ".ci" | Out-Null
+          $result = [ordered]@{
+            commit = $env:GITHUB_SHA
+            workflow_run_id = $env:GITHUB_RUN_ID
+            workflow_run_attempt = $env:GITHUB_RUN_ATTEMPT
+            status = $env:QUICK_VERIFY_JOB_STATUS
+            checked_at_utc = (Get-Date).ToUniversalTime().ToString("o")
+            runner = "windows-11-arm"
+          }
+          $result | ConvertTo-Json | Set-Content -Encoding UTF8 ".ci/quick-verify-status.json"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add ".ci/quick-verify-status.json"
+          git commit -m "ci: record quick verify result [skip ci]"
+          git pull --rebase origin main
+          git push origin HEAD:main
