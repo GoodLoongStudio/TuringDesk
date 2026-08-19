@@ -6,8 +6,12 @@ namespace TuringDesk.Desktop.Services;
 /// <summary>
 /// Hosts TuringDesk render windows inside Explorer's wallpaper layer while
 /// Explorer keeps ownership of desktop icons, taskbar, tray and context menus.
-/// Supports both the classic top-level WorkerW layout and newer Windows 11
-/// layouts where SHELLDLL_DefView/WorkerW may live under Progman.
+///
+/// An attachment is valid only for one Explorer desktop generation. The generation
+/// is identified by Progman + SHELLDLL_DefView + SysListView32 + Explorer PID.
+/// Explorer can rebuild any of those HWNDs after wallpaper changes, explorer.exe
+/// restart, display reconfiguration or unlock while leaving an old WorkerW alive.
+/// Merely checking that GetParent() is still a WorkerW is therefore insufficient.
 /// </summary>
 internal static class ExplorerDesktopHost
 {
@@ -23,27 +27,26 @@ internal static class ExplorerDesktopHost
     private const long WsExNoActivate = 0x08000000L;
 
     private const uint SmtoNormal = 0x0000;
+    private const uint SwpNoSize = 0x0001;
+    private const uint SwpNoMove = 0x0002;
     private const uint SwpNoActivate = 0x0010;
     private const uint SwpFrameChanged = 0x0020;
     private const uint SwpShowWindow = 0x0040;
     private const int SwShowNoActivate = 4;
 
     private const uint RdwInvalidate = 0x0001;
-    private const uint RdwUpdatenow = 0x0100;
     private const uint RdwAllChildren = 0x0080;
+    private const uint RdwUpdatenow = 0x0100;
 
     private const int SmXVirtualScreen = 76;
     private const int SmYVirtualScreen = 77;
     private const int SmCxVirtualScreen = 78;
     private const int SmCyVirtualScreen = 79;
+    private const int GeometryTolerancePixels = 3;
 
-    // For a dedicated WorkerW we want TuringDesk to be the top child inside the
-    // wallpaper host. The WorkerW itself still sits behind Explorer's icon view,
-    // so this does not place the wallpaper above desktop icons or normal apps.
     private static readonly IntPtr HwndTop = IntPtr.Zero;
-
     private static readonly object AttachmentGate = new();
-    private static readonly Dictionary<IntPtr, string> AttachmentStrategies = new();
+    private static readonly Dictionary<IntPtr, AttachmentRecord> Attachments = new();
 
     public static bool TryAttach(IntPtr windowHandle)
     {
@@ -58,38 +61,95 @@ internal static class ExplorerDesktopHost
     {
         if (windowHandle == IntPtr.Zero || !IsWindow(windowHandle)) return false;
 
-        var progman = FindWindow("Progman", null);
-        if (progman == IntPtr.Zero) return false;
-        RaiseDesktop(progman);
+        InvalidateAttachment(windowHandle);
+        var generation = CaptureDesktopGeneration();
+        if (generation is null)
+        {
+            SceneEngineTrace.Info("explorer.attach", "desktop generation unavailable");
+            return false;
+        }
+
+        RaiseDesktop(generation.Progman);
+        // 0x052C may create/rebuild WorkerW/DefView. Capture again so every target
+        // belongs to the generation that exists after the message sequence.
+        generation = CaptureDesktopGeneration();
+        if (generation is null) return false;
 
         PrepareWallpaperWindow(windowHandle);
+        var targets = FindWallpaperHosts(generation);
+        SceneEngineTrace.Info(
+            "explorer.attach",
+            $"begin hwnd=0x{windowHandle.ToInt64():X} desktop={DescribeGeneration(generation)} candidates={targets.Count} rect={screenX},{screenY},{width}x{height}");
 
-        // Do not treat SetParent success as visual success. Windows 11 can expose
-        // multiple WorkerW surfaces; an HWND attached to the wrong one is valid
-        // structurally but remains hidden by Explorer's actual wallpaper surface.
-        foreach (var target in FindWallpaperHosts(progman))
+        foreach (var target in targets)
         {
             if (!TryAttachToTarget(windowHandle, target, screenX, screenY, width, height))
+            {
+                SceneEngineTrace.Info(
+                    "explorer.attach",
+                    $"candidate-failed strategy={target.Strategy} parent=0x{target.Parent.ToInt64():X}");
                 continue;
+            }
+
+            var record = new AttachmentRecord(
+                target.Strategy,
+                target.Parent,
+                generation.Progman,
+                generation.DefView,
+                generation.ListView,
+                generation.ExplorerProcessId,
+                target.RequireTopChild);
 
             lock (AttachmentGate)
-                AttachmentStrategies[windowHandle] = target.Strategy;
+                Attachments[windowHandle] = record;
+
+            if (!VerifyAttachmentRecord(windowHandle, record, screenX, screenY, width, height, verifyGeometry: true))
+            {
+                InvalidateAttachment(windowHandle);
+                continue;
+            }
+
+            SceneEngineTrace.Info("explorer.attach", $"success {DescribeAttachment(windowHandle)}");
             return true;
         }
 
-        lock (AttachmentGate)
-            AttachmentStrategies.Remove(windowHandle);
+        InvalidateAttachment(windowHandle);
+        ExplorerDesktopDiagnostics.Capture("attach-exhausted");
         return false;
     }
 
+    /// <summary>
+    /// Returns true only if the HWND is attached to the same live Explorer desktop
+    /// generation selected by TryAttach. A surviving stale WorkerW is not healthy.
+    /// </summary>
     public static bool IsAttached(IntPtr windowHandle)
     {
         if (windowHandle == IntPtr.Zero || !IsWindow(windowHandle)) return false;
-        var parent = GetParent(windowHandle);
-        if (parent == IntPtr.Zero || !IsWindow(parent)) return false;
+        AttachmentRecord? record;
+        lock (AttachmentGate)
+            Attachments.TryGetValue(windowHandle, out record);
+        if (record is null) return false;
 
-        var parentClass = GetClassName(parent);
-        return parentClass is "WorkerW" or "Progman";
+        return VerifyAttachmentRecord(
+            windowHandle,
+            record,
+            0,
+            0,
+            0,
+            0,
+            verifyGeometry: false);
+    }
+
+    public static void InvalidateAttachment(IntPtr windowHandle)
+    {
+        lock (AttachmentGate)
+            Attachments.Remove(windowHandle);
+    }
+
+    public static void InvalidateAll()
+    {
+        lock (AttachmentGate)
+            Attachments.Clear();
     }
 
     public static bool ResizeToVirtualDesktop(IntPtr windowHandle)
@@ -103,19 +163,36 @@ internal static class ExplorerDesktopHost
 
     public static bool ResizeToDesktopRect(IntPtr windowHandle, int screenX, int screenY, int width, int height)
     {
-        if (!IsAttached(windowHandle)) return false;
-        var host = GetParent(windowHandle);
-        var hostClass = GetClassName(host);
-        var insertAfter = hostClass == "Progman"
-            ? FindWindowEx(host, IntPtr.Zero, "SHELLDLL_DefView", null)
+        AttachmentRecord? record;
+        lock (AttachmentGate)
+            Attachments.TryGetValue(windowHandle, out record);
+
+        if (record is null || !VerifyAttachmentRecord(
+                windowHandle,
+                record,
+                0,
+                0,
+                0,
+                0,
+                verifyGeometry: false))
+        {
+            InvalidateAttachment(windowHandle);
+            return false;
+        }
+
+        var insertAfter = record.Strategy.StartsWith("progman/", StringComparison.Ordinal)
+            ? record.DefView
             : HwndTop;
 
-        if (hostClass == "Progman" && insertAfter == IntPtr.Zero)
+        if (insertAfter != IntPtr.Zero && !IsWindow(insertAfter))
+        {
+            InvalidateAttachment(windowHandle);
             return false;
+        }
 
         var positioned = PositionInHost(
             windowHandle,
-            host,
+            record.Parent,
             insertAfter,
             screenX,
             screenY,
@@ -123,36 +200,48 @@ internal static class ExplorerDesktopHost
             height,
             frameChanged: false);
 
-        if (positioned && hostClass == "WorkerW")
+        if (positioned && record.RequireTopChild)
         {
             _ = BringWindowToTop(windowHandle);
-            positioned = VerifyAttachment(windowHandle, host, requireTopChild: true);
+            positioned = GetWindow(windowHandle, GwHwndPrev) == IntPtr.Zero;
         }
 
-        return positioned;
+        if (!positioned || !VerifyAttachmentRecord(
+                windowHandle,
+                record,
+                screenX,
+                screenY,
+                width,
+                height,
+                verifyGeometry: true))
+        {
+            InvalidateAttachment(windowHandle);
+            return false;
+        }
+
+        return true;
     }
 
     public static string DescribeAttachment(IntPtr windowHandle)
     {
         if (windowHandle == IntPtr.Zero || !IsWindow(windowHandle)) return "window-unavailable";
+
+        AttachmentRecord? record;
+        lock (AttachmentGate)
+            Attachments.TryGetValue(windowHandle, out record);
+
         var parent = GetParent(windowHandle);
         if (parent == IntPtr.Zero || !IsWindow(parent)) return "not-attached";
 
-        string strategy;
-        lock (AttachmentGate)
-            strategy = AttachmentStrategies.TryGetValue(windowHandle, out var value) ? value : "unknown";
-
-        var parentClass = GetClassName(parent);
         var previous = GetWindow(windowHandle, GwHwndPrev);
         var zState = previous == IntPtr.Zero ? "top-child" : $"below:0x{previous.ToInt64():X}";
         var visible = IsWindowVisible(windowHandle) ? "visible" : "hidden";
-        var grandParent = GetParent(parent);
-        if (grandParent != IntPtr.Zero && IsWindow(grandParent))
-        {
-            return $"{strategy}; {parentClass}:0x{parent.ToInt64():X} <- {GetClassName(grandParent)}:0x{grandParent.ToInt64():X}; {zState}; {visible}";
-        }
+        var strategy = record?.Strategy ?? "unknown";
+        var generation = record is null
+            ? "generation=untracked"
+            : $"progman=0x{record.Progman.ToInt64():X};defview=0x{record.DefView.ToInt64():X};listview=0x{record.ListView.ToInt64():X};pid={record.ExplorerProcessId}";
 
-        return $"{strategy}; {parentClass}:0x{parent.ToInt64():X}; {zState}; {visible}";
+        return $"{strategy}; {GetClassName(parent)}:0x{parent.ToInt64():X}; {zState}; {visible}; {generation}";
     }
 
     private static void PrepareWallpaperWindow(IntPtr windowHandle)
@@ -162,9 +251,8 @@ internal static class ExplorerDesktopHost
         style |= WsChild;
         SetWindowStyle(windowHandle, GwlStyle, style);
 
-        // Preserve WPF's own layered-window state. Do not mutate WS_EX_LAYERED
-        // after HWND creation: WPF owns that bit and changing it externally can
-        // leave an attached HWND whose render target never becomes visible.
+        // The wallpaper renderer must never consume icon clicks. WS_EX_TRANSPARENT
+        // also lets Explorer's icon view receive hit testing while this child paints.
         var exStyle = GetWindowStyle(windowHandle, GwlExStyle);
         exStyle |= WsExToolWindow | WsExNoActivate | WsExTransparent;
         exStyle &= ~WsExAppWindow;
@@ -180,28 +268,32 @@ internal static class ExplorerDesktopHost
         int height)
     {
         if (target.Parent == IntPtr.Zero || !IsWindow(target.Parent)) return false;
+        if (target.InsertAfter != IntPtr.Zero && !IsWindow(target.InsertAfter)) return false;
 
         Marshal.SetLastPInvokeError(0);
         _ = SetParent(windowHandle, target.Parent);
-        if (Marshal.GetLastPInvokeError() != 0 || GetParent(windowHandle) != target.Parent)
+        var parentError = Marshal.GetLastPInvokeError();
+        if (parentError != 0 || GetParent(windowHandle) != target.Parent)
+        {
+            SceneEngineTrace.Info(
+                "explorer.attach",
+                $"SetParent failed strategy={target.Strategy} error={parentError} actual-parent=0x{GetParent(windowHandle).ToInt64():X}");
             return false;
+        }
 
-        var positioned = PositionInHost(
-            windowHandle,
-            target.Parent,
-            target.InsertAfter,
-            screenX,
-            screenY,
-            width,
-            height,
-            frameChanged: true);
-        if (!positioned) return false;
+        if (!PositionInHost(
+                windowHandle,
+                target.Parent,
+                target.InsertAfter,
+                screenX,
+                screenY,
+                width,
+                height,
+                frameChanged: true))
+            return false;
 
         _ = ShowWindow(windowHandle, SwShowNoActivate);
 
-        // Dedicated WorkerW hosts may already contain a Windows wallpaper child.
-        // HWND_BOTTOM put TuringDesk under that surface and produced the exact
-        // false-positive symptom: Attached=true while the old wallpaper remained.
         if (target.RequireTopChild)
         {
             _ = BringWindowToTop(windowHandle);
@@ -212,7 +304,7 @@ internal static class ExplorerDesktopHost
                 0,
                 0,
                 0,
-                SwpNoActivate | 0x0001 /* SWP_NOSIZE */ | 0x0002 /* SWP_NOMOVE */ | SwpShowWindow);
+                SwpNoActivate | SwpNoSize | SwpNoMove | SwpShowWindow);
         }
 
         _ = RedrawWindow(
@@ -226,22 +318,46 @@ internal static class ExplorerDesktopHost
             IntPtr.Zero,
             RdwInvalidate | RdwUpdatenow | RdwAllChildren);
 
-        return VerifyAttachment(windowHandle, target.Parent, target.RequireTopChild);
+        return VerifyBasicAttachment(windowHandle, target.Parent, target.RequireTopChild);
     }
 
-    private static bool VerifyAttachment(IntPtr windowHandle, IntPtr expectedParent, bool requireTopChild)
+    private static bool VerifyAttachmentRecord(
+        IntPtr windowHandle,
+        AttachmentRecord record,
+        int expectedX,
+        int expectedY,
+        int expectedWidth,
+        int expectedHeight,
+        bool verifyGeometry)
+    {
+        if (!VerifyBasicAttachment(windowHandle, record.Parent, record.RequireTopChild)) return false;
+
+        var current = CaptureDesktopGeneration();
+        if (current is null) return false;
+        if (current.Progman != record.Progman ||
+            current.DefView != record.DefView ||
+            current.ListView != record.ListView ||
+            current.ExplorerProcessId != record.ExplorerProcessId)
+            return false;
+
+        if (!verifyGeometry) return true;
+        if (!GetWindowRect(windowHandle, out var rect)) return false;
+        var actualWidth = rect.Right - rect.Left;
+        var actualHeight = rect.Bottom - rect.Top;
+        return Math.Abs(rect.Left - expectedX) <= GeometryTolerancePixels &&
+               Math.Abs(rect.Top - expectedY) <= GeometryTolerancePixels &&
+               Math.Abs(actualWidth - Math.Max(1, expectedWidth)) <= GeometryTolerancePixels &&
+               Math.Abs(actualHeight - Math.Max(1, expectedHeight)) <= GeometryTolerancePixels;
+    }
+
+    private static bool VerifyBasicAttachment(IntPtr windowHandle, IntPtr expectedParent, bool requireTopChild)
     {
         if (!IsWindow(windowHandle) || !IsWindow(expectedParent)) return false;
         if (GetParent(windowHandle) != expectedParent) return false;
         if (!IsWindowVisible(windowHandle)) return false;
         if (!GetWindowRect(windowHandle, out var rect)) return false;
         if (rect.Right <= rect.Left || rect.Bottom <= rect.Top) return false;
-
-        // A WorkerW wallpaper child must be above any wallpaper surface already
-        // hosted in that same WorkerW. Desktop icons are in another Explorer layer.
-        if (requireTopChild && GetWindow(windowHandle, GwHwndPrev) != IntPtr.Zero)
-            return false;
-
+        if (requireTopChild && GetWindow(windowHandle, GwHwndPrev) != IntPtr.Zero) return false;
         return true;
     }
 
@@ -257,9 +373,9 @@ internal static class ExplorerDesktopHost
     {
         if (host == IntPtr.Zero || !IsWindow(host)) return false;
 
-        // Child HWND coordinates are relative to the parent's client area. Use
-        // MapWindowPoints instead of subtracting top-level window rectangles;
-        // this handles negative coordinates and mixed multi-monitor layouts.
+        // The DisplayManager/monitor rectangles are physical screen pixels. Child
+        // coordinates are host-client pixels, so convert with MapWindowPoints rather
+        // than mixing WPF DIPs or subtracting virtual-screen origins.
         var origin = new Point { X = screenX, Y = screenY };
         _ = MapWindowPoints(IntPtr.Zero, host, ref origin, 1);
 
@@ -277,54 +393,97 @@ internal static class ExplorerDesktopHost
         return placed;
     }
 
-    private static IReadOnlyList<DesktopHostTarget> FindWallpaperHosts(IntPtr progman)
+    private static IReadOnlyList<DesktopHostTarget> FindWallpaperHosts(DesktopGeneration generation)
     {
         var targets = new List<DesktopHostTarget>();
         var seen = new HashSet<IntPtr>();
 
-        // Windows 11 raised-desktop layout: WorkerW is frequently a direct child
-        // of Progman. Prefer this path because it is closest to the actual modern
-        // Explorer wallpaper surface.
+        // Windows 11 may place DefView directly under Progman. This is the safest
+        // modern path: our child is explicitly inserted immediately behind the real
+        // icon view instead of guessing which sibling WorkerW is the wallpaper host.
+        if (GetParent(generation.DefView) == generation.Progman && seen.Add(generation.Progman))
+        {
+            targets.Add(new DesktopHostTarget(
+                generation.Progman,
+                generation.DefView,
+                "progman/behind-defview",
+                RequireTopChild: false));
+        }
+
+        // Classic layout: find the WorkerW immediately following the exact top-level
+        // window that owns this generation's DefView. This ties the candidate to the
+        // live icon host instead of accepting arbitrary WorkerW windows.
+        var defViewOwner = GetParent(generation.DefView);
+        if (defViewOwner != IntPtr.Zero && defViewOwner != generation.Progman)
+        {
+            var worker = FindWindowEx(IntPtr.Zero, defViewOwner, "WorkerW", null);
+            if (worker != IntPtr.Zero && seen.Add(worker))
+            {
+                targets.Add(new DesktopHostTarget(
+                    worker,
+                    HwndTop,
+                    "workerw/classic-sibling",
+                    RequireTopChild: true));
+            }
+        }
+
+        // Raised-desktop fallback. Do not prefer these over the direct Progman path:
+        // Windows 11 can keep several no-DefView WorkerW children alive after a
+        // wallpaper transition, and SetParent succeeds on all of them.
         var childAfter = IntPtr.Zero;
         while (true)
         {
-            var worker = FindWindowEx(progman, childAfter, "WorkerW", null);
+            var worker = FindWindowEx(generation.Progman, childAfter, "WorkerW", null);
             if (worker == IntPtr.Zero) break;
-
-            if (FindWindowEx(worker, IntPtr.Zero, "SHELLDLL_DefView", null) == IntPtr.Zero && seen.Add(worker))
-                targets.Add(new DesktopHostTarget(worker, HwndTop, "workerw/progman-child", true));
-
             childAfter = worker;
+
+            if (FindWindowEx(worker, IntPtr.Zero, "SHELLDLL_DefView", null) != IntPtr.Zero) continue;
+            if (!seen.Add(worker)) continue;
+            targets.Add(new DesktopHostTarget(
+                worker,
+                HwndTop,
+                "workerw/progman-child",
+                RequireTopChild: true));
         }
-
-        // Classic layout: the WorkerW immediately following the top-level window
-        // that owns SHELLDLL_DefView is Explorer's wallpaper host.
-        _ = EnumWindows((topLevel, _) =>
-        {
-            var shellView = FindWindowEx(topLevel, IntPtr.Zero, "SHELLDLL_DefView", null);
-            if (shellView == IntPtr.Zero) return true;
-
-            var worker = FindWindowEx(IntPtr.Zero, topLevel, "WorkerW", null);
-            if (worker != IntPtr.Zero && seen.Add(worker))
-                targets.Add(new DesktopHostTarget(worker, HwndTop, "workerw/classic-sibling", true));
-            return true;
-        }, IntPtr.Zero);
-
-        // Last-resort compatibility path. When DefView is directly under Progman,
-        // place TuringDesk immediately behind DefView. Never put it above DefView,
-        // otherwise it would cover desktop icons.
-        var directDefView = FindWindowEx(progman, IntPtr.Zero, "SHELLDLL_DefView", null);
-        if (directDefView != IntPtr.Zero && seen.Add(progman))
-            targets.Add(new DesktopHostTarget(progman, directDefView, "progman/behind-defview", false));
 
         return targets;
     }
 
+    private static DesktopGeneration? CaptureDesktopGeneration()
+    {
+        var progman = FindWindow("Progman", null);
+        if (progman == IntPtr.Zero || !IsWindow(progman)) return null;
+
+        IntPtr defView = FindWindowEx(progman, IntPtr.Zero, "SHELLDLL_DefView", null);
+        if (defView == IntPtr.Zero)
+        {
+            _ = EnumWindows((topLevel, _) =>
+            {
+                var candidate = FindWindowEx(topLevel, IntPtr.Zero, "SHELLDLL_DefView", null);
+                if (candidate == IntPtr.Zero) return true;
+                defView = candidate;
+                return false;
+            }, IntPtr.Zero);
+        }
+
+        if (defView == IntPtr.Zero || !IsWindow(defView)) return null;
+        var listView = FindWindowEx(defView, IntPtr.Zero, "SysListView32", "FolderView");
+        if (listView == IntPtr.Zero)
+            listView = FindWindowEx(defView, IntPtr.Zero, "SysListView32", null);
+        if (listView == IntPtr.Zero || !IsWindow(listView)) return null;
+
+        _ = GetWindowThreadProcessId(defView, out var processId);
+        if (processId == 0) return null;
+
+        return new DesktopGeneration(progman, defView, listView, processId);
+    }
+
+    private static string DescribeGeneration(DesktopGeneration generation) =>
+        $"progman=0x{generation.Progman.ToInt64():X},defview=0x{generation.DefView.ToInt64():X}," +
+        $"listview=0x{generation.ListView.ToInt64():X},pid={generation.ExplorerProcessId}";
+
     private static void RaiseDesktop(IntPtr progman)
     {
-        // Different Windows generations react to different 0x052C forms. Sending
-        // all known safe variants gives Explorer a chance to materialize the
-        // wallpaper WorkerW without replacing Explorer as the shell.
         _ = SendMessageTimeout(progman, 0x052C, new IntPtr(0xD), IntPtr.Zero, SmtoNormal, 1000, out _);
         _ = SendMessageTimeout(progman, 0x052C, new IntPtr(0xD), new IntPtr(1), SmtoNormal, 1000, out _);
         _ = SendMessageTimeout(progman, 0x052C, IntPtr.Zero, IntPtr.Zero, SmtoNormal, 1000, out _);
@@ -343,16 +502,27 @@ internal static class ExplorerDesktopHost
     private static void SetWindowStyle(IntPtr hwnd, int index, long value)
     {
         if (IntPtr.Size == 8)
-        {
             _ = SetWindowLongPtr(hwnd, index, new IntPtr(value));
-        }
         else
-        {
             _ = SetWindowLong(hwnd, index, unchecked((int)value));
-        }
     }
 
-    private sealed record DesktopHostTarget(IntPtr Parent, IntPtr InsertAfter, string Strategy, bool RequireTopChild);
+    private sealed record DesktopGeneration(IntPtr Progman, IntPtr DefView, IntPtr ListView, uint ExplorerProcessId);
+
+    private sealed record DesktopHostTarget(
+        IntPtr Parent,
+        IntPtr InsertAfter,
+        string Strategy,
+        bool RequireTopChild);
+
+    private sealed record AttachmentRecord(
+        string Strategy,
+        IntPtr Parent,
+        IntPtr Progman,
+        IntPtr DefView,
+        IntPtr ListView,
+        uint ExplorerProcessId,
+        bool RequireTopChild);
 
     private delegate bool EnumWindowsProc(IntPtr hwnd, IntPtr lParam);
 
@@ -406,6 +576,9 @@ internal static class ExplorerDesktopHost
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool GetWindowRect(IntPtr hwnd, out Rect rect);
+
+    [DllImport("user32.dll")]
+    private static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint processId);
 
     [DllImport("user32.dll", SetLastError = true)]
     private static extern int GetWindowLong(IntPtr hwnd, int index);
