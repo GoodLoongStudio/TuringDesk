@@ -15,7 +15,7 @@ public partial class SceneRendererControl : UserControl
     private readonly Random _random = new();
     private SceneManifest? _scene;
     private bool _paused;
-    private bool _stopped;
+    private bool _stopped = true;
 
     public SceneRendererControl()
     {
@@ -31,6 +31,7 @@ public partial class SceneRendererControl : UserControl
     public async Task LoadAsync(SceneManifest scene, ShellAppearanceSettings appearance, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(scene);
+        cancellationToken.ThrowIfCancellationRequested();
         Stop();
         _scene = scene;
         _paused = false;
@@ -39,33 +40,56 @@ public partial class SceneRendererControl : UserControl
         ApplyStaticBackground(appearance);
         ConfigureGpuSurface(scene, appearance);
 
-        switch (scene.Kind)
+        try
         {
-            case SceneKind.Video:
-                LoadVideo(scene);
-                break;
-            case SceneKind.Web:
-                await LoadWebAsync(scene, cancellationToken);
-                break;
-            default:
-                LoadScene(scene, appearance);
-                break;
-        }
+            switch (scene.Kind)
+            {
+                case SceneKind.Video:
+                    LoadVideo(scene);
+                    break;
+                case SceneKind.Web:
+                    await LoadWebAsync(scene, cancellationToken);
+                    break;
+                default:
+                    LoadScene(scene, appearance);
+                    break;
+            }
 
-        await ApplyUserPropertiesAsync();
+            cancellationToken.ThrowIfCancellationRequested();
+            await ApplyUserPropertiesAsync();
+            cancellationToken.ThrowIfCancellationRequested();
+        }
+        catch
+        {
+            // A superseded/cancelled scene must not leave a partially initialized
+            // WebView, audio lease, script timer or GPU refresh loop behind.
+            Stop();
+            throw;
+        }
     }
 
+    /// <summary>
+    /// Full playback suspension used by fullscreen policy. It stops every periodic
+    /// producer owned by the renderer: GPU continuous refresh, WASAPI/FFT lease,
+    /// SceneScript timer and desktop-input polling.
+    /// </summary>
     public void Pause()
     {
         if (_scene is null || _paused || _stopped) return;
         _paused = true;
+
+        ReleaseAudioBridge();
+        PauseSceneScript();
+        _desktopInputTimer.Stop();
+
         switch (_scene.Kind)
         {
             case SceneKind.Video:
-                VideoPlayer.Pause();
+                try { VideoPlayer.Pause(); } catch { }
                 break;
             case SceneKind.Web:
                 _ = SetWebPlaybackStateAsync(paused: true);
+                WebPlayer.Visibility = Visibility.Collapsed;
                 break;
             default:
                 GpuSurface.SetPaused(true);
@@ -79,12 +103,14 @@ public partial class SceneRendererControl : UserControl
     {
         if (_scene is null || !_paused || _stopped) return;
         _paused = false;
+
         switch (_scene.Kind)
         {
             case SceneKind.Video:
-                VideoPlayer.Play();
+                try { VideoPlayer.Play(); } catch { }
                 break;
             case SceneKind.Web:
+                WebPlayer.Visibility = Visibility.Visible;
                 _ = SetWebPlaybackStateAsync(paused: false);
                 break;
             default:
@@ -93,27 +119,49 @@ public partial class SceneRendererControl : UserControl
                 ResumeSceneGraphAnimations();
                 break;
         }
+
+        ResumeSceneScript();
+        UpdateAudioLeaseForCurrentScene();
+        if (IsLoaded) _desktopInputTimer.Start();
     }
 
+    /// <summary>
+    /// Deterministic teardown for scene switching and window close. This method is
+    /// intentionally idempotent because LoadAsync calls it before every scene.
+    /// </summary>
     public void Stop()
     {
         _paused = false;
         _stopped = true;
-        ReleaseAudioBridge();
-        _webAudioListenerRequested = false;
+
+        _desktopInputTimer.Stop();
+        StopSceneScript();
+        ShutdownAudioBridge();
         StopBuiltInAnimations();
         StopSceneGraph();
+
+        GpuSurface.StopRendering();
         GpuSurface.Visibility = Visibility.Collapsed;
+
         try { VideoPlayer.Stop(); } catch { }
         VideoPlayer.Source = null;
         VideoPlayer.Visibility = Visibility.Collapsed;
+
+        WebPlayer.NavigationCompleted -= WebPlayer_NavigationCompleted;
         if (WebPlayer.CoreWebView2 is not null)
         {
             try { WebPlayer.CoreWebView2.Navigate("about:blank"); } catch { }
         }
         WebPlayer.Visibility = Visibility.Collapsed;
+
         BuiltInScene.Visibility = Visibility.Collapsed;
         ParticleCanvas.Children.Clear();
+        _lastInput = null;
+        _scene = null;
+
+        // Release large decoded image brushes immediately instead of retaining the
+        // previous scene until a later load overwrites the background.
+        StaticBackground.Background = new SolidColorBrush(Color.FromRgb(8, 10, 16));
         Root.Visibility = Visibility.Visible;
     }
 
@@ -123,9 +171,7 @@ public partial class SceneRendererControl : UserControl
         VideoPlayer.Volume = muted ? 0 : normalized;
         VideoPlayer.IsMuted = muted;
         if (_scene?.Kind == SceneKind.Web)
-        {
             _ = SetWebVolumeAsync(muted ? 0 : normalized);
-        }
     }
 
     private void ApplyStaticBackground(ShellAppearanceSettings appearance)
@@ -138,6 +184,7 @@ public partial class SceneRendererControl : UserControl
     {
         if (scene.Kind != SceneKind.Scene)
         {
+            GpuSurface.StopRendering();
             GpuSurface.Visibility = Visibility.Collapsed;
             return;
         }
@@ -253,9 +300,7 @@ public partial class SceneRendererControl : UserControl
         }
 
         if (appearance.SceneMotionEnabled)
-        {
             StartBuiltInGlowAnimations(tag);
-        }
     }
 
     private void LoadVideo(SceneManifest scene)
@@ -269,6 +314,7 @@ public partial class SceneRendererControl : UserControl
 
         BuiltInScene.Visibility = Visibility.Collapsed;
         SceneGraphCanvas.Visibility = Visibility.Collapsed;
+        GpuSurface.StopRendering();
         GpuSurface.Visibility = Visibility.Collapsed;
         WebPlayer.Visibility = Visibility.Collapsed;
         VideoPlayer.Visibility = Visibility.Visible;
@@ -295,13 +341,17 @@ public partial class SceneRendererControl : UserControl
 
         BuiltInScene.Visibility = Visibility.Collapsed;
         SceneGraphCanvas.Visibility = Visibility.Collapsed;
+        GpuSurface.StopRendering();
         GpuSurface.Visibility = Visibility.Collapsed;
         VideoPlayer.Visibility = Visibility.Collapsed;
         WebPlayer.Visibility = Visibility.Visible;
 
+        cancellationToken.ThrowIfCancellationRequested();
         await WebPlayer.EnsureCoreWebView2Async();
+        cancellationToken.ThrowIfCancellationRequested();
         await InstallWebAudioCompatibilityBridgeAsync();
         cancellationToken.ThrowIfCancellationRequested();
+
         WebPlayer.CoreWebView2.Settings.AreDefaultContextMenusEnabled = false;
         WebPlayer.CoreWebView2.Settings.AreDevToolsEnabled = false;
         WebPlayer.CoreWebView2.Settings.IsZoomControlEnabled = false;
@@ -316,7 +366,8 @@ public partial class SceneRendererControl : UserControl
         if (!e.IsSuccess || WebPlayer.CoreWebView2 is null) return;
         try
         {
-            await WebPlayer.CoreWebView2.ExecuteScriptAsync("window.turingDesk=window.turingDesk||{};window.turingDesk.version=1;window.dispatchEvent(new CustomEvent('turingdesk-ready'));" );
+            await WebPlayer.CoreWebView2.ExecuteScriptAsync(
+                "window.turingDesk=window.turingDesk||{};window.turingDesk.version=1;window.dispatchEvent(new CustomEvent('turingdesk-ready'));" );
         }
         catch { }
     }
@@ -336,8 +387,8 @@ public partial class SceneRendererControl : UserControl
     private void CreateParticles(int count, double minSize, double maxSize, params Color[] palette)
     {
         ParticleCanvas.Children.Clear();
-        var width = Math.Max(1920, SystemParameters.VirtualScreenWidth);
-        var height = Math.Max(1080, SystemParameters.VirtualScreenHeight);
+        var width = Math.Max(1920, ActualWidth > 1 ? ActualWidth : SystemParameters.PrimaryScreenWidth);
+        var height = Math.Max(1080, ActualHeight > 1 ? ActualHeight : SystemParameters.PrimaryScreenHeight);
         var colors = palette.Length == 0
             ? [Color.FromRgb(222, 230, 255)]
             : palette;
@@ -423,10 +474,7 @@ public partial class SceneRendererControl : UserControl
         });
     }
 
-    private void PauseBuiltInAnimations()
-    {
-        StopBuiltInAnimations();
-    }
+    private void PauseBuiltInAnimations() => StopBuiltInAnimations();
 
     private void ResumeBuiltInAnimations()
     {
@@ -471,7 +519,8 @@ public partial class SceneRendererControl : UserControl
         try
         {
             var jsVolume = volume.ToString(System.Globalization.CultureInfo.InvariantCulture);
-            await WebPlayer.CoreWebView2.ExecuteScriptAsync("document.querySelectorAll('audio,video').forEach(x=>x.volume=" + jsVolume + ");");
+            await WebPlayer.CoreWebView2.ExecuteScriptAsync(
+                "document.querySelectorAll('audio,video').forEach(x=>x.volume=" + jsVolume + ");");
         }
         catch { }
     }
