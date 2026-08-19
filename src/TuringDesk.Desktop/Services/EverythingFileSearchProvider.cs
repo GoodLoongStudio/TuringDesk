@@ -10,15 +10,16 @@ namespace TuringDesk.Desktop.Services;
 ///
 /// TuringDesk never crawls the user's disks. The packaged product carries a pinned
 /// Everything + ES pair for the current architecture. A private "TuringDesk"
-/// Everything instance is started in the background and ES performs bounded IPC
-/// queries against that database. An existing system installation remains a
-/// development fallback when packaged components are not present.
+/// Everything instance owns the filename database and ES performs bounded IPC
+/// queries against it. On first use the bundled 1.4 instance provisions its own
+/// Everything Service once (UAC); subsequent starts run as a normal user.
 /// </summary>
 internal sealed class EverythingFileSearchProvider : IDisposable
 {
     internal const string EverythingVersion = "1.4.1.1032";
     internal const string EsVersion = "1.1.0.37";
     private const string PrivateInstanceName = "TuringDesk";
+    private const string PrivateServiceName = "Everything (TuringDesk)";
 
     private readonly SemaphoreSlim _startupGate = new(1, 1);
     private readonly CancellationTokenSource _lifetime = new();
@@ -46,6 +47,7 @@ internal sealed class EverythingFileSearchProvider : IDisposable
             return;
         }
 
+        // Development fallback only. Production builds carry the pinned pair above.
         _everythingPath = FindEverythingExecutable();
         _esPath = FindEsExecutable();
         _usesPrivateBundledInstance = false;
@@ -58,7 +60,9 @@ internal sealed class EverythingFileSearchProvider : IDisposable
 
     public Task InitializeAsync(CancellationToken cancellationToken = default)
     {
-        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
+        if (Volatile.Read(ref _disposed) != 0)
+            throw new ObjectDisposedException(nameof(EverythingFileSearchProvider));
+
         lock (_startupGate)
         {
             _initializationTask ??= EnsureReadyCoreAsync(_lifetime.Token);
@@ -84,7 +88,7 @@ internal sealed class EverythingFileSearchProvider : IDisposable
         process.StartInfo.ArgumentList.Add("-n");
         process.StartInfo.ArgumentList.Add(limit.ToString(CultureInfo.InvariantCulture));
         process.StartInfo.ArgumentList.Add("-full-path-and-name");
-        process.StartInfo.ArgumentList.Add("/a-d"); // Files only.
+        process.StartInfo.ArgumentList.Add("/a-d");
         process.StartInfo.ArgumentList.Add(query);
 
         try
@@ -138,13 +142,23 @@ internal sealed class EverythingFileSearchProvider : IDisposable
                 return;
             }
 
-            _status = "正在启动 Everything 文件索引…";
             if (_usesPrivateBundledInstance)
-                StartPrivateInstance();
-            else
-                StartSystemInstanceIfNeeded();
+            {
+                if (!await EnsurePrivateServiceAsync(cancellationToken).ConfigureAwait(false))
+                    return;
 
-            for (var attempt = 0; attempt < 40; attempt++)
+                _status = "正在启动 Everything 文件索引…";
+                StartPrivateInstance();
+            }
+            else
+            {
+                _status = "正在连接 Everything 文件索引…";
+                StartSystemInstanceIfNeeded();
+            }
+
+            // Initial database creation can take a moment on first start; all of it
+            // happens inside Everything, never in TuringDesk's WPF process.
+            for (var attempt = 0; attempt < 80; attempt++)
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 if (await ProbeAsync(cancellationToken).ConfigureAwait(false))
@@ -173,6 +187,99 @@ internal sealed class EverythingFileSearchProvider : IDisposable
         }
     }
 
+    private async Task<bool> EnsurePrivateServiceAsync(CancellationToken cancellationToken)
+    {
+        if (await ServiceExistsAsync(PrivateServiceName, cancellationToken).ConfigureAwait(false))
+            return true;
+
+        _status = "首次启用文件搜索需要一次系统授权…";
+        try
+        {
+            var installInfo = new ProcessStartInfo
+            {
+                FileName = _everythingPath!,
+                UseShellExecute = true,
+                Verb = "runas",
+                WorkingDirectory = Path.GetDirectoryName(_everythingPath!)!
+            };
+            installInfo.ArgumentList.Add("-instance");
+            installInfo.ArgumentList.Add(PrivateInstanceName);
+            installInfo.ArgumentList.Add("-install-service");
+
+            using var installer = Process.Start(installInfo);
+            if (installer is null)
+            {
+                _status = "Everything 服务安装未启动";
+                return false;
+            }
+
+            await installer.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
+            if (installer.ExitCode != 0)
+            {
+                _status = $"Everything 服务安装未完成（{installer.ExitCode}）";
+                return false;
+            }
+
+            for (var attempt = 0; attempt < 30; attempt++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (await ServiceExistsAsync(PrivateServiceName, cancellationToken).ConfigureAwait(false))
+                    return true;
+                await Task.Delay(100, cancellationToken).ConfigureAwait(false);
+            }
+
+            _status = "Everything 服务安装后未检测到服务";
+            return false;
+        }
+        catch (Exception error)
+        {
+            // This also covers a user cancelling the one-time UAC prompt. Search
+            // remains unavailable, while app launch/AI/desktop features keep working.
+            _status = $"Everything 服务未授权：{error.Message}";
+            return false;
+        }
+    }
+
+    private static async Task<bool> ServiceExistsAsync(string serviceName, CancellationToken cancellationToken)
+    {
+        var scPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "sc.exe");
+        if (!File.Exists(scPath)) return false;
+
+        using var process = new Process
+        {
+            StartInfo = new ProcessStartInfo
+            {
+                FileName = scPath,
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true
+            }
+        };
+        process.StartInfo.ArgumentList.Add("query");
+        process.StartInfo.ArgumentList.Add(serviceName);
+
+        try
+        {
+            if (!process.Start()) return false;
+            var outputTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
+            var errorTask = process.StandardError.ReadToEndAsync(cancellationToken);
+            await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
+            _ = await outputTask.ConfigureAwait(false);
+            _ = await errorTask.ConfigureAwait(false);
+            return process.ExitCode == 0;
+        }
+        catch (OperationCanceledException)
+        {
+            TryKill(process);
+            throw;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
     private async Task<bool> ProbeAsync(CancellationToken cancellationToken)
     {
         using var process = CreateEsProcess();
@@ -187,9 +294,11 @@ internal sealed class EverythingFileSearchProvider : IDisposable
         try
         {
             if (!process.Start()) return false;
-            _ = process.StandardOutput.ReadToEndAsync(cancellationToken);
-            _ = process.StandardError.ReadToEndAsync(cancellationToken);
+            var outputTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
+            var errorTask = process.StandardError.ReadToEndAsync(cancellationToken);
             await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
+            _ = await outputTask.ConfigureAwait(false);
+            _ = await errorTask.ConfigureAwait(false);
             return process.ExitCode == 0;
         }
         catch (OperationCanceledException)
@@ -230,7 +339,7 @@ internal sealed class EverythingFileSearchProvider : IDisposable
             "Everything");
         Directory.CreateDirectory(dataRoot);
         var configPath = Path.Combine(dataRoot, "Everything.ini");
-        EnsurePrivateConfig(configPath);
+        EnsurePrivateConfig(configPath, dataRoot);
 
         var startInfo = new ProcessStartInfo
         {
@@ -262,19 +371,18 @@ internal sealed class EverythingFileSearchProvider : IDisposable
         _ = Process.Start(startInfo);
     }
 
-    private static void EnsurePrivateConfig(string configPath)
+    private static void EnsurePrivateConfig(string configPath, string dataRoot)
     {
-        // Portable Everything stores this private instance under TuringDesk's own
-        // LocalAppData folder. No search window, tray icon or auto-update UI is
-        // needed because TuringDesk owns the component version lifecycle.
         var desired = string.Join(Environment.NewLine,
         [
+            "[Everything]",
             "app_data=0",
             "run_as_admin=0",
             "run_in_background=1",
             "show_tray_icon=0",
             "allow_multiple_windows=0",
             "check_for_updates_on_startup=0",
+            $"db_location={dataRoot}",
             string.Empty
         ]);
 
@@ -285,8 +393,8 @@ internal sealed class EverythingFileSearchProvider : IDisposable
         }
         catch
         {
-            // Everything can still start with its defaults if the config cannot be
-            // persisted; readiness probing decides whether the backend is usable.
+            // Readiness probing will report a usable failure instead of crashing
+            // the desktop if the private config cannot be persisted.
         }
     }
 
