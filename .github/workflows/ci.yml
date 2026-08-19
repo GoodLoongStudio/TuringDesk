@@ -64,7 +64,7 @@ jobs:
 
           $searchXaml = Get-Content "src/TuringDesk.Desktop/DesktopSearchBarWindow.xaml" -Raw
           if ($searchXaml -match 'Topmost="True"') { throw "Desktop search must stay below normal application windows" }
-          foreach ($marker in @('x:Name="ModelSelector"'.Replace('\',''), 'x:Name="SearchResultsList"'.Replace('\',''), 'x:Name="DeepProcessButton"'.Replace('\',''), 'Text="设置"'.Replace('\',''), 'Text="语音"'.Replace('\',''))) {
+          foreach ($marker in @('x:Name="ModelSelector"', 'x:Name="SearchResultsList"', 'x:Name="DeepProcessButton"', 'Text="设置"', 'Text="语音"')) {
             if ($searchXaml -notmatch [regex]::Escape($marker)) { throw "Desktop search XAML contract missing: $marker" }
           }
 
@@ -77,8 +77,13 @@ jobs:
           }
 
           $localIndex = Get-Content "src/TuringDesk.Desktop/Services/DesktopSearchIndexService.cs" -Raw
-          foreach ($marker in @("ShellSurfaceCatalog.LoadStartApps", "FileSystemWatcher", "Pinyin.GetPinyin", "SearchApps", "SearchFilesAsync", "Task.Run")) {
+          foreach ($marker in @("ShellSurfaceCatalog.LoadStartApps", "FileSystemWatcher", "PinyinConvert.GetPinyin", "PinyinConvert.GetPinyinFirstLetter", "SearchApps", "SearchFilesAsync", "_filePrefixIndex", "Task.Run")) {
             if ($localIndex -notmatch [regex]::Escape($marker)) { throw "Search index contract missing: $marker" }
+          }
+
+          $desktopProject = Get-Content "src/TuringDesk.Desktop/TuringDesk.Desktop.csproj" -Raw
+          if ($desktopProject -notmatch 'PackageReference Include="PinyinNet" Version="1.0.0"') {
+            throw "Desktop pinyin index must use the pinned PinyinNet package"
           }
 
           $quick = Get-Content "src/TuringDesk.Desktop/Services/DesktopQuickAnswerService.cs" -Raw
@@ -97,7 +102,7 @@ jobs:
           if ($mainWindow -match "StartHarnessServiceAsync") { throw "MainWindow startup must not prewarm Harness" }
 
           $runtimeClient = Get-Content "src/TuringDesk.Desktop/Services/RuntimeClient.cs" -Raw
-          foreach ($marker in @("RuntimeHostService.AcquireAsync", "RuntimeStartReason.AgentRequest", "RuntimeStartReason.ModelConfiguration")) {
+          foreach ($marker in @("RuntimeHostService.AcquireAsync", "RuntimeStartReason.AgentRequest", "RuntimeStartReason.ModelConfiguration", "EnsurePersistedAgentModelIfColdAsync")) {
             if ($runtimeClient -notmatch [regex]::Escape($marker)) { throw "RuntimeClient lazy lease contract missing: $marker" }
           }
 
