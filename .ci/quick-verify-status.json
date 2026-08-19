@@ -1,8 +1,8 @@
 ﻿{
-    "commit":  "bfb6171e6864d41fb74c2569df96080e59f63b34",
-    "workflow_run_id":  "32267996233",
+    "commit":  "188c5f98b17cbf5c70fc4188bad48163644f22b2",
+    "workflow_run_id":  "32268109999",
     "workflow_run_attempt":  "1",
-    "status":  "cancelled",
-    "checked_at_utc":  "2026-08-19T15:06:52.6942924Z",
+    "status":  "failure",
+    "checked_at_utc":  "2026-08-19T15:12:09.6781845Z",
     "runner":  "windows-11-arm"
 }
