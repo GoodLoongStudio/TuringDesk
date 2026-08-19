@@ -20,16 +20,40 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Parse quick verification launcher
+      - name: Parse verification launchers
         shell: powershell
         run: |
-          $file = "scripts/quick-verify.ps1"
-          $tokens = $null
-          $errors = $null
-          [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $file), [ref]$tokens, [ref]$errors) | Out-Null
-          if ($errors.Count -gt 0) {
-            $errors | ForEach-Object { Write-Error "${file}: $($_.Message)" }
-            throw "Windows PowerShell parser rejected quick-verify.ps1"
+          foreach ($file in @("scripts/quick-verify.ps1", "scripts/bootstrap-everything.ps1")) {
+            $tokens = $null
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $file), [ref]$tokens, [ref]$errors) | Out-Null
+            if ($errors.Count -gt 0) {
+              $errors | ForEach-Object { Write-Error "${file}: $($_.Message)" }
+              throw "Windows PowerShell parser rejected $file"
+            }
+          }
+
+      - name: Prepare pinned Everything backend
+        shell: powershell
+        run: .\scripts\bootstrap-everything.ps1 -Architecture arm64
+
+      - name: Verify packaged Everything components
+        shell: powershell
+        run: |
+          $root = "src\TuringDesk.Desktop\ThirdParty\Everything"
+          $arch = Join-Path $root "arm64"
+          foreach ($file in @(
+            (Join-Path $arch "Everything.exe"),
+            (Join-Path $arch "es.exe"),
+            (Join-Path $root "LICENSE-Everything.txt"),
+            (Join-Path $root "LICENSE-ES.txt")
+          )) {
+            if (-not (Test-Path $file)) { throw "Missing packaged Everything component: $file" }
+          }
+
+          $marker = Get-Content (Join-Path $arch ".component-version") -Raw
+          if ($marker -notmatch "Everything=1\.4\.1\.1032" -or $marker -notmatch "ES=1\.1\.0\.37") {
+            throw "Pinned Everything component marker is invalid."
           }
 
       - name: Initialize pinned environment from zero and build
