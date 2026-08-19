@@ -23,7 +23,7 @@ jobs:
       - name: Parse verification launchers
         shell: powershell
         run: |
-          foreach ($file in @("scripts/quick-verify.ps1", "scripts/bootstrap-everything.ps1")) {
+          foreach ($file in @("scripts/quick-verify.ps1", "scripts/bootstrap-everything.ps1", "scripts/verify-app-search.ps1")) {
             $tokens = $null
             $errors = $null
             [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $file), [ref]$tokens, [ref]$errors) | Out-Null
@@ -65,6 +65,10 @@ jobs:
       - name: Re-run with the existing pinned environment
         shell: powershell
         run: .\scripts\quick-verify.ps1 -SkipPull -BuildOnly
+
+      - name: Verify L1 application search
+        shell: powershell
+        run: .\scripts\verify-app-search.ps1
 
       - name: Persist verification result
         if: ${{ always() }}
