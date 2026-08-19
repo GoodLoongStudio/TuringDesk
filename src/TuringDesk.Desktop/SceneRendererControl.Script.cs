@@ -32,6 +32,7 @@ public partial class SceneRendererControl
         if (_sceneScriptRuntime is not null &&
             string.Equals(_sceneScriptSceneId, _scene.Id, StringComparison.OrdinalIgnoreCase))
         {
+            if (!_paused && !_stopped) ResumeSceneScript();
             return;
         }
 
@@ -54,12 +55,13 @@ public partial class SceneRendererControl
                 GetScriptTextProperty,
                 GetScriptBoolProperty);
             if (runtime.IsFaulted)
+            {
+                runtime.Dispose();
                 throw new InvalidDataException(runtime.LastError ?? "SceneScript could not start.");
+            }
 
             _sceneScriptRuntime = runtime;
             _sceneScriptSceneId = _scene.Id;
-            _sceneScriptClock.Restart();
-            _lastScriptSeconds = 0;
             var fps = Math.Clamp(settings.FpsLimit > 0 ? settings.FpsLimit : _scene.PreferredFps, 10, 120);
             _sceneScriptTimer.Interval = TimeSpan.FromMilliseconds(1000.0 / fps);
             if (!_sceneScriptTimerHooked)
@@ -67,13 +69,28 @@ public partial class SceneRendererControl
                 _sceneScriptTimer.Tick += SceneScriptTimer_Tick;
                 _sceneScriptTimerHooked = true;
             }
-            _sceneScriptTimer.Start();
+
+            ResumeSceneScript();
         }
         catch (Exception error)
         {
             StopSceneScript();
             PlaybackError?.Invoke("SceneScript: " + error.Message);
         }
+    }
+
+    private void PauseSceneScript()
+    {
+        _sceneScriptTimer.Stop();
+        _sceneScriptClock.Stop();
+    }
+
+    private void ResumeSceneScript()
+    {
+        if (_sceneScriptRuntime is null || _paused || _stopped) return;
+        _lastScriptSeconds = 0;
+        _sceneScriptClock.Restart();
+        _sceneScriptTimer.Start();
     }
 
     private void StopSceneScript()
@@ -83,6 +100,8 @@ public partial class SceneRendererControl
         _sceneScriptRuntime?.Dispose();
         _sceneScriptRuntime = null;
         _sceneScriptSceneId = null;
+        _scriptInstanceSettings = null;
+        _scriptAudioFrame = null;
         _lastScriptSeconds = 0;
     }
 
