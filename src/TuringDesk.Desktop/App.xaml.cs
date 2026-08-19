@@ -9,6 +9,13 @@ public partial class App : Application
     {
         base.OnStartup(e);
 
+        if (e.Args.Any(arg => string.Equals(arg, "--verify-app-search", StringComparison.OrdinalIgnoreCase)))
+        {
+            ShutdownMode = ShutdownMode.OnExplicitShutdown;
+            Dispatcher.BeginInvoke(new Action(RunAppSearchVerification));
+            return;
+        }
+
         // Desktop settings and the Harness console are utility surfaces, not
         // full-screen application pages. Size them after per-monitor DPI is known
         // and keep them inside the Windows work area so the taskbar is never
@@ -34,5 +41,23 @@ public partial class App : Application
         }
 
         window.Show();
+    }
+
+    private async void RunAppSearchVerification()
+    {
+        var exitCode = 1;
+        try
+        {
+            var result = await AppSearchVerification.RunAsync();
+            exitCode = result.Success ? 0 : 2;
+        }
+        catch
+        {
+            exitCode = 3;
+        }
+        finally
+        {
+            Shutdown(exitCode);
+        }
     }
 }
