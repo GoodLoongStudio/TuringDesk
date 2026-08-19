@@ -12,6 +12,7 @@ public partial class DesktopSearchBarWindow
     };
     private bool _indexStatusStarted;
     private bool _indexReadyNotified;
+    private bool _indexFailureNotified;
 
     protected override void OnContentRendered(EventArgs e)
     {
@@ -22,24 +23,17 @@ public partial class DesktopSearchBarWindow
         _indexStatusTimer.Tick += IndexStatusTimer_Tick;
         RefreshIndexStatus();
 
-        if (_searchIndex.UsesEverything)
+        if (_searchIndex.FileSearchReady)
         {
-            _indexReadyNotified = true;
-            ShellNotificationService.Publish(
-                "Everything 文件索引已连接",
-                $"应用 {_searchIndex.AppCount:N0} 个已进入内存索引；文件搜索直接使用 Everything，不再扫描整机。",
-                "search");
+            NotifyEverythingReady();
             return;
         }
 
-        if (!_searchIndex.IsInitialIndexComplete)
-        {
-            ShellNotificationService.Publish(
-                "正在建立轻量本地索引",
-                $"应用 {_searchIndex.AppCount:N0} 个已可搜索；仅扫描桌面、文档和下载，不会遍历整个用户目录。",
-                "search");
-            _indexStatusTimer.Start();
-        }
+        ShellNotificationService.Publish(
+            "正在启动 Everything 文件搜索",
+            $"应用 {_searchIndex.AppCount:N0} 个已经可以搜索；文件名/路径索引由 Everything 负责，TuringDesk 不会扫描你的磁盘。",
+            "search");
+        _indexStatusTimer.Start();
     }
 
     protected override void OnClosed(EventArgs e)
@@ -53,33 +47,43 @@ public partial class DesktopSearchBarWindow
 
     private void RefreshIndexStatus()
     {
-        if (_searchIndex.UsesEverything)
+        if (_searchIndex.FileSearchReady)
         {
             PlaceholderText.Text = "Everything 已连接 · 搜索应用、文件，或直接问 AI…";
             _indexStatusTimer.Stop();
+            NotifyEverythingReady();
         }
         else if (_searchIndex.IsInitialIndexComplete)
         {
-            PlaceholderText.Text = "搜索应用、文件，或直接问 AI…";
+            PlaceholderText.Text = "Everything 文件搜索未就绪 · 应用搜索和 AI 仍可使用";
             _indexStatusTimer.Stop();
 
-            if (!_indexReadyNotified)
+            if (!_indexFailureNotified)
             {
-                _indexReadyNotified = true;
+                _indexFailureNotified = true;
                 ShellNotificationService.Publish(
-                    "轻量本地索引已就绪",
-                    $"应用 {_searchIndex.AppCount:N0} · 本地文件 {_searchIndex.IndexedFileCount:N0}",
-                    "search");
+                    "Everything 文件搜索未就绪",
+                    _searchIndex.FileSearchStatus,
+                    "warning");
             }
         }
         else
         {
-            PlaceholderText.Text =
-                $"正在建立轻量索引… 应用 {_searchIndex.AppCount:N0} · 文件 {_searchIndex.IndexedFileCount:N0}";
+            PlaceholderText.Text = $"正在启动 Everything… 应用 {_searchIndex.AppCount:N0} 个已可搜索";
         }
 
         PlaceholderText.Visibility = string.IsNullOrWhiteSpace(SearchBox.Text)
             ? Visibility.Visible
             : Visibility.Collapsed;
+    }
+
+    private void NotifyEverythingReady()
+    {
+        if (_indexReadyNotified) return;
+        _indexReadyNotified = true;
+        ShellNotificationService.Publish(
+            "Everything 文件搜索已就绪",
+            $"{_searchIndex.FileSearchProviderName} · 应用 {_searchIndex.AppCount:N0} 个在内存中；文件查询直接走 Everything。",
+            "search");
     }
 }
