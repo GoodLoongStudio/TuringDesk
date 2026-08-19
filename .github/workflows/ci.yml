@@ -45,7 +45,7 @@ jobs:
         with:
           dotnet-version: 8.0.424
 
-      - name: Verify desktop search and Harness contract
+      - name: Verify lightweight search and lazy Agent contract
         shell: pwsh
         run: |
           foreach ($required in @(
@@ -53,38 +53,69 @@ jobs:
             "src/TuringDesk.Desktop/DesktopSearchBarWindow.xaml.cs",
             "src/TuringDesk.Desktop/MainWindow.AgentEntry.cs",
             "src/TuringDesk.Desktop/Services/DesktopSearchIndexService.cs",
+            "src/TuringDesk.Desktop/Services/DesktopQuickAnswerService.cs",
             "src/TuringDesk.Desktop/Services/DesktopAiModelChoiceService.cs",
-            "src/TuringDesk.Desktop/Services/HarnessModelBridgeService.cs"
+            "src/TuringDesk.Desktop/Services/RuntimeHostService.cs",
+            "src/TuringDesk.Desktop/Services/RuntimeClient.cs",
+            "src/TuringDesk.Desktop/Services/HarnessWebUiService.cs"
           )) {
-            if (-not (Test-Path $required)) { throw "Missing desktop UX source: $required" }
+            if (-not (Test-Path $required)) { throw "Missing desktop source: $required" }
           }
 
           $searchXaml = Get-Content "src/TuringDesk.Desktop/DesktopSearchBarWindow.xaml" -Raw
           if ($searchXaml -match 'Topmost="True"') { throw "Desktop search must stay below normal application windows" }
-          if ($searchXaml -notmatch 'x:Name="ModelSelector"') { throw "Desktop search is missing the AI model selector" }
-          if ($searchXaml -notmatch 'Text="设置"') { throw "Desktop search settings action must be visibly labeled" }
-          if ($searchXaml -notmatch 'Text="语音"') { throw "Desktop search voice action must be visibly labeled" }
-          if ($searchXaml -notmatch 'x:Name="SearchResultsList"') { throw "Desktop search is missing local application/file results" }
-
-          $searchCode = Get-Content "src/TuringDesk.Desktop/DesktopSearchBarWindow.xaml.cs" -Raw
-          if ($searchCode -notmatch "DesktopSearchIndexService") { throw "Desktop search is not connected to the local index" }
-          if ($searchCode -notmatch "SubmitSearchCommandWithModelAsync") { throw "Desktop search bypasses its visible AI model selection" }
-
-          $agentEntry = Get-Content "src/TuringDesk.Desktop/MainWindow.AgentEntry.cs" -Raw
-          $modelSwitchIndex = $agentEntry.IndexOf("_runtime.ConfigureModelAsync(choice.Settings, choice.Credential)")
-          $chatAfterSwitch = if ($modelSwitchIndex -ge 0) { $agentEntry.IndexOf("return await SubmitSearchCommandAsync(text, cancellationToken)", $modelSwitchIndex) } else { -1 }
-          if ($modelSwitchIndex -lt 0 -or $chatAfterSwitch -lt 0 -or $modelSwitchIndex -gt $chatAfterSwitch) {
-            throw "Desktop model picker does not configure Runtime before sending the AI request"
+          foreach ($marker in @('x:Name="ModelSelector"', 'x:Name="SearchResultsList"', 'x:Name="DeepProcessButton"', 'Text="设置"', 'Text="语音"')) {
+            if ($searchXaml -notmatch [regex]::Escape($marker)) { throw "Desktop search XAML contract missing: $marker" }
           }
 
-          $modelChoices = Get-Content "src/TuringDesk.Desktop/Services/DesktopAiModelChoiceService.cs" -Raw
-          if ($modelChoices -notmatch "deepseek-fallback") { throw "Desktop model picker has no DeepSeek fallback" }
-          if ($modelChoices -notmatch "FirstOrDefault\(choice => choice\.IsAvailable\)") { throw "Desktop model picker does not prefer the first available configured model" }
-          if ($modelChoices -notmatch "未配置 AI") { throw "Desktop model picker has no explicit no-model state" }
+          $searchCode = Get-Content "src/TuringDesk.Desktop/DesktopSearchBarWindow.xaml.cs" -Raw
+          foreach ($marker in @("DesktopSearchIndexService", "DesktopQuickAnswerService", "SearchApps(", "SearchFilesAsync(", "CancellationTokenSource", "ShowHarnessConsoleFromSearch")) {
+            if ($searchCode -notmatch [regex]::Escape($marker)) { throw "Tiered desktop search contract missing: $marker" }
+          }
+          if ($searchCode -match "SubmitSearchCommandWithModelAsync") {
+            throw "Desktop search must not automatically enter the heavy Runtime/Harness chat path"
+          }
 
           $localIndex = Get-Content "src/TuringDesk.Desktop/Services/DesktopSearchIndexService.cs" -Raw
-          if ($localIndex -notmatch "ShellSurfaceCatalog.LoadStartApps") { throw "Desktop search does not index installed Start Menu applications" }
-          if ($localIndex -notmatch "FileSystemWatcher") { throw "Desktop text-file index is not incrementally refreshed" }
+          foreach ($marker in @("ShellSurfaceCatalog.LoadStartApps", "FileSystemWatcher", "Pinyin.GetPinyin", "SearchApps", "SearchFilesAsync", "Task.Run")) {
+            if ($localIndex -notmatch [regex]::Escape($marker)) { throw "Search index contract missing: $marker" }
+          }
+
+          $quick = Get-Content "src/TuringDesk.Desktop/Services/DesktopQuickAnswerService.cs" -Raw
+          if ($quick -match "RuntimeHostService|HarnessWebUiService") {
+            throw "Level-3 quick answers must not wake Runtime or Harness"
+          }
+          foreach ($marker in @("TryCalculate", "QuickIntent.Translate", "QuickIntent.Explain", "chat/completions")) {
+            if ($quick -notmatch [regex]::Escape($marker)) { throw "Lightweight direct-answer contract missing: $marker" }
+          }
+
+          $appStartup = Get-Content "src/TuringDesk.Desktop/App.xaml.cs" -Raw
+          if ($appStartup -match "HarnessWebUiService.StartEarly") { throw "App startup must not eagerly start Harness" }
+
+          $mainWindow = Get-Content "src/TuringDesk.Desktop/MainWindow.xaml.cs" -Raw
+          if ($mainWindow -match "RuntimeHostService.EnsureRunningAsync") { throw "MainWindow startup must not eagerly start Runtime" }
+          if ($mainWindow -match "StartHarnessServiceAsync") { throw "MainWindow startup must not prewarm Harness" }
+
+          $runtimeClient = Get-Content "src/TuringDesk.Desktop/Services/RuntimeClient.cs" -Raw
+          foreach ($marker in @("RuntimeHostService.AcquireAsync", "RuntimeStartReason.AgentRequest", "RuntimeStartReason.ModelConfiguration")) {
+            if ($runtimeClient -notmatch [regex]::Escape($marker)) { throw "RuntimeClient lazy lease contract missing: $marker" }
+          }
+
+          $runtimeHost = Get-Content "src/TuringDesk.Desktop/Services/RuntimeHostService.cs" -Raw
+          foreach ($marker in @("EnsureRuntimeStartedAsync", "AcquireAsync", "IdleTimeout", "v1/runtime/shutdown", "NotifyWorkbenchOpened", "NotifyWorkbenchClosed")) {
+            if ($runtimeHost -notmatch [regex]::Escape($marker)) { throw "Runtime lifecycle contract missing: $marker" }
+          }
+
+          $harnessWeb = Get-Content "src/TuringDesk.Desktop/Services/HarnessWebUiService.cs" -Raw
+          $applyStart = $harnessWeb.IndexOf("ApplyModelSettingsAsync")
+          if ($applyStart -lt 0) { throw "Harness model synchronization method missing" }
+          $applySlice = $harnessWeb.Substring($applyStart, [Math]::Min(1200, $harnessWeb.Length - $applyStart))
+          if ($applySlice -match "EnsureRunningAsync") { throw "Saving model settings must not wake a cold Harness WebUI" }
+
+          $mcp = Get-Content "runtime/src/windows-mcp-server.ts" -Raw
+          foreach ($marker in @("executionClass", "instant", "interactive", "requiresAgentPlanning")) {
+            if ($mcp -notmatch [regex]::Escape($marker)) { throw "Windows MCP routing metadata missing: $marker" }
+          }
 
       - name: Verify scene host contract
         shell: pwsh
