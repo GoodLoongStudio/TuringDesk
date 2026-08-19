@@ -22,6 +22,16 @@
     <PackageReference Include="PinyinNet" Version="1.0.0" />
   </ItemGroup>
 
+  <ItemGroup>
+    <Content Include="ThirdParty\Everything\**\*"
+             CopyToOutputDirectory="PreserveNewest"
+             CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="..\..\THIRD-PARTY-NOTICES.md"
+             Link="ThirdParty\THIRD-PARTY-NOTICES.md"
+             CopyToOutputDirectory="PreserveNewest"
+             CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+
   <Target Name="GenerateTuringDeskApplicationIcon"
           BeforeTargets="CoreCompile"
           Inputs="$(MSBuildProjectDirectory)\..\..\scripts\generate-brand-icon.ps1"
