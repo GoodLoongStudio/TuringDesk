@@ -75,8 +75,6 @@ public partial class SceneRendererControl
             case SceneLayerKind.Audio:
                 return null;
             case SceneLayerKind.Model3D:
-                // The scene contract already reserves 3D layers. The D3D renderer
-                // will own mesh/material playback; WPF safely skips them for now.
                 return null;
             default:
                 return null;
@@ -227,16 +225,40 @@ public partial class SceneRendererControl
 
     private void PauseSceneGraphAnimations()
     {
-        foreach (var element in _sceneGraphElements.Values) element.BeginAnimation(OpacityProperty, null);
-        foreach (var canvas in _sceneGraphElements.Values.OfType<Canvas>())
+        foreach (var element in _sceneGraphElements.Values)
         {
-            foreach (var dot in canvas.Children.OfType<Ellipse>()) dot.BeginAnimation(Canvas.TopProperty, null);
+            element.BeginAnimation(OpacityProperty, null);
+            element.BeginAnimation(Canvas.LeftProperty, null);
+            element.BeginAnimation(Canvas.TopProperty, null);
+
+            if (element.RenderTransform is TransformGroup group)
+            {
+                if (group.Children.OfType<RotateTransform>().FirstOrDefault() is { } rotate)
+                    rotate.BeginAnimation(RotateTransform.AngleProperty, null);
+                if (group.Children.OfType<ScaleTransform>().FirstOrDefault() is { } scale)
+                {
+                    scale.BeginAnimation(ScaleTransform.ScaleXProperty, null);
+                    scale.BeginAnimation(ScaleTransform.ScaleYProperty, null);
+                }
+            }
+
+            if (element is not Canvas canvas) continue;
+            foreach (var dot in canvas.Children.OfType<Ellipse>())
+            {
+                dot.BeginAnimation(Canvas.TopProperty, null);
+                dot.BeginAnimation(Canvas.LeftProperty, null);
+                dot.BeginAnimation(OpacityProperty, null);
+            }
         }
     }
 
     private void ResumeSceneGraphAnimations()
     {
-        if (_scene is not null) StartSceneTimeline(_scene);
+        // Animation clocks are deliberately removed on pause so they consume no
+        // dispatcher/render work. Rebuild this in-memory graph on resume to restore
+        // timelines/particle clocks from the manifest without retaining old clocks.
+        if (_scene is { Layers.Count: > 0 } scene)
+            _ = LoadSceneGraph(scene);
     }
 
     private void StopSceneGraph()
