@@ -81,7 +81,7 @@
                                           FontSize="11.5"
                                           FontWeight="SemiBold"
                                           DisplayMemberPath="DisplayName"
-                                          ToolTip="选择顶部 AI 搜索使用的模型"
+                                          ToolTip="选择轻量翻译/解释使用的模型；复杂任务只在点击深度处理后启动 Harness"
                                           SelectionChanged="ModelSelector_SelectionChanged"/>
                             </StackPanel>
                         </Grid>
@@ -106,7 +106,7 @@
                                  KeyDown="SearchBox_KeyDown"
                                  TextChanged="SearchBox_TextChanged"/>
                         <TextBlock x:Name="PlaceholderText"
-                                   Text="搜索应用、文件，或直接问 AI…"
+                                   Text="搜索应用、文件，计算/翻译，或交给 AI…"
                                    Foreground="#7B8798"
                                    FontSize="14.5"
                                    VerticalAlignment="Center"
@@ -237,6 +237,7 @@
                         <Grid.RowDefinitions>
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
                         </Grid.RowDefinitions>
                         <StackPanel Orientation="Horizontal">
                             <Ellipse x:Name="ReplyDot" Width="7" Height="7" Fill="#2563EB" Margin="0,0,8,0" VerticalAlignment="Center"/>
@@ -249,6 +250,20 @@
                                    FontSize="12.5"
                                    TextWrapping="Wrap"
                                    MaxHeight="116"/>
+                        <Button x:Name="DeepProcessButton"
+                                Grid.Row="2"
+                                Visibility="Collapsed"
+                                HorizontalAlignment="Left"
+                                Margin="0,10,0,0"
+                                Padding="13,6"
+                                Click="DeepProcess_Click"
+                                Background="#2563EB"
+                                Foreground="White"
+                                BorderBrush="#1D4ED8"
+                                BorderThickness="1"
+                                FontSize="11.5"
+                                FontWeight="SemiBold"
+                                Content="深度处理 · 打开 Harness"/>
                     </Grid>
                 </Border>
             </Grid>
