@@ -15,6 +15,7 @@ public partial class SceneRendererControl
     private void Renderer_Loaded(object sender, RoutedEventArgs e)
     {
         InitializePropertyBridge();
+        EnsureWebPowerLifecycle();
         if (!_desktopInputHooked)
         {
             _desktopInputTimer.Tick += DesktopInputTimer_Tick;
@@ -26,7 +27,10 @@ public partial class SceneRendererControl
             _desktopInputTimer.Start();
             ResumeSceneScript();
             UpdateAudioLeaseForCurrentScene();
-            if (_scene.Kind == SceneKind.Scene) GpuSurface.SetPaused(false);
+            if (_scene.Kind == SceneKind.Scene)
+                GpuSurface.SetPaused(false);
+            else if (_scene.Kind == SceneKind.Web)
+                ResumeWebRendererIfNeeded();
         }
     }
 
