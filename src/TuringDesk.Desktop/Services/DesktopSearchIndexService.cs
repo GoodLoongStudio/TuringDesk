@@ -110,7 +110,16 @@ public sealed class DesktopSearchIndexService : IDisposable
             .ToArray();
     }
 
-    public bool Open(DesktopSearchResult result) => ShellSurfaceCatalog.OpenTarget(result.Target);
+    public bool Open(DesktopSearchResult result)
+    {
+        if (result.Kind == DesktopSearchResultKind.App &&
+            result.Target.StartsWith("aumid:", StringComparison.OrdinalIgnoreCase))
+        {
+            return PackagedAppLauncher.TryLaunch(result.Target["aumid:".Length..]);
+        }
+
+        return ShellSurfaceCatalog.OpenTarget(result.Target);
+    }
 
     public bool OpenContainingFolder(DesktopSearchResult result) =>
         result.Kind == DesktopSearchResultKind.TextFile && ShellSurfaceCatalog.OpenContainingFolder(result.Target);
