@@ -18,12 +18,20 @@ internal static class DesktopEngineProbe
     {
         var state = new DesktopEngineProbeState(
             monitor.Id,
+            monitor.DeviceName,
             monitor.IsPrimary,
+            monitor.Left,
+            monitor.Top,
+            monitor.Width,
+            monitor.Height,
+            monitor.DpiX,
+            monitor.DpiY,
             attached,
             attachment,
             sceneId,
             DateTimeOffset.UtcNow);
-        var signature = $"{attached}|{attachment}|{sceneId}";
+        var signature =
+            $"{monitor.Left},{monitor.Top},{monitor.Width},{monitor.Height}|dpi={monitor.DpiX}x{monitor.DpiY}|{attached}|{attachment}|{sceneId}";
         var changed = false;
 
         lock (Gate)
@@ -51,7 +59,7 @@ internal static class DesktopEngineProbe
 
         SceneEngineTrace.Info(
             "probe.state",
-            $"monitor={monitor.Id} primary={monitor.IsPrimary} attached={attached} scene={sceneId ?? "<null>"} attachment={attachment}");
+            $"monitor={monitor.Id} device={monitor.DeviceName} primary={monitor.IsPrimary} rect={monitor.Left},{monitor.Top},{monitor.Width}x{monitor.Height} dpi={monitor.DpiX}x{monitor.DpiY} attached={attached} scene={sceneId ?? "<null>"} attachment={attachment}");
 
         ExplorerDesktopDiagnostics.Capture(
             $"probe-change monitor={monitor.Id} attached={attached} scene={sceneId ?? "<null>"}");
@@ -60,7 +68,14 @@ internal static class DesktopEngineProbe
 
 internal sealed record DesktopEngineProbeState(
     string MonitorId,
+    string DeviceName,
     bool IsPrimary,
+    int Left,
+    int Top,
+    int Width,
+    int Height,
+    uint DpiX,
+    uint DpiY,
     bool Attached,
     string Attachment,
     string? SceneId,
