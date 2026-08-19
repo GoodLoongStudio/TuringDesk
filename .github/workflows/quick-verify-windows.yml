@@ -27,8 +27,12 @@ jobs:
             throw "Windows PowerShell parser rejected quick-verify.ps1"
           }
 
-      - name: Execute quick verification from dependency-bootstrap path
+      - name: Initialize pinned environment from zero and build
         shell: powershell
         env:
           TURINGDESK_FORCE_BOOTSTRAP: "1"
+        run: .\scripts\quick-verify.ps1 -SkipPull -BuildOnly
+
+      - name: Re-run with the existing pinned environment
+        shell: powershell
         run: .\scripts\quick-verify.ps1 -SkipPull -BuildOnly
