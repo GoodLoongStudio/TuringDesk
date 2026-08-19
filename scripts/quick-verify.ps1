@@ -162,8 +162,6 @@ function Get-RuntimeDependencyFingerprint {
         (Join-Path $Root "runtime\package.json"),
         (Join-Path $Root "runtime\pnpm-workspace.yaml")
     )
-    $lock = Join-Path $Root "runtime\pnpm-lock.yaml"
-    if (Test-Path $lock) { $inputs += $lock }
 
     $parts = @("node=$NodeVersion", "pnpm=$PnpmVersion", "arch=$Architecture")
     foreach ($input in $inputs) {
@@ -252,6 +250,11 @@ Write-Host "Building Runtime..." -ForegroundColor Cyan
 $runtimeDir = Join-Path $Root "runtime"
 $runtimeModules = Join-Path $runtimeDir "node_modules"
 $runtimeMarker = Join-Path $runtimeModules ".turingdesk-verified-environment"
+$runtimeLockPath = Join-Path $runtimeDir "pnpm-lock.yaml"
+# Older quick-verify versions could leave an untracked lockfile behind. This repo
+# intentionally pins direct runtime versions in package.json instead; remove the
+# generated local lock so it cannot force a reinstall on every verification run.
+if (Test-Path $runtimeLockPath) { Remove-Item $runtimeLockPath -Force }
 $runtimeFingerprint = Get-RuntimeDependencyFingerprint $architecture
 $needRuntimeInstall = -not (Test-Path $runtimeModules)
 if (-not $needRuntimeInstall -and -not $SkipRuntimeInstall) {
@@ -268,15 +271,11 @@ Push-Location $runtimeDir
 try {
     if (-not $SkipRuntimeInstall -and $needRuntimeInstall) {
         Write-Host "Runtime dependency fingerprint changed or cache is missing; installing once..." -ForegroundColor Yellow
-        $lockPath = Join-Path $runtimeDir "pnpm-lock.yaml"
-        $lockExisted = Test-Path $lockPath
         & $pnpm install --no-frozen-lockfile
         if ($LASTEXITCODE -ne 0) { throw "pnpm install failed" }
         New-Item -ItemType Directory -Force -Path $runtimeModules | Out-Null
         Set-Content -Path $runtimeMarker -Value $runtimeFingerprint -NoNewline
-        if (-not $lockExisted -and (Test-Path $lockPath)) {
-            Remove-Item $lockPath -Force
-        }
+        if (Test-Path $runtimeLockPath) { Remove-Item $runtimeLockPath -Force }
     }
     elseif (-not $SkipRuntimeInstall) {
         Write-Host "Using existing runtime node_modules; dependency fingerprint matches." -ForegroundColor DarkGray
