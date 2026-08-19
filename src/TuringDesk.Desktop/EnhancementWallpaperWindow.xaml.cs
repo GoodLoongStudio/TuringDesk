@@ -18,6 +18,7 @@ public partial class EnhancementWallpaperWindow : Window
     private readonly DesktopPlaybackSettingsStore _playbackStore = new();
     private readonly DesktopPlaybackRuleEngine _ruleEngine = new();
     private readonly DispatcherTimer _hostHealthTimer;
+    private readonly SemaphoreSlim _sceneLoadGate = new(1, 1);
 
     private ShellSettings _settings;
     private DesktopPlaybackSettings _playbackSettings;
@@ -124,6 +125,7 @@ public partial class EnhancementWallpaperWindow : Window
     {
         _hostHealthTimer.Stop();
         ShellSettingsStore.SettingsChanged -= OnShellSettingsChanged;
+        _sceneLoadVersion++;
         var activeLoad = Interlocked.Exchange(ref _sceneLoadCancellation, null);
         try { activeLoad?.Cancel(); } catch (ObjectDisposedException) { }
         _source?.RemoveHook(WndProc);
@@ -335,8 +337,17 @@ public partial class EnhancementWallpaperWindow : Window
         var previousCancellation = Interlocked.Exchange(ref _sceneLoadCancellation, cancellation);
         try { previousCancellation?.Cancel(); } catch (ObjectDisposedException) { }
 
+        var gateEntered = false;
         try
         {
+            // Renderer.LoadAsync mutates one shared WebView/GPU/MediaElement graph.
+            // Serialize mutations so a cancelled old load always completes its Stop()
+            // before the replacement load begins touching the renderer.
+            await _sceneLoadGate.WaitAsync(cancellation.Token);
+            gateEntered = true;
+            cancellation.Token.ThrowIfCancellationRequested();
+            if (version != _sceneLoadVersion) return;
+
             await Renderer.LoadAsync(scene, _settings.Appearance, cancellation.Token);
             cancellation.Token.ThrowIfCancellationRequested();
             if (version != _sceneLoadVersion) return;
@@ -350,7 +361,8 @@ public partial class EnhancementWallpaperWindow : Window
         }
         catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
         {
-            // Superseded scene load. The next load owns renderer state.
+            // Superseded scene load. The replacement waits on _sceneLoadGate until
+            // this operation has completely unwound its renderer cleanup.
         }
         catch (Exception error)
         {
@@ -363,6 +375,7 @@ public partial class EnhancementWallpaperWindow : Window
         }
         finally
         {
+            if (gateEntered) _sceneLoadGate.Release();
             _ = Interlocked.CompareExchange(ref _sceneLoadCancellation, null, cancellation);
             cancellation.Dispose();
         }
