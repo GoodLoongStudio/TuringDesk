@@ -24,20 +24,19 @@ public sealed record DesktopSearchResult(
 }
 
 /// <summary>
-/// Tiered desktop search index.
-///
-/// Level 1 is a startup-built RAM index for installed applications. The hot path
-/// never touches disk and supports original names, compact full pinyin and pinyin
-/// initials through a prefix hash index.
-///
-/// Level 2 is an incrementally maintained text/code file snapshot. A compact
-/// filename-prefix map prunes normal queries before scoring; any remaining work is
-/// performed on a pool thread and is cancellation-aware, never on the WPF dispatcher.
+/// Tiered desktop search.
+/// Level 1 is an always-resident RAM app/pinyin prefix index.
+/// Level 2 delegates global filename search to voidtools Everything when available.
+/// When Everything is unavailable, TuringDesk keeps only a small bounded fallback
+/// snapshot of Desktop/Documents/Downloads; it never crawls the whole user profile.
 /// </summary>
 public sealed class DesktopSearchIndexService : IDisposable
 {
     private const int MaxIndexedAliasLength = 48;
     private const int MaxFilePrefixLength = 4;
+    private const int MaxLocalIndexedFiles = 6000;
+    private const int MaxLocalDepth = 2;
+    private const int LocalYieldInterval = 64;
 
     private static readonly HashSet<string> TextExtensions = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -61,6 +60,7 @@ public sealed class DesktopSearchIndexService : IDisposable
 
     private readonly IndexedApp[] _apps;
     private readonly IReadOnlyDictionary<string, int[]> _appPrefixIndex;
+    private readonly EverythingFileSearchProvider _everything = new();
     private readonly ConcurrentDictionary<string, IndexedTextFile> _files = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, ConcurrentDictionary<string, byte>> _filePrefixIndex =
         new(StringComparer.Ordinal);
@@ -72,27 +72,38 @@ public sealed class DesktopSearchIndexService : IDisposable
 
     public DesktopSearchIndexService()
     {
-        // The desktop search result template does not render per-app icons. Avoid
-        // decoding hundreds of shell bitmaps into the always-resident RAM index.
         _apps = ShellSurfaceCatalog.LoadStartApps(includeIcons: false)
             .Select(CreateIndexedApp)
             .ToArray();
         _appPrefixIndex = BuildAppPrefixIndex(_apps);
 
         _roots = BuildRoots();
-        foreach (var root in _roots)
-            TryStartWatcher(root);
 
-        _initialIndexTask = Task.Run(() => BuildInitialIndex(_lifetime.Token), _lifetime.Token);
+        // Everything already owns the global filename/path database and keeps it
+        // current through NTFS metadata. Do not duplicate that index inside the
+        // desktop process. The small fallback is built only when Everything is not
+        // currently queryable.
+        if (_everything.IsAvailable)
+        {
+            _initialIndexTask = Task.CompletedTask;
+        }
+        else
+        {
+            foreach (var root in _roots)
+                TryStartWatcher(root);
+
+            _initialIndexTask = Task.Run(() => BuildInitialIndex(_lifetime.Token), _lifetime.Token);
+        }
     }
 
     public bool IsInitialIndexComplete => _initialIndexTask.IsCompleted;
+    public bool UsesEverything => _everything.IsAvailable;
+    public string FileSearchProviderName => _everything.ProviderName;
     public int AppCount => _apps.Length;
     public int IndexedFileCount => _files.Count;
 
     /// <summary>
-    /// Level 1: synchronous RAM-only application search. Safe to call directly
-    /// from TextChanged before any debounce/yield.
+    /// Level 1: synchronous RAM-only application search.
     /// </summary>
     public IReadOnlyList<DesktopSearchResult> SearchApps(string query, int limit = 5)
     {
@@ -123,22 +134,35 @@ public sealed class DesktopSearchIndexService : IDisposable
     }
 
     /// <summary>
-    /// Level 2: asynchronous file search. Prefix candidates are selected from RAM,
-    /// scoring executes on a pool thread, and cancellation is checked throughout.
+    /// Level 2: Everything first. Global filename search never performs a TuringDesk
+    /// disk crawl. The bounded RAM fallback is used only when Everything is absent.
     /// </summary>
-    public Task<IReadOnlyList<DesktopSearchResult>> SearchFilesAsync(
+    public async Task<IReadOnlyList<DesktopSearchResult>> SearchFilesAsync(
         string query,
         int limit = 6,
         CancellationToken cancellationToken = default)
     {
         var normalized = NormalizeQuery(query);
         if (normalized.Length == 0)
-            return Task.FromResult<IReadOnlyList<DesktopSearchResult>>(Array.Empty<DesktopSearchResult>());
+            return Array.Empty<DesktopSearchResult>();
 
         limit = Math.Clamp(limit, 1, 16);
-        return Task.Run<IReadOnlyList<DesktopSearchResult>>(
-            () => SearchFilesCore(normalized, limit, cancellationToken),
-            cancellationToken);
+
+        if (_everything.IsAvailable)
+        {
+            var paths = await _everything.SearchAsync(query, Math.Min(16, limit * 2), cancellationToken)
+                .ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var everythingResults = BuildEverythingResults(paths, normalized, limit);
+            if (everythingResults.Count > 0)
+                return everythingResults;
+        }
+
+        return await Task.Run<IReadOnlyList<DesktopSearchResult>>(
+                () => SearchFilesCore(normalized, limit, cancellationToken),
+                cancellationToken)
+            .ConfigureAwait(false);
     }
 
     public async Task<IReadOnlyList<DesktopSearchResult>> SearchAsync(
@@ -164,6 +188,42 @@ public sealed class DesktopSearchIndexService : IDisposable
 
     public bool OpenContainingFolder(DesktopSearchResult result) =>
         result.Kind == DesktopSearchResultKind.TextFile && ShellSurfaceCatalog.OpenContainingFolder(result.Target);
+
+    private static IReadOnlyList<DesktopSearchResult> BuildEverythingResults(
+        IReadOnlyList<string> paths,
+        string normalizedQuery,
+        int limit)
+    {
+        var results = new List<DesktopSearchResult>(limit);
+        foreach (var path in paths)
+        {
+            if (results.Count >= limit) break;
+            if (string.IsNullOrWhiteSpace(path) || Directory.Exists(path)) continue;
+
+            var name = Path.GetFileName(path);
+            if (string.IsNullOrWhiteSpace(name)) continue;
+
+            var normalizedName = NormalizeQuery(name);
+            var normalizedPath = NormalizeQuery(path);
+            var score = Score(normalizedQuery, normalizedName, normalizedPath);
+            if (score <= 0) score = 700;
+
+            results.Add(new DesktopSearchResult(
+                name,
+                path,
+                DesktopSearchResultKind.TextFile,
+                "Everything · " + BuildFileSubtitle(path),
+                null,
+                score,
+                Level: 2));
+        }
+
+        return results
+            .OrderByDescending(item => item.Score)
+            .ThenBy(item => item.Name, StringComparer.CurrentCultureIgnoreCase)
+            .Take(limit)
+            .ToArray();
+    }
 
     private IReadOnlyList<DesktopSearchResult> SearchFilesCore(
         string normalized,
@@ -301,21 +361,24 @@ public sealed class DesktopSearchIndexService : IDisposable
 
     private void BuildInitialIndex(CancellationToken cancellationToken)
     {
+        var visited = 0;
         foreach (var root in _roots)
         {
-            if (cancellationToken.IsCancellationRequested) return;
-            IndexTree(root, cancellationToken);
+            if (cancellationToken.IsCancellationRequested || _files.Count >= MaxLocalIndexedFiles) return;
+            IndexTree(root, cancellationToken, ref visited);
         }
     }
 
-    private void IndexTree(string root, CancellationToken cancellationToken)
+    private void IndexTree(string root, CancellationToken cancellationToken, ref int visited)
     {
-        var pending = new Stack<string>();
-        pending.Push(root);
+        var pending = new Stack<(string Path, int Depth)>();
+        pending.Push((root, 0));
 
-        while (pending.Count > 0 && !cancellationToken.IsCancellationRequested)
+        while (pending.Count > 0 &&
+               !cancellationToken.IsCancellationRequested &&
+               _files.Count < MaxLocalIndexedFiles)
         {
-            var directory = pending.Pop();
+            var (directory, depth) = pending.Pop();
             IEnumerable<string> entries;
             try
             {
@@ -330,11 +393,16 @@ public sealed class DesktopSearchIndexService : IDisposable
             {
                 foreach (var entry in entries)
                 {
-                    if (cancellationToken.IsCancellationRequested) return;
+                    if (cancellationToken.IsCancellationRequested || _files.Count >= MaxLocalIndexedFiles) return;
+
+                    visited++;
+                    if (visited % LocalYieldInterval == 0)
+                        Thread.Sleep(1);
 
                     if (Directory.Exists(entry))
                     {
-                        if (!ShouldSkipDirectory(entry)) pending.Push(entry);
+                        if (depth < MaxLocalDepth && !ShouldSkipDirectory(entry))
+                            pending.Push((entry, depth + 1));
                         continue;
                     }
 
@@ -354,9 +422,11 @@ public sealed class DesktopSearchIndexService : IDisposable
         {
             var watcher = new FileSystemWatcher(root)
             {
-                IncludeSubdirectories = true,
+                // Never attach one recursive watcher to the whole user tree. These
+                // watchers only keep the small fallback roots fresh.
+                IncludeSubdirectories = false,
                 NotifyFilter = NotifyFilters.FileName | NotifyFilters.DirectoryName,
-                InternalBufferSize = 64 * 1024,
+                InternalBufferSize = 8 * 1024,
                 EnableRaisingEvents = true
             };
 
@@ -370,18 +440,12 @@ public sealed class DesktopSearchIndexService : IDisposable
                 RemoveIndexedFile(e.OldFullPath);
                 if (File.Exists(e.FullPath)) TryIndexFile(e.FullPath);
             };
-            watcher.Error += (_, _) =>
-            {
-                if (!_lifetime.IsCancellationRequested)
-                    _ = Task.Run(() => IndexTree(root, _lifetime.Token), _lifetime.Token);
-            };
 
             _watchers.Add(watcher);
         }
         catch
         {
-            // Search remains useful from the initial snapshot if notifications
-            // are unavailable for a specific root.
+            // The bounded snapshot remains usable if notifications are unavailable.
         }
     }
 
@@ -390,6 +454,8 @@ public sealed class DesktopSearchIndexService : IDisposable
         try
         {
             if (!File.Exists(path) || !IsTextLike(path)) return;
+            if (_files.Count >= MaxLocalIndexedFiles && !_files.ContainsKey(path)) return;
+
             var info = new FileInfo(path);
             if (info.Attributes.HasFlag(FileAttributes.Hidden) ||
                 info.Attributes.HasFlag(FileAttributes.System) ||
@@ -481,12 +547,16 @@ public sealed class DesktopSearchIndexService : IDisposable
     private static string[] BuildRoots()
     {
         var userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        var roots = new List<string>();
-        if (!string.IsNullOrWhiteSpace(userProfile) && Directory.Exists(userProfile))
-            roots.Add(userProfile);
+        var roots = new[]
+        {
+            Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory),
+            Environment.GetFolderPath(Environment.SpecialFolder.CommonDesktopDirectory),
+            Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
+            string.IsNullOrWhiteSpace(userProfile) ? string.Empty : Path.Combine(userProfile, "Downloads")
+        };
 
         return roots
-            .Where(Directory.Exists)
+            .Where(path => !string.IsNullOrWhiteSpace(path) && Directory.Exists(path))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
     }
