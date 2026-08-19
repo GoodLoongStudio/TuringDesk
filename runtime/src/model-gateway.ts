@@ -24,8 +24,18 @@ export class ModelGatewayManager {
 
   async configure(next: RuntimeModelConfig): Promise<PublicModelConfig> {
     validateModelConfig(next)
+    const normalized: RuntimeModelConfig = {
+      ...next,
+      credential: next.credential?.trim() || undefined
+    }
+
+    // Explicit Agent surfaces may defensively apply the persisted model before
+    // every request. Do not tear down/recreate Harness when that configuration is
+    // already active in this Runtime process.
+    if (sameRuntimeConfig(this.config, normalized)) return this.current
+
     await this.gateway.close?.().catch(() => undefined)
-    this.config = { ...next, credential: next.credential?.trim() || undefined }
+    this.config = normalized
 
     if (this.config.mode === 'mock') {
       process.env.TURINGDESK_RUNTIME_MODE = 'mock'
@@ -67,8 +77,6 @@ export class ModelGatewayManager {
     }
 
     this.gateway = createAgentGateway()
-    // Applying a model configuration is not considered successful until the
-    // bundled Harness process, TuringDesk profile and MCP bridge all initialize.
     await this.gateway.ensureReady?.()
     return this.current
   }
@@ -85,6 +93,14 @@ export class ModelGatewayManager {
   async close(): Promise<void> {
     await this.gateway.close?.()
   }
+}
+
+function sameRuntimeConfig(left: RuntimeModelConfig, right: RuntimeModelConfig): boolean {
+  return left.providerId === right.providerId &&
+    left.mode === right.mode &&
+    left.baseUrl === right.baseUrl &&
+    left.model === right.model &&
+    (left.credential?.trim() || undefined) === (right.credential?.trim() || undefined)
 }
 
 function isDeepSeekProvider(providerId: string): boolean {
