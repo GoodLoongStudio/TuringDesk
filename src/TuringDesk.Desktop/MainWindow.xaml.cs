@@ -30,8 +30,13 @@ public partial class MainWindow : Window
 
     private async void OnLoaded(object sender, RoutedEventArgs e)
     {
-        SetAgentState("正在准备桌面能力…", "启动本地能力层、AI Runtime、DeepSeek Harness 与常驻语音。", Color.FromRgb(241, 182, 106));
+        SetAgentState(
+            "正在准备轻量桌面层…",
+            "本地搜索、桌面能力与常驻语音先就绪；AI Runtime / DeepSeek Harness 按需启动。",
+            Color.FromRgb(241, 182, 106));
 
+        // Keep the native capability endpoint available for a future MCP lease,
+        // but deliberately leave Node.js Runtime and DeepSeek Harness cold.
         _capabilities = new CapabilityServer(_launcher, _windows, AddActivity);
         try
         {
@@ -41,80 +46,49 @@ public partial class MainWindow : Window
         catch (Exception error)
         {
             AddActivity("system", $"Capability server failed: {error.Message}");
-            SetAgentState("部分能力不可用", "Windows Capability Server 启动失败，普通应用入口仍可使用。", Color.FromRgb(240, 125, 125));
+            SetAgentState("部分能力不可用", "Windows Capability Server 启动失败，普通应用与文件搜索仍可使用。", Color.FromRgb(240, 125, 125));
         }
 
-        try
-        {
-            await RuntimeHostService.EnsureRunningAsync();
-            AddActivity("system", "TuringDesk Runtime is running. Existing ShellHost-owned runtime is reused when available.");
-        }
-        catch (Exception error)
-        {
-            AddActivity("system", $"Runtime bootstrap failed: {error.Message}");
-        }
-
+        // Passive probe only: RuntimeClient.GetHealthAsync never wakes a sleeping
+        // process. A pre-existing ShellHost/external Runtime can still be surfaced.
         var health = await _runtime.GetHealthAsync();
         if (health is not null)
         {
             RuntimeDot.Fill = new SolidColorBrush(Color.FromRgb(84, 214, 138));
             RuntimeStatus.Text = $"Runtime {health.Mode}";
-            AddActivity("system", $"AI runtime connected ({health.Mode}).");
+            AddActivity("system", $"Existing AI runtime detected ({health.Mode}); no new process was started.");
         }
         else
         {
-            RuntimeDot.Fill = new SolidColorBrush(Color.FromRgb(240, 125, 125));
-            RuntimeStatus.Text = "Runtime offline";
-            AddActivity("system", "Runtime is offline. Quick launch buttons still work.");
-            SetAgentState("AI Runtime 离线", "你仍然可以像普通桌面一样启动应用；Agent 指令暂时不可用。", Color.FromRgb(240, 125, 125));
+            RuntimeDot.Fill = new SolidColorBrush(Color.FromRgb(100, 116, 139));
+            RuntimeStatus.Text = "Runtime 按需待命";
+            AddActivity("system", "AI Runtime is cold and will start only for Agent/Harness work.");
         }
 
+        // Persisted model state is cheap local configuration. Do not push it into
+        // Runtime at startup: non-mock Runtime model configuration initializes the
+        // Harness gateway and defeats lazy loading.
         _modelSettings = await _modelStore.LoadAsync();
-        var key = _modelStore.LoadApiKey();
-        if (health is not null)
-        {
-            var applied = await _runtime.ConfigureModelAsync(_modelSettings, key);
-            if (applied is null && _modelSettings.ProviderId != "mock")
-            {
-                AddActivity("model", "Saved model configuration could not be applied; Runtime remains available in its current mode.");
-            }
-        }
         UpdateModelStatus();
-
-        // Harness is a desktop background service, not something the user has to
-        // start by opening the WebView. The WebView is only a full-console surface
-        // that attaches to this already-running local service.
-        _ = StartHarnessServiceAsync();
 
         var voiceReady = await _speech.StartAsync();
         if (voiceReady)
         {
             AddActivity("voice", $"Always-on Windows speech recognition ready ({_speech.RecognizerName}, {_speech.RecognizerCulture}). Say “图灵桌面” before a command.");
             VoiceStateText.Text = "已常驻 · 说“图灵桌面”唤醒";
-            SetAgentState("随时可以叫我", "快捷对话、轨迹浮卡和 Harness 都已在桌面后台工作。", Color.FromRgb(84, 214, 138));
+            SetAgentState(
+                "桌面已就绪",
+                "应用/文件搜索与语音已就绪；复杂任务会在需要时热启动 Agent。",
+                Color.FromRgb(84, 214, 138));
         }
         else
         {
             AddActivity("voice", "Windows speech recognition is unavailable. Keyboard input remains available.");
             VoiceStateText.Text = "当前设备不可用 · 可继续键盘输入";
-            if (health is not null)
-            {
-                SetAgentState("Agent 已就绪", "Harness 与文字快捷对话已可用；常驻语音当前设备不可用。", Color.FromRgb(84, 214, 138));
-            }
-        }
-    }
-
-    private async Task StartHarnessServiceAsync()
-    {
-        try
-        {
-            var url = await HarnessWebUiService.EnsureRunningAsync();
-            AddActivity("harness", $"DeepSeek Harness background service ready ({url}). WebView may be opened at any time.");
-        }
-        catch (Exception error)
-        {
-            AddActivity("harness", $"DeepSeek Harness background service failed to start: {error.Message}");
-            ShellNotificationService.Publish("DeepSeek Harness 未启动", "快捷桌面能力仍会尽量工作；可在 DIY 中心查看 Harness 状态。", "warning");
+            SetAgentState(
+                "桌面已就绪",
+                "应用/文件搜索已就绪；Agent/Harness 保持休眠直到真正需要。",
+                Color.FromRgb(84, 214, 138));
         }
     }
 
@@ -151,7 +125,6 @@ public partial class MainWindow : Window
 
     private void CommandBar_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
-        // Keep clicks inside the title-bar Agent box from turning into window drags.
         e.Handled = true;
     }
 
@@ -240,6 +213,8 @@ public partial class MainWindow : Window
         SetAgentState("正在理解你的请求…", TrimForUi(text, 120), Color.FromRgb(135, 150, 255));
         AgentFloatingCardsService.Begin(DisplayManager.GetPrimary(), text);
 
+        // RuntimeClient owns lazy startup and a request lease. This path is an
+        // explicit Agent surface, so waking Runtime/Harness here is intentional.
         var reply = await _runtime.ChatAsync(text);
         if (reply is null)
         {
