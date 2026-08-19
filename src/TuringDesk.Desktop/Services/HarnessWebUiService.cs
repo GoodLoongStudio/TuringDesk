@@ -11,17 +11,21 @@ public static class HarnessWebUiService
     private static readonly Uri WebUri = new($"http://127.0.0.1:{Port}/");
     private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromMilliseconds(700) };
     private static readonly object Gate = new();
+    private static readonly TimeSpan IdleTimeout = TimeSpan.FromMinutes(2);
+    private static readonly TimeSpan IdlePollInterval = TimeSpan.FromSeconds(15);
+
     private static Process? _process;
     private static Task<Uri>? _startupTask;
+    private static Timer? _idleTimer;
+    private static DateTime _lastUseUtc = DateTime.UtcNow;
+    private static int _activeConsoles;
+    private static int _idleCheckRunning;
     private static bool _shutdownHookRegistered;
 
     public static Uri Url => WebUri;
 
     /// <summary>
-    /// Starts the bundled official Harness process synchronously up to Process.Start
-    /// and returns the readiness task. App.OnStartup calls this before MainWindow is
-    /// constructed, so Harness boot overlaps the desktop UI instead of starting only
-    /// after the user can already interact with TuringDesk.
+    /// Kept for explicit advanced callers. Desktop startup no longer invokes it.
     /// </summary>
     public static Task<Uri> StartEarly()
     {
@@ -32,10 +36,9 @@ public static class HarnessWebUiService
 
         lock (Gate)
         {
+            TouchNoLock();
             if (_process is { HasExited: false } && _startupTask is not null)
-            {
                 return _startupTask;
-            }
 
             if (_process is null || _process.HasExited)
             {
@@ -44,6 +47,7 @@ public static class HarnessWebUiService
                 RegisterShutdownHook();
             }
 
+            EnsureIdleTimerNoLock();
             _startupTask = WaitUntilReadyAsync(CancellationToken.None);
             return _startupTask;
         }
@@ -51,56 +55,68 @@ public static class HarnessWebUiService
 
     public static async Task<Uri> EnsureRunningAsync(CancellationToken cancellationToken = default)
     {
-        if (await IsReadyAsync(cancellationToken)) return WebUri;
+        Touch();
+        if (await IsReadyAsync(cancellationToken).ConfigureAwait(false)) return WebUri;
 
         Task<Uri> startup;
         lock (Gate)
         {
+            TouchNoLock();
             if (_process is { HasExited: false } && _startupTask is not null)
-            {
                 startup = _startupTask;
-            }
             else
-            {
                 startup = StartEarlyOutsideGate();
-            }
         }
 
         return cancellationToken.CanBeCanceled
-            ? await startup.WaitAsync(cancellationToken)
-            : await startup;
+            ? await startup.WaitAsync(cancellationToken).ConfigureAwait(false)
+            : await startup.ConfigureAwait(false);
+    }
+
+    public static void NotifyConsoleOpened()
+    {
+        Interlocked.Increment(ref _activeConsoles);
+        lock (Gate)
+        {
+            TouchNoLock();
+            EnsureIdleTimerNoLock();
+        }
+    }
+
+    public static void NotifyConsoleClosed()
+    {
+        var remaining = Interlocked.Decrement(ref _activeConsoles);
+        if (remaining < 0) Interlocked.Exchange(ref _activeConsoles, 0);
+        Touch();
     }
 
     /// <summary>
-    /// Called by the single TuringDesk model configuration pipeline. Both settings
-    /// and the API key are written to Harness's own hot-reloaded stores. No process
-    /// restart is required: official settings/credentials providers publish the
-    /// change and LLM adapters resolve credentials on the next request.
+    /// Synchronize the shared official Harness stores without waking a cold WebUI.
+    /// If the console is already running, give its file watchers a brief settle
+    /// window; otherwise the next explicit EnsureRunningAsync reads the new stores.
     /// </summary>
-    public static async Task ApplyModelSettingsAsync(ModelSettings settings, string? apiKey, CancellationToken cancellationToken = default)
+    public static async Task ApplyModelSettingsAsync(
+        ModelSettings settings,
+        string? apiKey,
+        CancellationToken cancellationToken = default)
     {
         HarnessModelBridgeService.Synchronize(settings, apiKey);
 
-        if (await IsReadyAsync(cancellationToken))
+        if (await IsReadyAsync(cancellationToken).ConfigureAwait(false))
         {
-            // Allow the file watchers' write-settle window to publish the update
-            // before a caller immediately submits its next prompt.
-            await Task.Delay(180, cancellationToken);
-            return;
+            Touch();
+            await Task.Delay(180, cancellationToken).ConfigureAwait(false);
         }
-
-        _ = await EnsureRunningAsync(cancellationToken);
     }
 
     private static Task<Uri> StartEarlyOutsideGate()
     {
-        // Caller owns Gate. This helper avoids re-entering the same lock while
-        // preserving the synchronous Process.Start behavior of StartEarly().
         var modelStore = new ModelSettingsStore();
         var model = modelStore.Load();
         var apiKey = modelStore.LoadApiKey();
         HarnessModelBridgeService.Synchronize(model, apiKey);
 
+        TouchNoLock();
         if (_process is null || _process.HasExited)
         {
             _process?.Dispose();
@@ -108,6 +124,7 @@ public static class HarnessWebUiService
             RegisterShutdownHook();
         }
 
+        EnsureIdleTimerNoLock();
         _startupTask = WaitUntilReadyAsync(CancellationToken.None);
         return _startupTask;
     }
@@ -121,7 +138,11 @@ public static class HarnessWebUiService
             cancellationToken.ThrowIfCancellationRequested();
             try
             {
-                if (await IsReadyAsync(cancellationToken)) return WebUri;
+                if (await IsReadyAsync(cancellationToken).ConfigureAwait(false))
+                {
+                    Touch();
+                    return WebUri;
+                }
             }
             catch (Exception error)
             {
@@ -137,10 +158,12 @@ public static class HarnessWebUiService
                     lastError);
             }
 
-            await Task.Delay(300, cancellationToken);
+            await Task.Delay(300, cancellationToken).ConfigureAwait(false);
         }
 
-        throw new TimeoutException("DeepSeek Harness WebUI did not become ready on 127.0.0.1:4319 within 20 seconds.", lastError);
+        throw new TimeoutException(
+            "DeepSeek Harness WebUI did not become ready on 127.0.0.1:4319 within 20 seconds.",
+            lastError);
     }
 
     private static async Task<bool> IsReadyAsync(CancellationToken cancellationToken)
@@ -148,7 +171,10 @@ public static class HarnessWebUiService
         try
         {
             using var request = new HttpRequestMessage(HttpMethod.Get, WebUri);
-            using var response = await Http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+            using var response = await Http.SendAsync(
+                request,
+                HttpCompletionOption.ResponseHeadersRead,
+                cancellationToken).ConfigureAwait(false);
             return response.IsSuccessStatusCode;
         }
         catch (HttpRequestException)
@@ -188,17 +214,52 @@ public static class HarnessWebUiService
         startInfo.ArgumentList.Add("--port");
         startInfo.ArgumentList.Add(Port.ToString());
 
-        // DSH_HOME points at the shared official settings/credential store. API
-        // keys are intentionally absent from the inherited process environment so
-        // the Harness Models page remains writable and reflects the shared store.
         HarnessModelBridgeService.ApplyEnvironment(startInfo);
         startInfo.Environment["TURINGDESK_CAPABILITY_URL"] = "http://127.0.0.1:4318";
         startInfo.Environment["TURINGDESK_MCP_NODE"] = layout.NodeExecutable;
         startInfo.Environment["TURINGDESK_MCP_SERVER"] = layout.WindowsMcpServer;
 
-        var process = Process.Start(startInfo)
+        return Process.Start(startInfo)
             ?? throw new InvalidOperationException("Failed to launch the bundled DeepSeek Harness WebUI process.");
-        return process;
+    }
+
+    private static void Touch()
+    {
+        lock (Gate) TouchNoLock();
+    }
+
+    private static void TouchNoLock() => _lastUseUtc = DateTime.UtcNow;
+
+    private static void EnsureIdleTimerNoLock()
+    {
+        _idleTimer ??= new Timer(
+            static _ => _ = CheckIdleAsync(),
+            null,
+            IdlePollInterval,
+            IdlePollInterval);
+    }
+
+    private static Task CheckIdleAsync()
+    {
+        if (Interlocked.Exchange(ref _idleCheckRunning, 1) != 0)
+            return Task.CompletedTask;
+
+        try
+        {
+            lock (Gate)
+            {
+                if (_process is null || _process.HasExited) return Task.CompletedTask;
+                if (Volatile.Read(ref _activeConsoles) > 0) return Task.CompletedTask;
+                if (DateTime.UtcNow - _lastUseUtc < IdleTimeout) return Task.CompletedTask;
+                StopOwnedProcessNoLock();
+            }
+        }
+        finally
+        {
+            Volatile.Write(ref _idleCheckRunning, 0);
+        }
+
+        return Task.CompletedTask;
     }
 
     private static void RegisterShutdownHook()
@@ -215,6 +276,8 @@ public static class HarnessWebUiService
 
     private static void StopOwnedProcessNoLock()
     {
+        _idleTimer?.Dispose();
+        _idleTimer = null;
         if (_process is null) return;
         try
         {
@@ -222,7 +285,7 @@ public static class HarnessWebUiService
         }
         catch
         {
-            // Windows is already tearing the desktop process down.
+            // Windows may already be tearing the desktop process down.
         }
         finally
         {
@@ -255,9 +318,7 @@ public static class HarnessWebUiService
             var devDsh = Path.Combine(cursor.FullName, "runtime", "node_modules", "@deepseek-ai", "dsh", "lib", "bin.js");
             var devMcp = Path.Combine(cursor.FullName, "runtime", "dist", "windows-mcp-server.js");
             if (File.Exists(devDsh) && File.Exists(devMcp))
-            {
                 return new RuntimeLayout("node", devDsh, devMcp);
-            }
             cursor = cursor.Parent;
         }
 
