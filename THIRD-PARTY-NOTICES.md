@@ -1,6 +1,6 @@
 # Third-Party Notices
 
-TuringDesk includes or can redistribute the following third-party components.
+TuringDesk includes, redistributes, or adapts ideas/code from the following third-party components.
 
 ## Everything
 
@@ -26,3 +26,23 @@ Permission is hereby granted, free of charge, to any person obtaining a copy of 
 The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
 
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+## Microsoft PowerToys
+
+- Project: Microsoft PowerToys / PowerToys Run Program plugin
+- Source: https://github.com/microsoft/PowerToys
+- License: MIT
+- Copyright: Copyright (c) Microsoft Corporation. All rights reserved.
+- TuringDesk usage: the L1 application discovery architecture follows the mature PowerToys pattern of combining classic Windows program shortcuts with packaged-app identities/AUMIDs. TuringDesk keeps its own small .NET 8 implementation rather than embedding PowerToys.
+
+The MIT license permits use, modification and redistribution provided the copyright and permission notice are retained in copies or substantial portions of the software.
+
+## Flow Launcher
+
+- Project: Flow Launcher
+- Source: https://github.com/Flow-Launcher/Flow.Launcher
+- License: MIT
+- Copyright: Copyright (c) 2019 Flow-Launcher; Copyright (c) 2015 Wox
+- TuringDesk usage: the L1 in-memory matcher is an independent compact adaptation of Flow Launcher's acronym/fuzzy-search strategy: ordered subsequence matching, contiguous-match bonuses, word-boundary bonuses and early-match weighting. Pinyin aliases remain generated locally by TuringDesk.
+
+The MIT license permits use, modification and redistribution provided the copyright and permission notice are retained in copies or substantial portions of the software.
