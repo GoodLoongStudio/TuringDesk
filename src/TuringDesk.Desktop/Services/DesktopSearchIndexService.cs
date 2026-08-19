@@ -1,7 +1,7 @@
 using System.Collections.Concurrent;
 using System.IO;
 using System.Windows.Media;
-using NPinyin;
+using PinyinNet;
 
 namespace TuringDesk.Desktop.Services;
 
@@ -27,16 +27,17 @@ public sealed record DesktopSearchResult(
 /// Tiered desktop search index.
 ///
 /// Level 1 is a startup-built RAM index for installed applications. The hot path
-/// never touches disk and supports the original app name, compact full pinyin and
-/// pinyin initials through a prefix hash index.
+/// never touches disk and supports original names, compact full pinyin and pinyin
+/// initials through a prefix hash index.
 ///
-/// Level 2 is the user-profile text/code file index. FileSystemWatcher keeps the
-/// snapshot incrementally fresh, while query scoring is always executed on a pool
-/// thread so a large profile cannot block the WPF dispatcher.
+/// Level 2 is an incrementally maintained text/code file snapshot. A compact
+/// filename-prefix map prunes normal queries before scoring; any remaining work is
+/// performed on a pool thread and is cancellation-aware, never on the WPF dispatcher.
 /// </summary>
 public sealed class DesktopSearchIndexService : IDisposable
 {
     private const int MaxIndexedAliasLength = 48;
+    private const int MaxFilePrefixLength = 4;
 
     private static readonly HashSet<string> TextExtensions = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -61,6 +62,8 @@ public sealed class DesktopSearchIndexService : IDisposable
     private readonly IndexedApp[] _apps;
     private readonly IReadOnlyDictionary<string, int[]> _appPrefixIndex;
     private readonly ConcurrentDictionary<string, IndexedTextFile> _files = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, ConcurrentDictionary<string, byte>> _filePrefixIndex =
+        new(StringComparer.Ordinal);
     private readonly CancellationTokenSource _lifetime = new();
     private readonly List<FileSystemWatcher> _watchers = new();
     private readonly string[] _roots;
@@ -69,9 +72,8 @@ public sealed class DesktopSearchIndexService : IDisposable
 
     public DesktopSearchIndexService()
     {
-        // ShellSurfaceCatalog icon extraction is intentionally performed here,
-        // normally on the WPF UI thread. After construction the L1 query path is
-        // pure RAM access and never invokes Shell/COM again.
+        // Shell icon extraction and pinyin conversion are paid once during index
+        // construction. After this point L1 TextChanged queries are pure RAM reads.
         _apps = ShellSurfaceCatalog.LoadStartApps()
             .Select(CreateIndexedApp)
             .ToArray();
@@ -99,17 +101,9 @@ public sealed class DesktopSearchIndexService : IDisposable
             return Array.Empty<DesktopSearchResult>();
 
         limit = Math.Clamp(limit, 1, 12);
-        IEnumerable<int> candidates;
-        if (_appPrefixIndex.TryGetValue(normalized, out var indexedCandidates))
-        {
-            candidates = indexedCandidates;
-        }
-        else
-        {
-            // Contains/fuzzy fallback still stays cheap because the installed-app
-            // catalog is small and every searchable alias was precomputed.
-            candidates = Enumerable.Range(0, _apps.Length);
-        }
+        IEnumerable<int> candidates = _appPrefixIndex.TryGetValue(normalized, out var indexedCandidates)
+            ? indexedCandidates
+            : Enumerable.Range(0, _apps.Length);
 
         return candidates
             .Select(index => (_apps[index], ScoreApp(normalized, _apps[index])))
@@ -129,9 +123,8 @@ public sealed class DesktopSearchIndexService : IDisposable
     }
 
     /// <summary>
-    /// Level 2: asynchronous file search. It never enumerates the file snapshot on
-    /// the caller/dispatcher thread. Cancellation is checked throughout scoring so
-    /// rapid typing abandons obsolete work quickly.
+    /// Level 2: asynchronous file search. Prefix candidates are selected from RAM,
+    /// scoring executes on a pool thread, and cancellation is checked throughout.
     /// </summary>
     public Task<IReadOnlyList<DesktopSearchResult>> SearchFilesAsync(
         string query,
@@ -148,11 +141,6 @@ public sealed class DesktopSearchIndexService : IDisposable
             cancellationToken);
     }
 
-    /// <summary>
-    /// Compatibility entry point for callers that still want one merged result.
-    /// New search-bar code should render SearchApps immediately, then stream in
-    /// SearchFilesAsync results.
-    /// </summary>
     public async Task<IReadOnlyList<DesktopSearchResult>> SearchAsync(
         string query,
         int limit = 8,
@@ -183,9 +171,10 @@ public sealed class DesktopSearchIndexService : IDisposable
         CancellationToken cancellationToken)
     {
         var best = new PriorityQueue<DesktopSearchResult, int>();
+        var candidates = ResolveFileCandidates(normalized);
         var visited = 0;
 
-        foreach (var file in _files.Values)
+        foreach (var file in candidates)
         {
             if ((visited++ & 31) == 0)
                 cancellationToken.ThrowIfCancellationRequested();
@@ -215,6 +204,30 @@ public sealed class DesktopSearchIndexService : IDisposable
             .ToArray();
     }
 
+    private IEnumerable<IndexedTextFile> ResolveFileCandidates(string normalizedQuery)
+    {
+        var compact = NormalizeAlias(normalizedQuery);
+        if (compact.Length > 0)
+        {
+            var prefixLength = Math.Min(MaxFilePrefixLength, compact.Length);
+            for (var length = prefixLength; length >= 1; length--)
+            {
+                var prefix = compact[..length];
+                if (!_filePrefixIndex.TryGetValue(prefix, out var bucket) || bucket.IsEmpty)
+                    continue;
+
+                return bucket.Keys
+                    .Select(path => _files.TryGetValue(path, out var file) ? file : null)
+                    .Where(file => file is not null)
+                    .Select(file => file!);
+            }
+        }
+
+        // Path-token or substring queries may not have a filename prefix bucket;
+        // retain a complete-snapshot fallback on the pool thread for correctness.
+        return _files.Values;
+    }
+
     private static IndexedApp CreateIndexedApp(StartAppItem app)
     {
         var normalizedName = NormalizeAlias(app.Name);
@@ -223,11 +236,8 @@ public sealed class DesktopSearchIndexService : IDisposable
 
         try
         {
-            var converted = Pinyin.GetPinyin(app.Name) ?? string.Empty;
-            var syllables = converted
-                .Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-            pinyin = NormalizeAlias(string.Concat(syllables));
-            initials = NormalizeAlias(string.Concat(syllables.Select(item => item.Length > 0 ? item[0] : '\0')));
+            pinyin = NormalizeAlias(PinyinConvert.GetPinyin(app.Name) ?? string.Empty);
+            initials = NormalizeAlias(PinyinConvert.GetPinyinFirstLetter(app.Name) ?? string.Empty);
         }
         catch
         {
@@ -335,9 +345,7 @@ public sealed class DesktopSearchIndexService : IDisposable
             }
             catch
             {
-                // Directory contents may change while they are being enumerated.
-                // Watchers catch subsequent updates and the next session rebuilds
-                // any entries missed during this pass.
+                // Directory contents can change while they are being enumerated.
             }
         }
     }
@@ -358,10 +366,10 @@ public sealed class DesktopSearchIndexService : IDisposable
             {
                 if (File.Exists(e.FullPath)) TryIndexFile(e.FullPath);
             };
-            watcher.Deleted += (_, e) => _files.TryRemove(e.FullPath, out _);
+            watcher.Deleted += (_, e) => RemoveIndexedFile(e.FullPath);
             watcher.Renamed += (_, e) =>
             {
-                _files.TryRemove(e.OldFullPath, out _);
+                RemoveIndexedFile(e.OldFullPath);
                 if (File.Exists(e.FullPath)) TryIndexFile(e.FullPath);
             };
             watcher.Error += (_, _) =>
@@ -393,16 +401,57 @@ public sealed class DesktopSearchIndexService : IDisposable
             var name = Path.GetFileName(path);
             if (string.IsNullOrWhiteSpace(name)) return;
 
-            _files[path] = new IndexedTextFile(
+            var indexed = new IndexedTextFile(
                 name,
                 path,
                 BuildFileSubtitle(path),
                 NormalizeQuery(name),
-                NormalizeQuery(path));
+                NormalizeQuery(path),
+                NormalizeAlias(name));
+
+            if (_files.TryGetValue(path, out var previous))
+                UnindexFilePrefixes(previous);
+
+            _files[path] = indexed;
+            IndexFilePrefixes(indexed);
         }
         catch
         {
             // Files can disappear or become inaccessible between notifications.
+        }
+    }
+
+    private void RemoveIndexedFile(string path)
+    {
+        if (!_files.TryRemove(path, out var removed)) return;
+        UnindexFilePrefixes(removed);
+    }
+
+    private void IndexFilePrefixes(IndexedTextFile file)
+    {
+        if (string.IsNullOrWhiteSpace(file.CompactName)) return;
+        var max = Math.Min(MaxFilePrefixLength, file.CompactName.Length);
+        for (var length = 1; length <= max; length++)
+        {
+            var prefix = file.CompactName[..length];
+            var bucket = _filePrefixIndex.GetOrAdd(
+                prefix,
+                static _ => new ConcurrentDictionary<string, byte>(StringComparer.OrdinalIgnoreCase));
+            bucket[file.Path] = 0;
+        }
+    }
+
+    private void UnindexFilePrefixes(IndexedTextFile file)
+    {
+        if (string.IsNullOrWhiteSpace(file.CompactName)) return;
+        var max = Math.Min(MaxFilePrefixLength, file.CompactName.Length);
+        for (var length = 1; length <= max; length++)
+        {
+            var prefix = file.CompactName[..length];
+            if (!_filePrefixIndex.TryGetValue(prefix, out var bucket)) continue;
+            bucket.TryRemove(file.Path, out _);
+            if (bucket.IsEmpty)
+                _filePrefixIndex.TryRemove(prefix, out _);
         }
     }
 
@@ -537,5 +586,6 @@ public sealed class DesktopSearchIndexService : IDisposable
         string Path,
         string Subtitle,
         string NormalizedName,
-        string NormalizedPath);
+        string NormalizedPath,
+        string CompactName);
 }
