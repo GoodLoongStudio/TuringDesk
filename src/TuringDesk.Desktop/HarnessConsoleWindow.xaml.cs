@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.IO;
+using System.Text.Json;
 using System.Windows;
 using System.Windows.Input;
 using Microsoft.Web.WebView2.Core;
@@ -9,18 +10,45 @@ namespace TuringDesk.Desktop;
 
 public partial class HarnessConsoleWindow : Window
 {
+    private readonly string? _initialQuery;
     private CancellationTokenSource? _loadCancellation;
+    private RuntimeHostService.RuntimeLease? _runtimeLease;
+    private bool _lifecycleOpened;
+    private bool _prefillAttempted;
 
-    public HarnessConsoleWindow()
+    public HarnessConsoleWindow(string? initialQuery = null)
     {
+        _initialQuery = string.IsNullOrWhiteSpace(initialQuery) ? null : initialQuery.Trim();
         InitializeComponent();
-        Loaded += async (_, _) => await LoadHarnessAsync();
-        Closed += (_, _) =>
+        Loaded += async (_, _) =>
         {
-            _loadCancellation?.Cancel();
-            _loadCancellation?.Dispose();
-            _loadCancellation = null;
+            OpenLifecycle();
+            await LoadHarnessAsync();
         };
+        Closed += (_, _) => CloseLifecycle();
+    }
+
+    private void OpenLifecycle()
+    {
+        if (_lifecycleOpened) return;
+        _lifecycleOpened = true;
+        RuntimeHostService.NotifyWorkbenchOpened();
+        HarnessWebUiService.NotifyConsoleOpened();
+    }
+
+    private void CloseLifecycle()
+    {
+        _loadCancellation?.Cancel();
+        _loadCancellation?.Dispose();
+        _loadCancellation = null;
+
+        _runtimeLease?.Dispose();
+        _runtimeLease = null;
+
+        if (!_lifecycleOpened) return;
+        _lifecycleOpened = false;
+        RuntimeHostService.NotifyWorkbenchClosed();
+        HarnessWebUiService.NotifyConsoleClosed();
     }
 
     private async Task LoadHarnessAsync()
@@ -28,20 +56,22 @@ public partial class HarnessConsoleWindow : Window
         _loadCancellation?.Cancel();
         _loadCancellation?.Dispose();
         _loadCancellation = new CancellationTokenSource();
+        var cancellationToken = _loadCancellation.Token;
 
         LoadingPanel.Visibility = Visibility.Visible;
         HarnessView.Visibility = Visibility.Collapsed;
         LoadingTitle.Text = "正在启动 Agent 控制台";
-        LoadingDetail.Text = "正在启动本机 DeepSeek Harness WebUI…";
+        LoadingDetail.Text = "按需启动 Runtime 与本机 DeepSeek Harness WebUI…";
         LoadingProgress.Visibility = Visibility.Visible;
         RetryButton.Visibility = Visibility.Collapsed;
 
         try
         {
-            var url = await HarnessWebUiService.EnsureRunningAsync(_loadCancellation.Token);
+            _runtimeLease ??= await RuntimeHostService.AcquireAsync(
+                RuntimeStartReason.HarnessConsole,
+                cancellationToken);
+            var url = await HarnessWebUiService.EnsureRunningAsync(cancellationToken);
 
-            // MSI installs the application under Program Files. Keep Chromium/WebView2
-            // state in the user's writable profile rather than beside the executable.
             var webViewProfile = Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                 "TuringDesk",
@@ -76,8 +106,6 @@ public partial class HarnessConsoleWindow : Window
         core.Settings.IsStatusBarEnabled = false;
         core.Settings.IsZoomControlEnabled = false;
 
-        // Match the native settings center instead of inheriting the OS/app dark
-        // preference. Harness can still provide its own explicit theme controls.
         try
         {
             core.Profile.PreferredColorScheme = CoreWebView2PreferredColorScheme.Light;
@@ -109,7 +137,7 @@ public partial class HarnessConsoleWindow : Window
         OpenExternal(uri);
     }
 
-    private void Core_NavigationCompleted(object? sender, CoreWebView2NavigationCompletedEventArgs e)
+    private async void Core_NavigationCompleted(object? sender, CoreWebView2NavigationCompletedEventArgs e)
     {
         if (!e.IsSuccess)
         {
@@ -124,6 +152,45 @@ public partial class HarnessConsoleWindow : Window
 
         LoadingPanel.Visibility = Visibility.Collapsed;
         HarnessView.Visibility = Visibility.Visible;
+        RuntimeHostService.MarkActivity(RuntimeStartReason.HarnessConsole);
+        await TryPrefillInitialQueryAsync();
+    }
+
+    private async Task TryPrefillInitialQueryAsync()
+    {
+        if (_prefillAttempted || string.IsNullOrWhiteSpace(_initialQuery) || HarnessView.CoreWebView2 is null)
+            return;
+
+        _prefillAttempted = true;
+        var encoded = JsonSerializer.Serialize(_initialQuery);
+        var script = $$"""
+(() => {
+  const query = {{encoded}};
+  const element = document.querySelector('textarea, input[type="text"], [contenteditable="true"]');
+  if (!element) return false;
+  element.focus();
+  if (element instanceof HTMLTextAreaElement || element instanceof HTMLInputElement) {
+    const proto = element instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+    const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
+    if (setter) setter.call(element, query); else element.value = query;
+  } else {
+    element.textContent = query;
+  }
+  element.dispatchEvent(new Event('input', { bubbles: true }));
+  element.dispatchEvent(new Event('change', { bubbles: true }));
+  return true;
+})()
+""";
+
+        try
+        {
+            _ = await HarnessView.CoreWebView2.ExecuteScriptAsync(script);
+        }
+        catch
+        {
+            // WebUI DOM can change between Harness versions. The workbench is
+            // still open and usable even if best-effort query prefill misses.
+        }
     }
 
     private void Core_NewWindowRequested(object? sender, CoreWebView2NewWindowRequestedEventArgs e)
@@ -166,6 +233,7 @@ public partial class HarnessConsoleWindow : Window
     {
         if (HarnessView.CoreWebView2 is not null)
         {
+            RuntimeHostService.MarkActivity(RuntimeStartReason.HarnessConsole);
             HarnessView.CoreWebView2.Reload();
             return;
         }
