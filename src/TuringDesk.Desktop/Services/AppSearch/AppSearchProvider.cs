@@ -50,13 +50,18 @@ internal sealed class AppSearchProvider : IDisposable
         if (snapshot.Length == 0) return Array.Empty<AppSearchHit>();
 
         var ranked = snapshot
-            .Select(entry => new AppSearchHit(
-                entry.Name,
-                entry.Target,
-                entry.Category,
-                entry.Source,
-                AppSearchMatcher.Score(query, entry) + SourcePriority(entry.Source)))
-            .Where(hit => hit.Score > 0)
+            .Select(entry => new
+            {
+                Entry = entry,
+                MatchScore = AppSearchMatcher.Score(query, entry)
+            })
+            .Where(candidate => candidate.MatchScore > 0)
+            .Select(candidate => new AppSearchHit(
+                candidate.Entry.Name,
+                candidate.Entry.Target,
+                candidate.Entry.Category,
+                candidate.Entry.Source,
+                candidate.MatchScore + SourcePriority(candidate.Entry.Source)))
             .OrderByDescending(hit => hit.Score)
             .ThenBy(hit => hit.Name, StringComparer.CurrentCultureIgnoreCase);
 
