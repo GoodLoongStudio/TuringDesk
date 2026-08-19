@@ -85,11 +85,30 @@ public static class ShellSurfaceCatalog
             .ToArray();
     }
 
-    public static IReadOnlyList<StartAppItem> LoadStartApps()
+    /// <summary>
+    /// Enumerate Start Menu entries. Search callers pass includeIcons:false so the
+    /// always-resident RAM index does not decode hundreds of shell bitmaps that its
+    /// compact result template never renders. Existing richer surfaces keep the
+    /// default true behavior.
+    /// </summary>
+    public static IReadOnlyList<StartAppItem> LoadStartApps(bool includeIcons = true)
     {
         var userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         var documents = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
         var downloads = Path.Combine(userProfile, "Downloads");
+
+        ImageSource? SettingsIcon() => includeIcons
+            ? ShellIconService.GetStockIcon(ShellStockIconId.Settings, large: false)
+              ?? ShellIconService.GetSystemExecutableIcon("SystemSettings.exe", large: false)
+            : null;
+        ImageSource? FolderIcon(string path) => includeIcons
+            ? ShellIconService.GetIcon(path, large: false)
+              ?? ShellIconService.GetStockIcon(ShellStockIconId.Folder, large: false)
+            : null;
+        ImageSource? AppIcon(string path) => includeIcons
+            ? ShellIconService.GetIcon(path, large: false)
+              ?? ShellIconService.GetStockIcon(ShellStockIconId.Application, large: false)
+            : null;
 
         var items = new Dictionary<string, StartAppItem>(StringComparer.CurrentCultureIgnoreCase)
         {
@@ -98,32 +117,28 @@ public static class ShellSurfaceCatalog
                 "ms-settings:",
                 "⚙",
                 "系统",
-                ShellIconService.GetStockIcon(ShellStockIconId.Settings, large: false)
-                    ?? ShellIconService.GetSystemExecutableIcon("SystemSettings.exe", large: false),
+                SettingsIcon(),
                 "Settings"),
             ["文件"] = new(
                 "文件",
                 userProfile,
                 "▣",
                 "系统",
-                ShellIconService.GetIcon(userProfile, large: false)
-                    ?? ShellIconService.GetStockIcon(ShellStockIconId.Folder, large: false),
+                FolderIcon(userProfile),
                 "Folder"),
             ["文档"] = new(
                 "文档",
                 documents,
                 "≡",
                 "文件夹",
-                ShellIconService.GetIcon(documents, large: false)
-                    ?? ShellIconService.GetStockIcon(ShellStockIconId.Folder, large: false),
+                FolderIcon(documents),
                 "Folder"),
             ["下载"] = new(
                 "下载",
                 downloads,
                 "↓",
                 "文件夹",
-                ShellIconService.GetIcon(downloads, large: false)
-                    ?? ShellIconService.GetStockIcon(ShellStockIconId.Folder, large: false),
+                FolderIcon(downloads),
                 "Folder")
         };
 
@@ -155,8 +170,7 @@ public static class ShellSurfaceCatalog
                         file,
                         "◆",
                         category,
-                        ShellIconService.GetIcon(file, large: false)
-                            ?? ShellIconService.GetStockIcon(ShellStockIconId.Application, large: false),
+                        AppIcon(file),
                         "App"));
                 }
             }
