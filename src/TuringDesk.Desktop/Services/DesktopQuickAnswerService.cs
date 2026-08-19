@@ -19,10 +19,10 @@ public sealed record DesktopQuickAnswerResult(
     string Message);
 
 /// <summary>
-/// Level 3 search-bar answers. This service is intentionally forbidden from
-/// touching RuntimeHostService/Harness. Local arithmetic stays in-process;
-/// translation and tiny explanations call the selected OpenAI-compatible model
-/// endpoint directly with a very small response budget.
+/// Level 3 search-bar answers. This service is intentionally isolated from the
+/// heavy Agent process stack. Local arithmetic stays in-process; translation and
+/// tiny explanations call the selected OpenAI-compatible model endpoint directly
+/// with a very small response budget.
 /// </summary>
 public sealed class DesktopQuickAnswerService
 {
@@ -52,8 +52,6 @@ public sealed class DesktopQuickAnswerService
                 calculation);
         }
 
-        // Long prose, multi-step instructions and anything outside the explicit
-        // quick-intent allow-list are not sent to a model from the desktop bar.
         if (text.Length > 180)
             return Deep(text);
 
