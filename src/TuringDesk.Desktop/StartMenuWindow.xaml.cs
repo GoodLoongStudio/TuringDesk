@@ -66,7 +66,7 @@ public partial class StartMenuWindow : Window
     private async Task LoadCatalogAsync()
     {
         AppCountText.Text = "正在建立应用索引…";
-        var apps = await Task.Run(ShellSurfaceCatalog.LoadStartApps);
+        var apps = await Task.Run(() => ShellSurfaceCatalog.LoadStartApps());
         _allApps = apps;
         _catalogLoaded = true;
         ApplyFilter();
