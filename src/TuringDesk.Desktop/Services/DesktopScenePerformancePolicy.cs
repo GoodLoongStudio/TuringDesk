@@ -66,9 +66,6 @@ internal static class DesktopScenePerformancePolicy
         var style = GetWindowStyle(foreground);
         var popup = (style & WsPopup) != 0;
 
-        // A normal maximized desktop window is not fullscreen just because its
-        // invisible resize border reaches monitor bounds. Borderless/exclusive
-        // windows are generally not WS_MAXIMIZE state and/or use WS_POPUP.
         var coversMonitor = Covers(bounds, extended, tolerance) || Covers(bounds, windowRect, tolerance);
         var fullscreen = coversMonitor && (!maximized || popup);
 
@@ -135,10 +132,10 @@ internal static class DesktopScenePerformancePolicy
     {
         try
         {
-            return DwmGetWindowAttribute(
+            return DwmGetWindowAttributeInt(
                        hwnd,
                        DwmwaCloaked,
-                       out int cloaked,
+                       out var cloaked,
                        sizeof(int)) == 0 && cloaked != 0;
         }
         catch
