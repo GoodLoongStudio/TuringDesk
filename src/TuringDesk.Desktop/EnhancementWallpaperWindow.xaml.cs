@@ -40,10 +40,6 @@ public partial class EnhancementWallpaperWindow : Window
         _playbackSettings = _playbackStore.Load();
         InitializeComponent();
 
-        // WPF Window coordinates are DIPs, while DisplayManager and Explorer host
-        // geometry are physical pixels. Use DIPs only for the pre-HWND WPF state;
-        // after SourceInitialized all wallpaper positioning is done by Win32 using
-        // the monitor's exact physical pixel rectangle.
         WindowStartupLocation = WindowStartupLocation.Manual;
         Left = monitor.Left / monitor.ScaleX;
         Top = monitor.Top / monitor.ScaleY;
@@ -63,11 +59,6 @@ public partial class EnhancementWallpaperWindow : Window
     public string MonitorId => _monitor.Id;
     public string MonitorLabel => _monitor.IsPrimary ? "主显示器" : $"显示器 {_monitor.DeviceName}";
 
-    /// <summary>
-    /// Rebinds this existing renderer to fresh monitor geometry without destroying
-    /// its Scene/WebView/GPU state. Stable monitor IDs are device names rather than
-    /// HMONITOR values, so DPI/resolution changes can update in place.
-    /// </summary>
     internal void UpdateMonitor(DisplayMonitor monitor, bool forceReattach = false)
     {
         if (!string.Equals(_monitor.Id, monitor.Id, StringComparison.OrdinalIgnoreCase))
@@ -113,9 +104,6 @@ public partial class EnhancementWallpaperWindow : Window
         _source?.AddHook(WndProc);
         ShellSettingsStore.SettingsChanged += OnShellSettingsChanged;
 
-        // Move the top-level HWND to the exact physical monitor before reparenting.
-        // This lets Per-Monitor DPI settle on the correct output before WPF creates
-        // its render target/back buffer for the Explorer child.
         DisplayManager.PositionWindow(this, _monitor);
         _attached = ExplorerDesktopHost.TryAttach(
             _windowHandle,
@@ -136,9 +124,8 @@ public partial class EnhancementWallpaperWindow : Window
     {
         _hostHealthTimer.Stop();
         ShellSettingsStore.SettingsChanged -= OnShellSettingsChanged;
-        _sceneLoadCancellation?.Cancel();
-        _sceneLoadCancellation?.Dispose();
-        _sceneLoadCancellation = null;
+        var activeLoad = Interlocked.Exchange(ref _sceneLoadCancellation, null);
+        try { activeLoad?.Cancel(); } catch (ObjectDisposedException) { }
         _source?.RemoveHook(WndProc);
         _source = null;
         ExplorerDesktopHost.InvalidateAttachment(_windowHandle);
@@ -156,8 +143,6 @@ public partial class EnhancementWallpaperWindow : Window
                 QueueMonitorRefresh(forceReattach: true, "WM_DISPLAYCHANGE");
                 break;
             case WmSettingChange:
-                // Windows wallpaper/theme and work-area changes can rebuild WorkerW
-                // without changing monitor resolution.
                 QueueMonitorRefresh(forceReattach: true, "WM_SETTINGCHANGE");
                 break;
         }
@@ -201,8 +186,6 @@ public partial class EnhancementWallpaperWindow : Window
         _maintenanceRunning = true;
         try
         {
-            // Refresh geometry in-place even when no message reached this child.
-            // This is a cheap fallback for driver-specific display transitions.
             var freshMonitor = DisplayManager.Find(_monitor.Id);
             if (freshMonitor is not null)
                 UpdateMonitor(freshMonitor);
@@ -234,8 +217,6 @@ public partial class EnhancementWallpaperWindow : Window
     {
         if (_windowHandle == IntPtr.Zero) return;
 
-        // IsAttached validates the complete Explorer generation, not just the parent
-        // class. Resize also verifies the resulting physical screen rectangle.
         if (ExplorerDesktopHost.IsAttached(_windowHandle))
         {
             var healthy = ExplorerDesktopHost.ResizeToDesktopRect(
@@ -271,8 +252,6 @@ public partial class EnhancementWallpaperWindow : Window
         }
         else if (IsVisible)
         {
-            // Never leave a detached wallpaper HWND floating as an application
-            // window while Explorer is rebuilding its desktop hierarchy.
             Hide();
         }
 
@@ -352,12 +331,9 @@ public partial class EnhancementWallpaperWindow : Window
             return;
 
         var version = ++_sceneLoadVersion;
-        var previousCancellation = Interlocked.Exchange(
-            ref _sceneLoadCancellation,
-            new CancellationTokenSource());
-        previousCancellation?.Cancel();
-        previousCancellation?.Dispose();
-        var cancellation = _sceneLoadCancellation!;
+        var cancellation = new CancellationTokenSource();
+        var previousCancellation = Interlocked.Exchange(ref _sceneLoadCancellation, cancellation);
+        try { previousCancellation?.Cancel(); } catch (ObjectDisposedException) { }
 
         try
         {
@@ -387,11 +363,8 @@ public partial class EnhancementWallpaperWindow : Window
         }
         finally
         {
-            if (ReferenceEquals(_sceneLoadCancellation, cancellation))
-            {
-                _sceneLoadCancellation = null;
-                cancellation.Dispose();
-            }
+            _ = Interlocked.CompareExchange(ref _sceneLoadCancellation, null, cancellation);
+            cancellation.Dispose();
         }
     }
 
