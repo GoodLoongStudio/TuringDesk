@@ -64,7 +64,7 @@ jobs:
 
           $searchXaml = Get-Content "src/TuringDesk.Desktop/DesktopSearchBarWindow.xaml" -Raw
           if ($searchXaml -match 'Topmost="True"') { throw "Desktop search must stay below normal application windows" }
-          foreach ($marker in @('x:Name="ModelSelector"', 'x:Name="SearchResultsList"', 'x:Name="DeepProcessButton"', 'Text="设置"', 'Text="语音"')) {
+          foreach ($marker in @('x:Name="ModelSelector"'.Replace('\',''), 'x:Name="SearchResultsList"'.Replace('\',''), 'x:Name="DeepProcessButton"'.Replace('\',''), 'Text="设置"'.Replace('\',''), 'Text="语音"'.Replace('\',''))) {
             if ($searchXaml -notmatch [regex]::Escape($marker)) { throw "Desktop search XAML contract missing: $marker" }
           }
 
