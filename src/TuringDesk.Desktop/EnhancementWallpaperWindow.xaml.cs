@@ -8,7 +8,11 @@ namespace TuringDesk.Desktop;
 
 public partial class EnhancementWallpaperWindow : Window
 {
-    private readonly DisplayMonitor _monitor;
+    private const int WmSettingChange = 0x001A;
+    private const int WmDisplayChange = 0x007E;
+    private const int WmDpiChanged = 0x02E0;
+
+    private DisplayMonitor _monitor;
     private readonly ShellSettingsStore _settingsStore = new();
     private readonly SceneCatalogService _sceneCatalog = new();
     private readonly DesktopPlaybackSettingsStore _playbackStore = new();
@@ -17,14 +21,17 @@ public partial class EnhancementWallpaperWindow : Window
 
     private ShellSettings _settings;
     private DesktopPlaybackSettings _playbackSettings;
+    private HwndSource? _source;
     private IntPtr _windowHandle;
     private bool _attached;
+    private bool _maintenanceRunning;
     private string? _loadedSceneId;
     private ApplicationRuleAction _lastPolicyAction = ApplicationRuleAction.KeepRunning;
     private string? _lastPolicyTarget;
     private DateTimeOffset _playlistChangedAt = DateTimeOffset.UtcNow;
     private int _playlistIndex;
     private int _sceneLoadVersion;
+    private CancellationTokenSource? _sceneLoadCancellation;
 
     public EnhancementWallpaperWindow(DisplayMonitor monitor)
     {
@@ -33,17 +40,18 @@ public partial class EnhancementWallpaperWindow : Window
         _playbackSettings = _playbackStore.Load();
         InitializeComponent();
 
-        Left = monitor.Left;
-        Top = monitor.Top;
-        Width = Math.Max(1, monitor.Width);
-        Height = Math.Max(1, monitor.Height);
+        // WPF Window coordinates are DIPs, while DisplayManager and Explorer host
+        // geometry are physical pixels. Use DIPs only for the pre-HWND WPF state;
+        // after SourceInitialized all wallpaper positioning is done by Win32 using
+        // the monitor's exact physical pixel rectangle.
+        WindowStartupLocation = WindowStartupLocation.Manual;
+        Left = monitor.Left / monitor.ScaleX;
+        Top = monitor.Top / monitor.ScaleY;
+        Width = Math.Max(1, monitor.Width / monitor.ScaleX);
+        Height = Math.Max(1, monitor.Height / monitor.ScaleY);
 
-        // Do not set Window.Opacity=0 here. WPF may switch the HWND into layered
-        // composition when opacity changes; reparenting that HWND into Explorer's
-        // WorkerW can then succeed while the WPF render target remains invisible.
-        // SourceInitialized runs before the first visible paint, so attach there
-        // and simply hide the window if Explorer is not ready yet.
-        Renderer.PlaybackError += message => ShellNotificationService.Publish("桌面场景播放失败", $"{MonitorLabel}: {message}", "warning");
+        Renderer.PlaybackError += message =>
+            ShellNotificationService.Publish("桌面场景播放失败", $"{MonitorLabel}: {message}", "warning");
         SourceInitialized += OnSourceInitialized;
         Closed += OnClosed;
 
@@ -53,22 +61,71 @@ public partial class EnhancementWallpaperWindow : Window
 
     public bool IsAttached => _attached;
     public string MonitorId => _monitor.Id;
-    public string MonitorLabel => _monitor.IsPrimary ? "主显示器" : $"显示器 {_monitor.Id}";
+    public string MonitorLabel => _monitor.IsPrimary ? "主显示器" : $"显示器 {_monitor.DeviceName}";
+
+    /// <summary>
+    /// Rebinds this existing renderer to fresh monitor geometry without destroying
+    /// its Scene/WebView/GPU state. Stable monitor IDs are device names rather than
+    /// HMONITOR values, so DPI/resolution changes can update in place.
+    /// </summary>
+    internal void UpdateMonitor(DisplayMonitor monitor, bool forceReattach = false)
+    {
+        if (!string.Equals(_monitor.Id, monitor.Id, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("Cannot rebind a wallpaper window to a different monitor identity.");
+
+        var geometryChanged = _monitor.Left != monitor.Left ||
+                              _monitor.Top != monitor.Top ||
+                              _monitor.Width != monitor.Width ||
+                              _monitor.Height != monitor.Height ||
+                              _monitor.DpiX != monitor.DpiX ||
+                              _monitor.DpiY != monitor.DpiY ||
+                              _monitor.IsPrimary != monitor.IsPrimary;
+        _monitor = monitor;
+
+        if (_windowHandle == IntPtr.Zero) return;
+        if (forceReattach)
+        {
+            ExplorerDesktopHost.InvalidateAttachment(_windowHandle);
+            _attached = false;
+        }
+
+        if (geometryChanged || forceReattach)
+        {
+            MaintainExplorerAttachment();
+            RequestFreshRender();
+            ReportProbe();
+        }
+    }
+
+    internal void ForceExplorerReattach(string reason)
+    {
+        if (_windowHandle == IntPtr.Zero) return;
+        SceneEngineTrace.Info("explorer.rebind", $"monitor={MonitorId} reason={reason}");
+        ExplorerDesktopHost.InvalidateAttachment(_windowHandle);
+        _attached = false;
+        MaintainExplorerAttachment();
+    }
 
     private void OnSourceInitialized(object? sender, EventArgs e)
     {
         _windowHandle = new WindowInteropHelper(this).Handle;
+        _source = HwndSource.FromHwnd(_windowHandle);
+        _source?.AddHook(WndProc);
         ShellSettingsStore.SettingsChanged += OnShellSettingsChanged;
 
-        _attached = ExplorerDesktopHost.TryAttach(_windowHandle, _monitor.Left, _monitor.Top, _monitor.Width, _monitor.Height);
-        if (!_attached)
-        {
-            Hide();
-        }
-        else
-        {
-            RequestFreshRender();
-        }
+        // Move the top-level HWND to the exact physical monitor before reparenting.
+        // This lets Per-Monitor DPI settle on the correct output before WPF creates
+        // its render target/back buffer for the Explorer child.
+        DisplayManager.PositionWindow(this, _monitor);
+        _attached = ExplorerDesktopHost.TryAttach(
+            _windowHandle,
+            _monitor.Left,
+            _monitor.Top,
+            _monitor.Width,
+            _monitor.Height);
+
+        if (!_attached) Hide();
+        else RequestFreshRender();
 
         ReportProbe();
         _ = RefreshBaseSceneAsync(force: true);
@@ -79,7 +136,53 @@ public partial class EnhancementWallpaperWindow : Window
     {
         _hostHealthTimer.Stop();
         ShellSettingsStore.SettingsChanged -= OnShellSettingsChanged;
+        _sceneLoadCancellation?.Cancel();
+        _sceneLoadCancellation?.Dispose();
+        _sceneLoadCancellation = null;
+        _source?.RemoveHook(WndProc);
+        _source = null;
+        ExplorerDesktopHost.InvalidateAttachment(_windowHandle);
         Renderer.Stop();
+    }
+
+    private IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
+    {
+        switch (msg)
+        {
+            case WmDpiChanged:
+                QueueMonitorRefresh(forceReattach: false, "WM_DPICHANGED");
+                break;
+            case WmDisplayChange:
+                QueueMonitorRefresh(forceReattach: true, "WM_DISPLAYCHANGE");
+                break;
+            case WmSettingChange:
+                // Windows wallpaper/theme and work-area changes can rebuild WorkerW
+                // without changing monitor resolution.
+                QueueMonitorRefresh(forceReattach: true, "WM_SETTINGCHANGE");
+                break;
+        }
+
+        return IntPtr.Zero;
+    }
+
+    private void QueueMonitorRefresh(bool forceReattach, string reason)
+    {
+        Dispatcher.BeginInvoke(new Action(() =>
+        {
+            var fresh = DisplayManager.Find(_monitor.Id);
+            if (fresh is null)
+            {
+                _attached = false;
+                ExplorerDesktopHost.InvalidateAttachment(_windowHandle);
+                if (IsVisible) Hide();
+                return;
+            }
+
+            SceneEngineTrace.Info(
+                "display.rebind",
+                $"reason={reason} monitor={fresh.Id} rect={fresh.Left},{fresh.Top},{fresh.Width}x{fresh.Height} dpi={fresh.DpiX}x{fresh.DpiY}");
+            UpdateMonitor(fresh, forceReattach);
+        }), DispatcherPriority.Send);
     }
 
     private void OnShellSettingsChanged()
@@ -87,9 +190,6 @@ public partial class EnhancementWallpaperWindow : Window
         Dispatcher.BeginInvoke(new Action(() =>
         {
             _settings = _settingsStore.Load();
-            // Applying a scene also disables an active playlist/profile. Reload
-            // playback state here so the old in-memory policy cannot immediately
-            // override the scene the user just selected.
             _playbackSettings = _playbackStore.Load();
             _ = ApplyPlaybackPolicyAsync(forceProfileRefresh: true);
         }), DispatcherPriority.Background);
@@ -97,18 +197,28 @@ public partial class EnhancementWallpaperWindow : Window
 
     private async Task MaintainDesktopEngineAsync()
     {
-        MaintainExplorerAttachment();
+        if (_maintenanceRunning) return;
+        _maintenanceRunning = true;
+        try
+        {
+            // Refresh geometry in-place even when no message reached this child.
+            // This is a cheap fallback for driver-specific display transitions.
+            var freshMonitor = DisplayManager.Find(_monitor.Id);
+            if (freshMonitor is not null)
+                UpdateMonitor(freshMonitor);
 
-        // The library/control UI can be opened by another TuringDesk process.
-        // Static SettingsChanged events do not cross process boundaries, so the
-        // desktop host must also observe the persisted settings. This makes an
-        // "Apply to desktop" action deterministic even when a background instance
-        // owns the Explorer wallpaper window.
-        var latestSettings = _settingsStore.Load();
-        var appearanceChanged = AppearanceRequiresReload(_settings.Appearance, latestSettings.Appearance);
-        _settings = latestSettings;
-        _playbackSettings = _playbackStore.Load();
-        await ApplyPlaybackPolicyAsync(forceProfileRefresh: appearanceChanged);
+            MaintainExplorerAttachment();
+
+            var latestSettings = _settingsStore.Load();
+            var appearanceChanged = AppearanceRequiresReload(_settings.Appearance, latestSettings.Appearance);
+            _settings = latestSettings;
+            _playbackSettings = _playbackStore.Load();
+            await ApplyPlaybackPolicyAsync(forceProfileRefresh: appearanceChanged);
+        }
+        finally
+        {
+            _maintenanceRunning = false;
+        }
     }
 
     private static bool AppearanceRequiresReload(ShellAppearanceSettings previous, ShellAppearanceSettings current) =>
@@ -124,11 +234,8 @@ public partial class EnhancementWallpaperWindow : Window
     {
         if (_windowHandle == IntPtr.Zero) return;
 
-        // Parent equality alone is not enough. Explorer can rebuild/reorder the
-        // wallpaper surface while our HWND remains a perfectly valid child. In
-        // that state SetParent/IsAttached still say "success" but the old Windows
-        // wallpaper covers TuringDesk. ResizeToDesktopRect performs the stronger
-        // parent + visible + non-zero rect + WorkerW top-child verification.
+        // IsAttached validates the complete Explorer generation, not just the parent
+        // class. Resize also verifies the resulting physical screen rectangle.
         if (ExplorerDesktopHost.IsAttached(_windowHandle))
         {
             var healthy = ExplorerDesktopHost.ResizeToDesktopRect(
@@ -146,9 +253,6 @@ public partial class EnhancementWallpaperWindow : Window
                 return;
             }
 
-            // Never keep the previous false-positive state. Fall through in the
-            // same timer tick so TryAttach can promote the HWND or choose another
-            // WorkerW/Progman strategy immediately.
             _attached = false;
             ReportProbe();
         }
@@ -167,8 +271,8 @@ public partial class EnhancementWallpaperWindow : Window
         }
         else if (IsVisible)
         {
-            // If Explorer restarted or the host vanished, do not leave a detached
-            // WPF window floating above normal applications while we wait to retry.
+            // Never leave a detached wallpaper HWND floating as an application
+            // window while Explorer is rebuilding its desktop hierarchy.
             Hide();
         }
 
@@ -237,29 +341,57 @@ public partial class EnhancementWallpaperWindow : Window
         await RefreshBaseSceneAsync(force: forceProfileRefresh);
     }
 
-    private Task RefreshBaseSceneAsync(bool force) => LoadSceneByIdAsync(_settings.Appearance.SceneId, force);
+    private Task RefreshBaseSceneAsync(bool force) =>
+        LoadSceneByIdAsync(_settings.Appearance.SceneId, force);
 
     private async Task LoadSceneByIdAsync(string? sceneId, bool force)
     {
         var scene = _sceneCatalog.Find(sceneId) ?? _sceneCatalog.Find("builtin:aurora");
         if (scene is null) return;
-        if (!force && string.Equals(_loadedSceneId, scene.Id, StringComparison.OrdinalIgnoreCase) && !Renderer.IsStopped) return;
+        if (!force && string.Equals(_loadedSceneId, scene.Id, StringComparison.OrdinalIgnoreCase) && !Renderer.IsStopped)
+            return;
 
         var version = ++_sceneLoadVersion;
+        var previousCancellation = Interlocked.Exchange(
+            ref _sceneLoadCancellation,
+            new CancellationTokenSource());
+        previousCancellation?.Cancel();
+        previousCancellation?.Dispose();
+        var cancellation = _sceneLoadCancellation!;
+
         try
         {
-            await Renderer.LoadAsync(scene, _settings.Appearance);
+            await Renderer.LoadAsync(scene, _settings.Appearance, cancellation.Token);
+            cancellation.Token.ThrowIfCancellationRequested();
             if (version != _sceneLoadVersion) return;
+
             _loadedSceneId = scene.Id;
-            Renderer.SetVolume(_playbackSettings.GlobalVolume, scene.Muted || _playbackSettings.GlobalVolume <= 0);
+            Renderer.SetVolume(
+                _playbackSettings.GlobalVolume,
+                scene.Muted || _playbackSettings.GlobalVolume <= 0);
             RequestFreshRender();
             ReportProbe();
+        }
+        catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+        {
+            // Superseded scene load. The next load owns renderer state.
         }
         catch (Exception error)
         {
             if (version != _sceneLoadVersion) return;
             ReportProbe();
-            ShellNotificationService.Publish("无法加载桌面场景", $"{MonitorLabel}: {error.Message}", "warning");
+            ShellNotificationService.Publish(
+                "无法加载桌面场景",
+                $"{MonitorLabel}: {error.Message}",
+                "warning");
+        }
+        finally
+        {
+            if (ReferenceEquals(_sceneLoadCancellation, cancellation))
+            {
+                _sceneLoadCancellation = null;
+                cancellation.Dispose();
+            }
         }
     }
 
@@ -294,23 +426,18 @@ public partial class EnhancementWallpaperWindow : Window
             string.Equals(item.Id, profileId, StringComparison.OrdinalIgnoreCase));
         if (profile is null) return;
 
-        // Match stable monitor id first; "primary" is a portable alias that still
-        // follows the user's primary display when hardware/topology changes.
         var assignment = profile.Monitors.FirstOrDefault(item =>
                              string.Equals(item.MonitorKey, _monitor.Id, StringComparison.OrdinalIgnoreCase))
                          ?? (_monitor.IsPrimary
-                             ? profile.Monitors.FirstOrDefault(item => string.Equals(item.MonitorKey, "primary", StringComparison.OrdinalIgnoreCase))
+                             ? profile.Monitors.FirstOrDefault(item =>
+                                 string.Equals(item.MonitorKey, "primary", StringComparison.OrdinalIgnoreCase))
                              : null);
         if (assignment is null) return;
 
         if (!string.IsNullOrWhiteSpace(assignment.PlaylistId))
-        {
             await PlayPlaylistAsync(assignment.PlaylistId, force);
-        }
         else if (!string.IsNullOrWhiteSpace(assignment.SceneId))
-        {
             await LoadSceneByIdAsync(assignment.SceneId, force);
-        }
     }
 
     private void ReportProbe()
