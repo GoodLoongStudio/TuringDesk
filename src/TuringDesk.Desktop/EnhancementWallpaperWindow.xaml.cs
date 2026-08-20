@@ -52,7 +52,7 @@ public partial class EnhancementWallpaperWindow : Window
         SourceInitialized += OnSourceInitialized;
         Closed += OnClosed;
 
-        _hostHealthTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(3) };
+        _hostHealthTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
         _hostHealthTimer.Tick += async (_, _) => await MaintainDesktopEngineAsync();
     }
 

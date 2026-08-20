@@ -1,7 +1,9 @@
 using System.Globalization;
+using System.Net.Http;
+using System.Net.Http.Headers;
+using System.Net.Http.Json;
+using System.Text.Json;
 using System.Text.RegularExpressions;
-using OpenAI;
-using OpenAI.Chat;
 
 namespace TuringDesk.Desktop.Services;
 
@@ -19,9 +21,9 @@ public sealed record DesktopQuickAnswerResult(
 
 /// <summary>
 /// Level 3 of the desktop search stack: a persistent, tool-free CLI-style AI chat.
-/// Uses the official OpenAI .NET SDK with custom Base URL support for any
-/// OpenAI-compatible provider (DeepSeek, Ollama, LM Studio, etc.).
-/// Does NOT start Node, Harness, or any external process.
+/// Level 1 is application search, Level 2 is Everything file search, and Level 4
+/// is Harness. Ordinary model/network errors stay in Level 3; Harness is offered
+/// only when the model explicitly says the request needs local tools/Agent work.
 /// </summary>
 public sealed class DesktopQuickAnswerService
 {
@@ -32,6 +34,11 @@ public sealed class DesktopQuickAnswerService
     private static readonly Regex FormulaPattern = new(
         @"^[\s=0-9\.\+\-\*\/\%\^\(\)]+$",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+    private static readonly HttpClient Http = new()
+    {
+        Timeout = TimeSpan.FromSeconds(25)
+    };
 
     private readonly object _historyGate = new();
     private readonly List<ChatTurn> _history = new();
@@ -64,7 +71,7 @@ public sealed class DesktopQuickAnswerService
             return new DesktopQuickAnswerResult(
                 DesktopQuickAnswerDisposition.RequiresDeepProcessing,
                 "CLI 无法处理这么长的输入",
-                "这段内容超过了常驻 CLI 的单次输入范围。需要更大的工作上下文时再升级到 Harness。");
+                "这段内容超过了常驻 CLI 的单次输入范围。需要更大的工作上下文时再升级到 Harness。" );
         }
 
         if (model is null || !model.IsAvailable || model.Settings is null)
@@ -72,7 +79,7 @@ public sealed class DesktopQuickAnswerService
             return new DesktopQuickAnswerResult(
                 DesktopQuickAnswerDisposition.RequiresModel,
                 "CLI 需要 AI 模型",
-                "请先配置一个可用模型。应用搜索、文件搜索和本地计算仍然可以使用。");
+                "请先配置一个可用模型。应用搜索、文件搜索和本地计算仍然可以使用。" );
         }
 
         var settings = model.Settings;
@@ -81,20 +88,22 @@ public sealed class DesktopQuickAnswerService
             return new DesktopQuickAnswerResult(
                 DesktopQuickAnswerDisposition.RequiresModel,
                 "模型配置不完整",
-                "请检查 Base URL 和模型 ID。普通对话不会因此自动启动 Harness。");
+                "请检查 Base URL 和模型 ID。普通对话不会因此自动启动 Harness。" );
         }
 
         var modelKey = $"{settings.ProviderId}|{settings.BaseUrl}|{settings.Model}";
         EnsureConversationModel(modelKey);
         var intent = Classify(text);
         var systemPrompt = BuildSystemPrompt(intent);
+        var history = SnapshotHistory();
 
         try
         {
-            var reply = await CallChatAsync(
+            var reply = await CallCompatibleChatAsync(
                 settings,
                 model.Credential,
                 systemPrompt,
+                history,
                 text,
                 intent == QuickIntent.Translate ? 512 : 1400,
                 cancellationToken).ConfigureAwait(false);
@@ -124,10 +133,12 @@ public sealed class DesktopQuickAnswerService
         }
         catch (Exception error)
         {
+            // A transport/configuration failure is not evidence that the request
+            // requires Harness. Keep the user on Level 3 and surface the real error.
             return new DesktopQuickAnswerResult(
                 DesktopQuickAnswerDisposition.Answered,
                 "CLI 连接失败",
-                $"{error.Message} 请检查当前模型配置或稍后重试。不会自动启动 Harness。");
+                $"{error.Message} 请检查当前模型配置或稍后重试。不会自动启动 Harness。" );
         }
     }
 
@@ -161,69 +172,62 @@ Otherwise answer normally and never mention Harness.
 """;
     }
 
-    /// <summary>
-    /// Uses the OpenAI .NET SDK with a custom endpoint to support any
-    /// OpenAI-compatible provider. The SDK handles serialization, retries,
-    /// and error mapping internally.
-    /// </summary>
-    private async Task<string> CallChatAsync(
+    private async Task<string> CallCompatibleChatAsync(
         ModelSettings settings,
         string? credential,
         string systemPrompt,
+        IReadOnlyList<ChatTurn> history,
         string userText,
         int maxTokens,
         CancellationToken cancellationToken)
     {
         var baseUrl = settings.BaseUrl.Trim();
         if (!baseUrl.EndsWith('/')) baseUrl += "/";
+        var endpoint = new Uri(new Uri(baseUrl, UriKind.Absolute), "chat/completions");
 
-        var options = new OpenAIClientOptions
+        using var request = new HttpRequestMessage(HttpMethod.Post, endpoint);
+        if (!string.IsNullOrWhiteSpace(credential))
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", credential.Trim());
+
+        var messages = new List<object>(2 + history.Count)
         {
-            Endpoint = new Uri(baseUrl)
+            new { role = "system", content = systemPrompt }
         };
-
-        var client = string.IsNullOrWhiteSpace(credential)
-            ? new OpenAIClient(options)
-            : new OpenAIClient(new ApiKeyCredential(credential.Trim()), options);
-
-        var chatClient = client.GetChatClient(settings.Model);
-
-        var messages = new List<ChatMessage>
-        {
-            new SystemChatMessage(systemPrompt)
-        };
-
-        // Include conversation history for multi-turn context.
-        IReadOnlyList<ChatTurn> history;
-        lock (_historyGate)
-            history = _history.ToArray();
-
         foreach (var turn in history)
+            messages.Add(new { role = turn.Role, content = turn.Content });
+        messages.Add(new { role = "user", content = userText });
+
+        request.Content = JsonContent.Create(new
         {
-            if (turn.Role == "user")
-                messages.Add(new UserChatMessage(turn.Content));
-            else
-                messages.Add(new AssistantChatMessage(turn.Content));
+            model = settings.Model,
+            messages,
+            temperature = 0.2,
+            max_tokens = maxTokens,
+            stream = false
+        });
+
+        using var response = await Http.SendAsync(
+            request,
+            HttpCompletionOption.ResponseHeadersRead,
+            cancellationToken).ConfigureAwait(false);
+
+        if (!response.IsSuccessStatusCode)
+            throw new InvalidOperationException($"模型接口返回 HTTP {(int)response.StatusCode}。");
+
+        await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+        using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken).ConfigureAwait(false);
+        if (!document.RootElement.TryGetProperty("choices", out var choices) ||
+            choices.ValueKind != JsonValueKind.Array ||
+            choices.GetArrayLength() == 0 ||
+            !choices[0].TryGetProperty("message", out var message) ||
+            !message.TryGetProperty("content", out var content))
+        {
+            throw new InvalidOperationException("模型没有返回可显示的内容。");
         }
 
-        messages.Add(new UserChatMessage(userText));
-
-        var chatOptions = new ChatCompletionOptions
-        {
-            MaxOutputTokenCount = maxTokens,
-            Temperature = 0.2f
-        };
-
-        var completion = await chatClient.CompleteChatAsync(messages, chatOptions, cancellationToken)
-            .ConfigureAwait(false);
-
-        var reply = completion.Value.Content.Count > 0
-            ? completion.Value.Content[0].Text?.Trim()
-            : null;
-
+        var reply = content.GetString()?.Trim();
         if (string.IsNullOrWhiteSpace(reply))
             throw new InvalidOperationException("模型返回了空内容。");
-
         return reply;
     }
 
@@ -235,6 +239,12 @@ Otherwise answer normally and never mention Harness.
             _conversationModelKey = modelKey;
             _history.Clear();
         }
+    }
+
+    private IReadOnlyList<ChatTurn> SnapshotHistory()
+    {
+        lock (_historyGate)
+            return _history.ToArray();
     }
 
     private void AppendTurn(string userText, string assistantText)

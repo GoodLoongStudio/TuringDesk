@@ -19,7 +19,6 @@
     <PackageReference Include="NAudio" Version="2.3.0" />
     <PackageReference Include="Jint" Version="4.15.2" />
     <PackageReference Include="PinyinNet" Version="1.0.0" />
-    <PackageReference Include="OpenAI" Version="2.1.0" />
   </ItemGroup>
 
   <ItemGroup>

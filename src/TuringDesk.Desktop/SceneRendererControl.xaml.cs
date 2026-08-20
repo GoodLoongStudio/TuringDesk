@@ -190,7 +190,6 @@ public partial class SceneRendererControl : UserControl
         }
 
         var preset = scene.Tags.FirstOrDefault(tag => tag is "aurora" or "neon" or "orbit") ?? "aurora";
-        GpuSurface.SetFpsLimit(scene.PreferredFps);
         GpuSurface.Configure(preset, appearance.SceneIntensity, appearance.SceneMotionEnabled);
         GpuSurface.Visibility = Visibility.Visible;
     }

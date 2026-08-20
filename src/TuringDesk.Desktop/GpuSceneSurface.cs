@@ -13,7 +13,6 @@ namespace TuringDesk.Desktop;
 public sealed class GpuSceneSurface : DrawingSurface
 {
     private readonly Stopwatch _clock = Stopwatch.StartNew();
-    private readonly Stopwatch _frameTimer = Stopwatch.StartNew();
     private string _preset = "aurora";
     private float _intensity = 0.85f;
     private bool _motion = true;
@@ -21,8 +20,6 @@ public sealed class GpuSceneSurface : DrawingSurface
     private float _bass;
     private float _mid;
     private float _treble;
-    private int _fpsLimit = 30;
-    private float _minFrameIntervalMs = 1000f / 30f;
 
     public GpuSceneSurface()
     {
@@ -39,15 +36,8 @@ public sealed class GpuSceneSurface : DrawingSurface
         _motion = motion;
         _paused = false;
         _clock.Restart();
-        _frameTimer.Restart();
         UpdateRefreshMode();
         Invalidate();
-    }
-
-    public void SetFpsLimit(int fps)
-    {
-        _fpsLimit = Math.Clamp(fps, 1, 120);
-        _minFrameIntervalMs = 1000f / _fpsLimit;
     }
 
     public void SetPaused(bool paused)
@@ -90,19 +80,6 @@ public sealed class GpuSceneSurface : DrawingSurface
 
     private void OnDraw(object? sender, DrawEventArgs e)
     {
-        // FPS limiter: skip frame if not enough time has elapsed since the last
-        // draw. This keeps a static or low-motion scene from burning a full GPU
-        // refresh loop at 60+ FPS on the desktop wallpaper layer.
-        if (_motion && !_paused)
-        {
-            var elapsedMs = (float)_frameTimer.Elapsed.TotalMilliseconds;
-            if (elapsedMs < _minFrameIntervalMs)
-            {
-                return;
-            }
-            _frameTimer.Restart();
-        }
-
         var target = e.Surface.ColorTextureView;
         if (target is null) return;
 

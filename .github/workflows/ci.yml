@@ -91,7 +91,7 @@ jobs:
           if ($quick -match "HarnessWebUiService") {
             throw "Level-3 quick answers must not wake Harness"
           }
-          foreach ($marker in @("TryCalculate", "QuickIntent.Translate", "QuickIntent.Explain", "CompleteChatAsync")) {
+          foreach ($marker in @("TryCalculate", "QuickIntent.Translate", "QuickIntent.Explain", "chat/completions")) {
             if ($quick -notmatch [regex]::Escape($marker)) { throw "Lightweight direct-answer contract missing: $marker" }
           }
 
