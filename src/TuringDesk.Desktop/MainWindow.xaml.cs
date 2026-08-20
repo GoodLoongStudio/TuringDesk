@@ -13,7 +13,6 @@ public partial class MainWindow : Window
     private readonly WindowManager _windows = new();
     private readonly ModelSettingsStore _modelStore = new();
     private readonly WindowsSpeechService _speech = new();
-    private CapabilityServer? _capabilities;
     private DateTime _voiceCommandUntilUtc = DateTime.MinValue;
     private ModelSettings _modelSettings = ModelSettings.Default;
     private DesktopDiyCenterWindow? _diyCenterWindow;
@@ -35,9 +34,6 @@ public partial class MainWindow : Window
             "正在准备轻量桌面层…",
             "本地搜索、桌面能力与常驻语音先就绪；AI Runtime / DeepSeek Harness 按需启动。",
             Color.FromRgb(241, 182, 106));
-        _capabilities = new CapabilityServer(_launcher, _windows, AddActivity);
-        try { await _capabilities.StartAsync(); AddActivity("system", $"Capability server online ({_capabilities.BaseUrl})."); }
-        catch (Exception error) { AddActivity("system", $"Capability server failed: {error.Message}"); SetAgentState("部分能力不可用", "Windows Capability Server 启动失败，普通应用与文件搜索仍可使用。", Color.FromRgb(240, 125, 125)); }
         var health = await _runtime.GetHealthAsync();
         if (health is not null) { RuntimeDot.Fill = new SolidColorBrush(Color.FromRgb(84, 214, 138)); RuntimeStatus.Text = $"Runtime {health.Mode}"; AddActivity("system", $"Existing AI runtime detected ({health.Mode}); no new process was started."); }
         else { RuntimeDot.Fill = new SolidColorBrush(Color.FromRgb(100, 116, 139)); RuntimeStatus.Text = "Runtime 按需待命"; AddActivity("system", "AI Runtime is cold and will start only for Agent/Harness work."); }
@@ -47,11 +43,10 @@ public partial class MainWindow : Window
         else { AddActivity("voice", "Windows speech recognition is unavailable. Keyboard input remains available."); VoiceStateText.Text = "当前设备不可用 · 可继续键盘输入"; SetAgentState("桌面已就绪", "应用/文件搜索已就绪；Agent/Harness 保持休眠直到真正需要。", Color.FromRgb(84, 214, 138)); }
     }
 
-    private async void OnClosed(object? sender, EventArgs e)
+    private void OnClosed(object? sender, EventArgs e)
     {
         _speech.Dispose(); AgentFloatingCardsService.Hide();
         if (_diyCenterWindow is not null) { _diyCenterWindow.Close(); _diyCenterWindow = null; }
-        if (_capabilities is not null) { await _capabilities.DisposeAsync(); _capabilities = null; }
     }
 
     private void TitleBar_MouseLeftButtonDown(object sender, MouseButtonEventArgs e) { if (e.ChangedButton != MouseButton.Left) return; if (e.ClickCount == 2) { ToggleMaximize(); return; } try { DragMove(); } catch { } }
