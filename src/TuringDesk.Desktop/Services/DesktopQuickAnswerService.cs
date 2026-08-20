@@ -20,15 +20,16 @@ public sealed record DesktopQuickAnswerResult(
     string Message);
 
 /// <summary>
-/// Lightweight search-bar answers. This service is intentionally isolated from the
-/// heavy Agent process stack. Arithmetic stays in-process and all ordinary AI Q&A,
-/// translation and keyword explanations call the selected OpenAI-compatible model
-/// endpoint directly. Harness is only offered after this lightweight route cannot
-/// complete the request or when the user explicitly asks for deep processing.
+/// Level 3 of the desktop search stack: a persistent, tool-free CLI-style AI chat.
+/// Level 1 is application search, Level 2 is Everything file search, and Level 4
+/// is Harness. Ordinary model/network errors stay in Level 3; Harness is offered
+/// only when the model explicitly says the request needs local tools/Agent work.
 /// </summary>
 public sealed class DesktopQuickAnswerService
 {
-    private const int MaxDirectQuestionLength = 6000;
+    private const int MaxDirectQuestionLength = 16000;
+    private const int MaxConversationMessages = 16;
+    private const string HarnessMarker = "[[HARNESS_REQUIRED]]";
 
     private static readonly Regex FormulaPattern = new(
         @"^[\s=0-9\.\+\-\*\/\%\^\(\)]+$",
@@ -36,8 +37,12 @@ public sealed class DesktopQuickAnswerService
 
     private static readonly HttpClient Http = new()
     {
-        Timeout = TimeSpan.FromSeconds(20)
+        Timeout = TimeSpan.FromSeconds(25)
     };
+
+    private readonly object _historyGate = new();
+    private readonly List<ChatTurn> _history = new();
+    private string? _conversationModelKey;
 
     public async Task<DesktopQuickAnswerResult> TryAnswerAsync(
         string query,
@@ -49,7 +54,7 @@ public sealed class DesktopQuickAnswerService
         {
             return new DesktopQuickAnswerResult(
                 DesktopQuickAnswerDisposition.Answered,
-                "AI 直答",
+                "CLI 对话",
                 "请输入你想搜索或询问的内容。");
         }
 
@@ -57,7 +62,7 @@ public sealed class DesktopQuickAnswerService
         {
             return new DesktopQuickAnswerResult(
                 DesktopQuickAnswerDisposition.Answered,
-                "计算结果",
+                "本地计算",
                 calculation);
         }
 
@@ -65,16 +70,16 @@ public sealed class DesktopQuickAnswerService
         {
             return new DesktopQuickAnswerResult(
                 DesktopQuickAnswerDisposition.RequiresDeepProcessing,
-                "内容较长",
-                "这段内容超出了顶部快速问答的输入范围。可以点击“深度处理”交给 Harness 工作台继续。" );
+                "CLI 无法处理这么长的输入",
+                "这段内容超过了常驻 CLI 的单次输入范围。需要更大的工作上下文时再升级到 Harness。" );
         }
 
         if (model is null || !model.IsAvailable || model.Settings is null)
         {
             return new DesktopQuickAnswerResult(
                 DesktopQuickAnswerDisposition.RequiresModel,
-                "需要 AI 模型",
-                "请先在设置中配置一个可用模型。应用/文件搜索和本地计算仍可直接使用；Harness 只用于后续需要工具或 Agent 的复杂任务。" );
+                "CLI 需要 AI 模型",
+                "请先配置一个可用模型。应用搜索、文件搜索和本地计算仍然可以使用。" );
         }
 
         var settings = model.Settings;
@@ -83,19 +88,14 @@ public sealed class DesktopQuickAnswerService
             return new DesktopQuickAnswerResult(
                 DesktopQuickAnswerDisposition.RequiresModel,
                 "模型配置不完整",
-                "请先补充 Base URL 和模型 ID。顶部搜索会优先使用普通 AI 直答，不会因为普通问答自动启动 Harness。" );
+                "请检查 Base URL 和模型 ID。普通对话不会因此自动启动 Harness。" );
         }
 
+        var modelKey = $"{settings.ProviderId}|{settings.BaseUrl}|{settings.Model}";
+        EnsureConversationModel(modelKey);
         var intent = Classify(text);
-        var systemPrompt = intent switch
-        {
-            QuickIntent.Translate =>
-                "You are TuringDesk's lightweight translation assistant. Follow the user's requested translation direction. Return the translation directly, without analysis, tool calls, or agent planning.",
-            QuickIntent.Explain =>
-                "You are TuringDesk's lightweight desktop Q&A assistant. Explain the requested concept clearly and concisely in the user's language. Do not call tools and do not claim to have operated the computer.",
-            _ =>
-                "You are TuringDesk's lightweight desktop AI assistant. Answer the user's question directly and helpfully in the user's language. Keep the answer concise unless detail is useful. Do not call tools, browse local files, execute commands, or claim that you changed the computer. If the user asks for an action that actually requires operating the system, explain what would need to be done; the user can choose the separate Deep Processing/Harness action afterward."
-        };
+        var systemPrompt = BuildSystemPrompt(intent);
+        var history = SnapshotHistory();
 
         try
         {
@@ -103,17 +103,27 @@ public sealed class DesktopQuickAnswerService
                 settings,
                 model.Credential,
                 systemPrompt,
+                history,
                 text,
-                intent == QuickIntent.Translate ? 384 : 1024,
+                intent == QuickIntent.Translate ? 512 : 1400,
                 cancellationToken).ConfigureAwait(false);
 
+            if (TryExtractHarnessEscalation(reply, out var reason))
+            {
+                return new DesktopQuickAnswerResult(
+                    DesktopQuickAnswerDisposition.RequiresDeepProcessing,
+                    "CLI 需要更高权限的 Agent 能力",
+                    reason);
+            }
+
+            AppendTurn(text, reply);
             return new DesktopQuickAnswerResult(
                 DesktopQuickAnswerDisposition.Answered,
                 intent switch
                 {
-                    QuickIntent.Translate => "快速翻译",
-                    QuickIntent.Explain => "AI 解释",
-                    _ => "AI 直答"
+                    QuickIntent.Translate => "CLI · 翻译",
+                    QuickIntent.Explain => "CLI · 解释",
+                    _ => "CLI · 对话"
                 },
                 reply);
         }
@@ -123,17 +133,50 @@ public sealed class DesktopQuickAnswerService
         }
         catch (Exception error)
         {
+            // A transport/configuration failure is not evidence that the request
+            // requires Harness. Keep the user on Level 3 and surface the real error.
             return new DesktopQuickAnswerResult(
-                DesktopQuickAnswerDisposition.RequiresDeepProcessing,
-                "普通 AI 问答未完成",
-                $"{error.Message} 你可以重试，或点击“深度处理”交给 Harness。" );
+                DesktopQuickAnswerDisposition.Answered,
+                "CLI 连接失败",
+                $"{error.Message} 请检查当前模型配置或稍后重试。不会自动启动 Harness。" );
         }
     }
 
-    private static async Task<string> CallCompatibleChatAsync(
+    public void ResetConversation()
+    {
+        lock (_historyGate)
+        {
+            _history.Clear();
+            _conversationModelKey = null;
+        }
+    }
+
+    private static string BuildSystemPrompt(QuickIntent intent)
+    {
+        var task = intent switch
+        {
+            QuickIntent.Translate => "Translate according to the user's requested direction and keep the answer direct.",
+            QuickIntent.Explain => "Explain the requested concept clearly in the user's language.",
+            _ => "Answer conversationally and helpfully in the user's language."
+        };
+
+        return $"""
+You are TuringDesk CLI, the persistent Level-3 conversational assistant inside the desktop search bar.
+{task}
+You have conversational memory from prior turns, but you have NO local tools and must not claim you changed the computer.
+Do not escalate ordinary questions, explanations, writing, translation, coding advice, or model/network errors.
+Only when the user's requested outcome truly requires operating Windows, inspecting local files not provided in chat, running commands, controlling applications, or multi-step Agent/tool execution, respond with this marker as the FIRST line:
+{HarnessMarker}
+Then briefly explain why Level 4 Harness is required.
+Otherwise answer normally and never mention Harness.
+""";
+    }
+
+    private async Task<string> CallCompatibleChatAsync(
         ModelSettings settings,
         string? credential,
         string systemPrompt,
+        IReadOnlyList<ChatTurn> history,
         string userText,
         int maxTokens,
         CancellationToken cancellationToken)
@@ -146,14 +189,18 @@ public sealed class DesktopQuickAnswerService
         if (!string.IsNullOrWhiteSpace(credential))
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", credential.Trim());
 
+        var messages = new List<object>(2 + history.Count)
+        {
+            new { role = "system", content = systemPrompt }
+        };
+        foreach (var turn in history)
+            messages.Add(new { role = turn.Role, content = turn.Content });
+        messages.Add(new { role = "user", content = userText });
+
         request.Content = JsonContent.Create(new
         {
             model = settings.Model,
-            messages = new object[]
-            {
-                new { role = "system", content = systemPrompt },
-                new { role = "user", content = userText }
-            },
+            messages,
             temperature = 0.2,
             max_tokens = maxTokens,
             stream = false
@@ -182,6 +229,43 @@ public sealed class DesktopQuickAnswerService
         if (string.IsNullOrWhiteSpace(reply))
             throw new InvalidOperationException("模型返回了空内容。");
         return reply;
+    }
+
+    private void EnsureConversationModel(string modelKey)
+    {
+        lock (_historyGate)
+        {
+            if (string.Equals(_conversationModelKey, modelKey, StringComparison.Ordinal)) return;
+            _conversationModelKey = modelKey;
+            _history.Clear();
+        }
+    }
+
+    private IReadOnlyList<ChatTurn> SnapshotHistory()
+    {
+        lock (_historyGate)
+            return _history.ToArray();
+    }
+
+    private void AppendTurn(string userText, string assistantText)
+    {
+        lock (_historyGate)
+        {
+            _history.Add(new ChatTurn("user", userText));
+            _history.Add(new ChatTurn("assistant", assistantText));
+            while (_history.Count > MaxConversationMessages)
+                _history.RemoveAt(0);
+        }
+    }
+
+    private static bool TryExtractHarnessEscalation(string reply, out string reason)
+    {
+        reason = string.Empty;
+        if (!reply.StartsWith(HarnessMarker, StringComparison.Ordinal)) return false;
+        reason = reply[HarnessMarker.Length..].TrimStart('\r', '\n', ' ', ':', '：').Trim();
+        if (string.IsNullOrWhiteSpace(reason))
+            reason = "这个请求需要操作本机、调用工具或执行多步骤 Agent 工作流。";
+        return true;
     }
 
     private static QuickIntent Classify(string text)
@@ -230,6 +314,8 @@ public sealed class DesktopQuickAnswerService
         Translate,
         Explain
     }
+
+    private sealed record ChatTurn(string Role, string Content);
 
     private sealed class ExpressionParser
     {
