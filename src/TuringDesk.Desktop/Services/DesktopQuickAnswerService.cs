@@ -1,8 +1,4 @@
 using System.Globalization;
-using System.Net.Http;
-using System.Net.Http.Headers;
-using System.Net.Http.Json;
-using System.Text.Json;
 using System.Text.RegularExpressions;
 
 namespace TuringDesk.Desktop.Services;
@@ -20,10 +16,9 @@ public sealed record DesktopQuickAnswerResult(
     string Message);
 
 /// <summary>
-/// Level 3 of the desktop search stack: a persistent, tool-free CLI-style AI chat.
-/// Level 1 is application search, Level 2 is Everything file search, and Level 4
-/// is Harness. Ordinary model/network errors stay in Level 3; Harness is offered
-/// only when the model explicitly says the request needs local tools/Agent work.
+/// Level 3 of the desktop search stack: persistent, tool-free CLI-style chat.
+/// Provider transport lives in L3ChatProviderClient so the conversation layer
+/// only owns intent, history and the explicit L3 -> L4 escalation boundary.
 /// </summary>
 public sealed class DesktopQuickAnswerService
 {
@@ -35,13 +30,9 @@ public sealed class DesktopQuickAnswerService
         @"^[\s=0-9\.\+\-\*\/\%\^\(\)]+$",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
-    private static readonly HttpClient Http = new()
-    {
-        Timeout = TimeSpan.FromSeconds(25)
-    };
-
     private readonly object _historyGate = new();
-    private readonly List<ChatTurn> _history = new();
+    private readonly List<L3ChatMessage> _history = new();
+    private readonly L3ChatProviderClient _provider = new();
     private string? _conversationModelKey;
 
     public async Task<DesktopQuickAnswerResult> TryAnswerAsync(
@@ -51,73 +42,54 @@ public sealed class DesktopQuickAnswerService
     {
         var text = query.Trim();
         if (string.IsNullOrWhiteSpace(text))
-        {
-            return new DesktopQuickAnswerResult(
-                DesktopQuickAnswerDisposition.Answered,
-                "CLI 对话",
-                "请输入你想搜索或询问的内容。");
-        }
+            return new(DesktopQuickAnswerDisposition.Answered, "CLI 对话", "请输入你想搜索或询问的内容。");
 
         if (TryCalculate(text, out var calculation))
-        {
-            return new DesktopQuickAnswerResult(
-                DesktopQuickAnswerDisposition.Answered,
-                "本地计算",
-                calculation);
-        }
+            return new(DesktopQuickAnswerDisposition.Answered, "本地计算", calculation);
 
         if (text.Length > MaxDirectQuestionLength)
-        {
-            return new DesktopQuickAnswerResult(
+            return new(
                 DesktopQuickAnswerDisposition.RequiresDeepProcessing,
-                "CLI 无法处理这么长的输入",
-                "这段内容超过了常驻 CLI 的单次输入范围。需要更大的工作上下文时再升级到 Harness。" );
-        }
+                "CLI 输入过长",
+                "这段内容超过常驻 CLI 的单次输入范围。需要更大工作上下文时再升级到 Harness。");
 
         if (model is null || !model.IsAvailable || model.Settings is null)
-        {
-            return new DesktopQuickAnswerResult(
+            return new(
                 DesktopQuickAnswerDisposition.RequiresModel,
                 "CLI 需要 AI 模型",
-                "请先配置一个可用模型。应用搜索、文件搜索和本地计算仍然可以使用。" );
-        }
+                "请先配置一个可用模型。应用搜索、文件搜索和本地计算仍然可以使用。");
 
         var settings = model.Settings;
         if (string.IsNullOrWhiteSpace(settings.BaseUrl) || string.IsNullOrWhiteSpace(settings.Model))
-        {
-            return new DesktopQuickAnswerResult(
+            return new(
                 DesktopQuickAnswerDisposition.RequiresModel,
                 "模型配置不完整",
-                "请检查 Base URL 和模型 ID。普通对话不会因此自动启动 Harness。" );
-        }
+                "请检查 Base URL 和模型 ID。普通对话不会因此自动启动 Harness。");
 
         var modelKey = $"{settings.ProviderId}|{settings.BaseUrl}|{settings.Model}";
         EnsureConversationModel(modelKey);
         var intent = Classify(text);
-        var systemPrompt = BuildSystemPrompt(intent);
         var history = SnapshotHistory();
 
         try
         {
-            var reply = await CallCompatibleChatAsync(
+            var reply = await _provider.CompleteAsync(
                 settings,
                 model.Credential,
-                systemPrompt,
+                BuildSystemPrompt(intent),
                 history,
                 text,
                 intent == QuickIntent.Translate ? 512 : 1400,
                 cancellationToken).ConfigureAwait(false);
 
             if (TryExtractHarnessEscalation(reply, out var reason))
-            {
-                return new DesktopQuickAnswerResult(
+                return new(
                     DesktopQuickAnswerDisposition.RequiresDeepProcessing,
                     "CLI 需要更高权限的 Agent 能力",
                     reason);
-            }
 
             AppendTurn(text, reply);
-            return new DesktopQuickAnswerResult(
+            return new(
                 DesktopQuickAnswerDisposition.Answered,
                 intent switch
                 {
@@ -133,12 +105,10 @@ public sealed class DesktopQuickAnswerService
         }
         catch (Exception error)
         {
-            // A transport/configuration failure is not evidence that the request
-            // requires Harness. Keep the user on Level 3 and surface the real error.
-            return new DesktopQuickAnswerResult(
+            return new(
                 DesktopQuickAnswerDisposition.Answered,
                 "CLI 连接失败",
-                $"{error.Message} 请检查当前模型配置或稍后重试。不会自动启动 Harness。" );
+                $"{error.Message} 请检查当前模型配置或稍后重试。不会自动启动 Harness。");
         }
     }
 
@@ -172,65 +142,6 @@ Otherwise answer normally and never mention Harness.
 """;
     }
 
-    private async Task<string> CallCompatibleChatAsync(
-        ModelSettings settings,
-        string? credential,
-        string systemPrompt,
-        IReadOnlyList<ChatTurn> history,
-        string userText,
-        int maxTokens,
-        CancellationToken cancellationToken)
-    {
-        var baseUrl = settings.BaseUrl.Trim();
-        if (!baseUrl.EndsWith('/')) baseUrl += "/";
-        var endpoint = new Uri(new Uri(baseUrl, UriKind.Absolute), "chat/completions");
-
-        using var request = new HttpRequestMessage(HttpMethod.Post, endpoint);
-        if (!string.IsNullOrWhiteSpace(credential))
-            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", credential.Trim());
-
-        var messages = new List<object>(2 + history.Count)
-        {
-            new { role = "system", content = systemPrompt }
-        };
-        foreach (var turn in history)
-            messages.Add(new { role = turn.Role, content = turn.Content });
-        messages.Add(new { role = "user", content = userText });
-
-        request.Content = JsonContent.Create(new
-        {
-            model = settings.Model,
-            messages,
-            temperature = 0.2,
-            max_tokens = maxTokens,
-            stream = false
-        });
-
-        using var response = await Http.SendAsync(
-            request,
-            HttpCompletionOption.ResponseHeadersRead,
-            cancellationToken).ConfigureAwait(false);
-
-        if (!response.IsSuccessStatusCode)
-            throw new InvalidOperationException($"模型接口返回 HTTP {(int)response.StatusCode}。");
-
-        await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
-        using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken).ConfigureAwait(false);
-        if (!document.RootElement.TryGetProperty("choices", out var choices) ||
-            choices.ValueKind != JsonValueKind.Array ||
-            choices.GetArrayLength() == 0 ||
-            !choices[0].TryGetProperty("message", out var message) ||
-            !message.TryGetProperty("content", out var content))
-        {
-            throw new InvalidOperationException("模型没有返回可显示的内容。");
-        }
-
-        var reply = content.GetString()?.Trim();
-        if (string.IsNullOrWhiteSpace(reply))
-            throw new InvalidOperationException("模型返回了空内容。");
-        return reply;
-    }
-
     private void EnsureConversationModel(string modelKey)
     {
         lock (_historyGate)
@@ -241,7 +152,7 @@ Otherwise answer normally and never mention Harness.
         }
     }
 
-    private IReadOnlyList<ChatTurn> SnapshotHistory()
+    private IReadOnlyList<L3ChatMessage> SnapshotHistory()
     {
         lock (_historyGate)
             return _history.ToArray();
@@ -251,8 +162,8 @@ Otherwise answer normally and never mention Harness.
     {
         lock (_historyGate)
         {
-            _history.Add(new ChatTurn("user", userText));
-            _history.Add(new ChatTurn("assistant", assistantText));
+            _history.Add(new L3ChatMessage("user", userText));
+            _history.Add(new L3ChatMessage("assistant", assistantText));
             while (_history.Count > MaxConversationMessages)
                 _history.RemoveAt(0);
         }
@@ -314,8 +225,6 @@ Otherwise answer normally and never mention Harness.
         Translate,
         Explain
     }
-
-    private sealed record ChatTurn(string Role, string Content);
 
     private sealed class ExpressionParser
     {
@@ -389,8 +298,7 @@ Otherwise answer normally and never mention Harness.
                 _position++;
 
             if (start == _position) throw new FormatException("Number expected.");
-            var token = _text[start.._position];
-            return double.Parse(token, NumberStyles.Float, CultureInfo.InvariantCulture);
+            return double.Parse(_text[start.._position], NumberStyles.Float, CultureInfo.InvariantCulture);
         }
 
         private bool Take(char expected)
