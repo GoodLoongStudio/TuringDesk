@@ -40,8 +40,8 @@ public sealed class DesktopQuickAnswerService
     public async Task<DesktopQuickAnswerResult> TryAnswerAsync(
         string query,
         DesktopAiModelChoice? model,
-        Action<string>? onPartial = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        Action<string>? onPartial = null)
     {
         var text = query.Trim();
         if (string.IsNullOrWhiteSpace(text))
