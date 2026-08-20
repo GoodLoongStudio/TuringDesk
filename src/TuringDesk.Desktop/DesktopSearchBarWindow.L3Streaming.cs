@@ -9,12 +9,7 @@ public partial class DesktopSearchBarWindow
     {
         base.OnInitialized(e);
         _quickAnswer.PartialResponseUpdated += OnL3PartialResponseUpdated;
-    }
-
-    protected override void OnClosed(EventArgs e)
-    {
-        _quickAnswer.PartialResponseUpdated -= OnL3PartialResponseUpdated;
-        base.OnClosed(e);
+        Closed += (_, _) => _quickAnswer.PartialResponseUpdated -= OnL3PartialResponseUpdated;
     }
 
     private void OnL3PartialResponseUpdated(string partial)
