@@ -17,13 +17,14 @@ public sealed record DesktopQuickAnswerResult(
 
 /// <summary>
 /// Level 3 of the desktop search stack: persistent, tool-free CLI-style chat.
-/// Provider transport lives in L3ChatProviderClient so the conversation layer
-/// only owns intent, history and the explicit L3 -> L4 escalation boundary.
+/// Provider transport lives in L3ChatProviderClient; this layer owns intent,
+/// session memory, context trimming and the explicit L3 -> L4 boundary.
 /// </summary>
 public sealed class DesktopQuickAnswerService
 {
     private const int MaxDirectQuestionLength = 16000;
-    private const int MaxConversationMessages = 16;
+    private const int MaxConversationMessages = 24;
+    private const int MaxContextCharacters = 28000;
     private const string HarnessMarker = "[[HARNESS_REQUIRED]]";
 
     private static readonly Regex FormulaPattern = new(
@@ -33,11 +34,13 @@ public sealed class DesktopQuickAnswerService
     private readonly object _historyGate = new();
     private readonly List<L3ChatMessage> _history = new();
     private readonly L3ChatProviderClient _provider = new();
+    private readonly L3ConversationSessionStore _sessionStore = new();
     private string? _conversationModelKey;
 
     public async Task<DesktopQuickAnswerResult> TryAnswerAsync(
         string query,
         DesktopAiModelChoice? model,
+        Action<string>? onPartial = null,
         CancellationToken cancellationToken = default)
     {
         var text = query.Trim();
@@ -66,10 +69,10 @@ public sealed class DesktopQuickAnswerService
                 "模型配置不完整",
                 "请检查 Base URL 和模型 ID。普通对话不会因此自动启动 Harness。");
 
-        var modelKey = $"{settings.ProviderId}|{settings.BaseUrl}|{settings.Model}";
+        var modelKey = $"{settings.ProviderId}|{settings.BaseUrl.Trim()}|{settings.Model.Trim()}";
         EnsureConversationModel(modelKey);
         var intent = Classify(text);
-        var history = SnapshotHistory();
+        var history = SnapshotHistoryForContext();
 
         try
         {
@@ -80,6 +83,7 @@ public sealed class DesktopQuickAnswerService
                 history,
                 text,
                 intent == QuickIntent.Translate ? 512 : 1400,
+                onPartial,
                 cancellationToken).ConfigureAwait(false);
 
             if (TryExtractHarnessEscalation(reply, out var reason))
@@ -118,6 +122,7 @@ public sealed class DesktopQuickAnswerService
         {
             _history.Clear();
             _conversationModelKey = null;
+            _sessionStore.Clear();
         }
     }
 
@@ -149,13 +154,29 @@ Otherwise answer normally and never mention Harness.
             if (string.Equals(_conversationModelKey, modelKey, StringComparison.Ordinal)) return;
             _conversationModelKey = modelKey;
             _history.Clear();
+            _history.AddRange(_sessionStore.Load(modelKey));
+            TrimHistoryNoLock();
         }
     }
 
-    private IReadOnlyList<L3ChatMessage> SnapshotHistory()
+    private IReadOnlyList<L3ChatMessage> SnapshotHistoryForContext()
     {
         lock (_historyGate)
-            return _history.ToArray();
+        {
+            var selected = new List<L3ChatMessage>();
+            var characters = 0;
+            for (var index = _history.Count - 1; index >= 0; index--)
+            {
+                var message = _history[index];
+                var length = message.Content?.Length ?? 0;
+                if (selected.Count >= MaxConversationMessages || characters + length > MaxContextCharacters)
+                    break;
+                selected.Add(message);
+                characters += length;
+            }
+            selected.Reverse();
+            return selected;
+        }
     }
 
     private void AppendTurn(string userText, string assistantText)
@@ -164,8 +185,22 @@ Otherwise answer normally and never mention Harness.
         {
             _history.Add(new L3ChatMessage("user", userText));
             _history.Add(new L3ChatMessage("assistant", assistantText));
-            while (_history.Count > MaxConversationMessages)
-                _history.RemoveAt(0);
+            TrimHistoryNoLock();
+            if (_conversationModelKey is not null)
+                _sessionStore.Save(_conversationModelKey, _history);
+        }
+    }
+
+    private void TrimHistoryNoLock()
+    {
+        while (_history.Count > MaxConversationMessages)
+            _history.RemoveAt(0);
+
+        var total = _history.Sum(item => item.Content?.Length ?? 0);
+        while (_history.Count > 2 && total > MaxContextCharacters)
+        {
+            total -= _history[0].Content?.Length ?? 0;
+            _history.RemoveAt(0);
         }
     }
 
