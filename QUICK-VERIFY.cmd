@@ -34,6 +34,10 @@ echo Preparing pinned Everything file search backend...
 powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\bootstrap-everything.ps1"
 if errorlevel 1 goto :failed
 
+echo Checking installed .NET SDK before bootstrap...
+powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\adopt-installed-dotnet.ps1"
+if errorlevel 1 goto :failed
+
 powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\quick-verify.ps1" -SkipPull
 if errorlevel 1 goto :failed
 
