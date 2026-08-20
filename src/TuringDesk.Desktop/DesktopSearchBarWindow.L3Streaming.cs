@@ -1,3 +1,4 @@
+using System.Windows;
 using System.Windows.Media;
 
 namespace TuringDesk.Desktop;
