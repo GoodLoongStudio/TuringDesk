@@ -121,14 +121,27 @@ public sealed class L3ChatProviderClient
             messages.Add(new { role = turn.Role, content = turn.Content });
         messages.Add(new { role = "user", content = userText });
 
-        request.Content = JsonContent.Create(new
-        {
-            model = settings.Model.Trim(),
-            messages,
-            temperature = 0.2,
-            max_tokens = maxTokens,
-            stream
-        });
+        // DeepSeek V4 enables high-effort thinking by default. L3 is deliberately
+        // the fast, tool-free CLI tier, so disable thinking here. L4 Harness remains
+        // the explicit place for deeper Agent reasoning and tool execution.
+        request.Content = settings.ProviderId.Equals("deepseek", StringComparison.OrdinalIgnoreCase)
+            ? JsonContent.Create(new
+            {
+                model = settings.Model.Trim(),
+                messages,
+                temperature = 0.2,
+                max_tokens = maxTokens,
+                stream,
+                thinking = new { type = "disabled" }
+            })
+            : JsonContent.Create(new
+            {
+                model = settings.Model.Trim(),
+                messages,
+                temperature = 0.2,
+                max_tokens = maxTokens,
+                stream
+            });
         return request;
     }
 
