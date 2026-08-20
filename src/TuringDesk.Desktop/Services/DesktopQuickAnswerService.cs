@@ -37,6 +37,13 @@ public sealed class DesktopQuickAnswerService
     private readonly L3ConversationSessionStore _sessionStore = new();
     private string? _conversationModelKey;
 
+    /// <summary>
+    /// Raised as the current assistant reply grows. Consumers must marshal to
+    /// their UI thread. This event keeps the existing TryAnswerAsync call shape
+    /// working while allowing the search bar to render true CLI-style streaming.
+    /// </summary>
+    public event Action<string>? PartialResponseUpdated;
+
     public async Task<DesktopQuickAnswerResult> TryAnswerAsync(
         string query,
         DesktopAiModelChoice? model,
@@ -76,6 +83,12 @@ public sealed class DesktopQuickAnswerService
 
         try
         {
+            void PublishPartial(string partial)
+            {
+                onPartial?.Invoke(partial);
+                PartialResponseUpdated?.Invoke(partial);
+            }
+
             var reply = await _provider.CompleteAsync(
                 settings,
                 model.Credential,
@@ -83,7 +96,7 @@ public sealed class DesktopQuickAnswerService
                 history,
                 text,
                 intent == QuickIntent.Translate ? 512 : 1400,
-                onPartial,
+                PublishPartial,
                 cancellationToken).ConfigureAwait(false);
 
             if (TryExtractHarnessEscalation(reply, out var reason))
