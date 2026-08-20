@@ -37,6 +37,16 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 
 The MIT license permits use, modification and redistribution provided the copyright and permission notice are retained in copies or substantial portions of the software.
 
+## OpenAI .NET SDK
+
+- Project: openai-dotnet
+- Source: https://github.com/openai/openai-dotnet
+- License: Apache-2.0
+- Copyright: Copyright (c) OpenAI
+- TuringDesk usage: Level-3 lightweight conversation uses the OpenAI .NET SDK with a custom endpoint to support any OpenAI-compatible model provider (DeepSeek, Ollama, LM Studio, etc.) without starting Node or Harness.
+
+Licensed under the Apache License, Version 2.0; you may not use this file except in compliance with the License.
+
 ## Flow Launcher
 
 - Project: Flow Launcher
@@ -46,3 +56,13 @@ The MIT license permits use, modification and redistribution provided the copyri
 - TuringDesk usage: the L1 in-memory matcher is an independent compact adaptation of Flow Launcher's acronym/fuzzy-search strategy: ordered subsequence matching, contiguous-match bonuses, word-boundary bonuses and early-match weighting. Pinyin aliases remain generated locally by TuringDesk.
 
 The MIT license permits use, modification and redistribution provided the copyright and permission notice are retained in copies or substantial portions of the software.
+
+## OpenAI .NET SDK
+
+- Project: openai-dotnet
+- Source: https://github.com/openai/openai-dotnet
+- License: Apache-2.0
+- Copyright: Copyright (c) OpenAI
+- TuringDesk usage: Level-3 lightweight conversation uses the OpenAI .NET SDK with a custom endpoint to support any OpenAI-compatible model provider (DeepSeek, Ollama, LM Studio, etc.) without starting Node or Harness.
+
+Licensed under the Apache License, Version 2.0; you may not use this file except in compliance with the License.
