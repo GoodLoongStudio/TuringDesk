@@ -12,13 +12,10 @@ public partial class ModelSettingsWindow : Window
 
     public ModelSettings? SavedSettings { get; private set; }
 
-    public ModelSettingsWindow(RuntimeClient runtime, ModelSettingsStore store, ModelSettings initial, string? apiKey)
+    public ModelSettingsWindow(ModelSettingsStore store, ModelSettings initial, string? apiKey)
     {
         InitializeComponent();
-        // Keep the current constructor shape until the remaining legacy Runtime callers
-        // are removed. Model save/test themselves no longer use or wake Runtime.
-        _ = runtime;
-        _modelConfiguration = new UnifiedModelConfigurationService(runtime, store);
+        _modelConfiguration = new UnifiedModelConfigurationService(store);
 
         ProviderBox.ItemsSource = ModelProviderPresets.All;
         ProviderBox.SelectedItem = ModelProviderPresets.Find(initial.ProviderId);
@@ -28,6 +25,13 @@ public partial class ModelSettingsWindow : Window
         ProviderHint.Text = ModelProviderPresets.Find(initial.ProviderId).Hint;
         _initializing = false;
         ApplyProviderState();
+    }
+
+    // Transitional overload for remaining legacy UI callers. Runtime is not used.
+    public ModelSettingsWindow(RuntimeClient runtime, ModelSettingsStore store, ModelSettings initial, string? apiKey)
+        : this(store, initial, apiKey)
+    {
+        _ = runtime;
     }
 
     private void ProviderBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
