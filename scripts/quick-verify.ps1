@@ -189,6 +189,16 @@ if ($git) {
     $branch = (& $git branch --show-current).Trim()
     if ($branch -and $branch -ne "main") { throw "Quick verification only runs from main. Current branch: $branch" }
     $commit = (& $git rev-parse --short HEAD).Trim()
+
+    # SDK-style .csproj auto-includes all .cs files in the directory tree.
+    # If git deleted a file in a newer commit but the working tree still has a
+    # stale local copy (e.g. due to local edits preventing automatic deletion),
+    # the build will fail. Restore tracked files to HEAD and remove untracked
+    # leftovers in source directories only — never touch .tools/, node_modules,
+    # user data, or the pinned toolchain cache.
+    Write-Host "Syncing source tree to HEAD..." -ForegroundColor Cyan
+    & $git restore -- "src/" "runtime/src/" "runtime/harness/" "scripts/" ".github/" "docs/" 2>$null
+    & $git clean -fd -- "src/" "runtime/src/" "runtime/harness/" "scripts/" ".github/" "docs/" 2>$null
 }
 else {
     if (-not $SkipPull) {
