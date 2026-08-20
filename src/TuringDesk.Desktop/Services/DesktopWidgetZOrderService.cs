@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Runtime.InteropServices;
 
 namespace TuringDesk.Desktop.Services;
@@ -16,6 +17,7 @@ internal static class DesktopWidgetZOrderService
     private const uint SwpShowWindow = 0x0040;
 
     private static readonly IntPtr HwndTop = IntPtr.Zero;
+    private static readonly ConcurrentDictionary<IntPtr, byte> PositionedWindows = new();
 
     public static bool PositionAboveExplorerDesktop(
         IntPtr windowHandle,
@@ -26,38 +28,58 @@ internal static class DesktopWidgetZOrderService
     {
         if (windowHandle == IntPtr.Zero || !IsWindow(windowHandle)) return false;
 
-        var desktopHost = FindDesktopIconHost();
-        if (desktopHost == IntPtr.Zero) return false;
-
-        // The window immediately before the Explorer desktop in top-level Z
-        // order is the bottom-most window above the desktop. Inserting after it
-        // places TuringDesk between every application and Explorer itself.
-        var immediatelyAboveDesktop = GetWindow(desktopHost, GwHwndPrev);
-        if (immediatelyAboveDesktop == windowHandle)
+        // The Explorer desktop band only needs to be established once for a live
+        // HWND. Search-result expansion can resize the window many times per second;
+        // those hot-path resizes must never enumerate Explorer or rewrite global
+        // top-level Z order because that can force a DWM/Explorer recomposition.
+        if (PositionedWindows.ContainsKey(windowHandle))
         {
-            // Already in the desired band; move/resize without changing Z order.
-            return SetWindowPos(
+            return MoveResizeWithoutZOrder(windowHandle, screenX, screenY, width, height);
+        }
+
+        var desktopHost = FindDesktopIconHost();
+        if (desktopHost == IntPtr.Zero)
+            return MoveResizeWithoutZOrder(windowHandle, screenX, screenY, width, height);
+
+        var immediatelyAboveDesktop = GetWindow(desktopHost, GwHwndPrev);
+        var inserted = immediatelyAboveDesktop == windowHandle
+            ? MoveResizeWithoutZOrder(windowHandle, screenX, screenY, width, height)
+            : SetWindowPos(
                 windowHandle,
-                HwndTop,
+                immediatelyAboveDesktop != IntPtr.Zero ? immediatelyAboveDesktop : HwndTop,
                 screenX,
                 screenY,
                 Math.Max(1, width),
                 Math.Max(1, height),
-                SwpNoZOrder | SwpNoActivate | SwpShowWindow);
-        }
+                SwpNoActivate | SwpShowWindow);
 
-        var insertAfter = immediatelyAboveDesktop != IntPtr.Zero
-            ? immediatelyAboveDesktop
-            : HwndTop;
+        if (inserted)
+            PositionedWindows[windowHandle] = 0;
+
+        return inserted;
+    }
+
+    private static bool MoveResizeWithoutZOrder(
+        IntPtr windowHandle,
+        int screenX,
+        int screenY,
+        int width,
+        int height)
+    {
+        if (!IsWindow(windowHandle))
+        {
+            PositionedWindows.TryRemove(windowHandle, out _);
+            return false;
+        }
 
         return SetWindowPos(
             windowHandle,
-            insertAfter,
+            HwndTop,
             screenX,
             screenY,
             Math.Max(1, width),
             Math.Max(1, height),
-            SwpNoActivate | SwpShowWindow);
+            SwpNoZOrder | SwpNoActivate | SwpShowWindow);
     }
 
     private static IntPtr FindDesktopIconHost()
