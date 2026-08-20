@@ -1,7 +1,6 @@
 using System.Diagnostics;
 using System.IO;
 using System.Net.Http;
-using System.Text;
 
 namespace TuringDesk.Desktop.Services;
 
@@ -26,9 +25,6 @@ public static class HarnessWebUiService
 
     public static Uri Url => WebUri;
 
-    /// <summary>
-    /// Kept for explicit advanced callers. Desktop startup no longer invokes it.
-    /// </summary>
     public static Task<Uri> StartEarly()
     {
         var modelStore = new ModelSettingsStore();
@@ -92,18 +88,12 @@ public static class HarnessWebUiService
         Touch();
     }
 
-    /// <summary>
-    /// Synchronize the shared official Harness stores without waking a cold WebUI.
-    /// If the console is already running, give its file watchers a brief settle
-    /// window; otherwise the next explicit EnsureRunningAsync reads the new stores.
-    /// </summary>
     public static async Task ApplyModelSettingsAsync(
         ModelSettings settings,
         string? apiKey,
         CancellationToken cancellationToken = default)
     {
         HarnessModelBridgeService.Synchronize(settings, apiKey);
-
         if (await IsReadyAsync(cancellationToken).ConfigureAwait(false))
         {
             Touch();
@@ -154,18 +144,12 @@ public static class HarnessWebUiService
             Process? process;
             lock (Gate) process = _process;
             if (process is { HasExited: true })
-            {
-                throw new InvalidOperationException(
-                    $"DeepSeek Harness WebUI exited before becoming ready (exit code {process.ExitCode}).{FormatStderr()}",
-                    lastError);
-            }
+                throw new InvalidOperationException($"DeepSeek Harness WebUI exited before becoming ready (exit code {process.ExitCode}).{FormatStderr()}", lastError);
 
             await Task.Delay(300, cancellationToken).ConfigureAwait(false);
         }
 
-        throw new TimeoutException(
-            $"DeepSeek Harness WebUI did not become ready on 127.0.0.1:4319 within 20 seconds.{FormatStderr()}",
-            lastError);
+        throw new TimeoutException($"DeepSeek Harness WebUI did not become ready on 127.0.0.1:4319 within 20 seconds.{FormatStderr()}", lastError);
     }
 
     private static async Task<bool> IsReadyAsync(CancellationToken cancellationToken)
@@ -173,20 +157,11 @@ public static class HarnessWebUiService
         try
         {
             using var request = new HttpRequestMessage(HttpMethod.Get, WebUri);
-            using var response = await Http.SendAsync(
-                request,
-                HttpCompletionOption.ResponseHeadersRead,
-                cancellationToken).ConfigureAwait(false);
+            using var response = await Http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
             return response.IsSuccessStatusCode;
         }
-        catch (HttpRequestException)
-        {
-            return false;
-        }
-        catch (TaskCanceledException) when (!cancellationToken.IsCancellationRequested)
-        {
-            return false;
-        }
+        catch (HttpRequestException) { return false; }
+        catch (TaskCanceledException) when (!cancellationToken.IsCancellationRequested) { return false; }
     }
 
     private static Process StartHarnessWebProcess(ModelSettings model)
@@ -195,10 +170,6 @@ public static class HarnessWebUiService
         var harnessHome = HarnessModelBridgeService.HarnessHome;
         Directory.CreateDirectory(harnessHome);
         HarnessModelBridgeService.Synchronize(model);
-
-        var patchPath = Path.Combine(harnessHome, "turingdesk-web.patch.yml");
-        WriteTuringDeskWebPatch(patchPath);
-
         lock (LogGate) _stderrTail = string.Empty;
 
         var startInfo = new ProcessStartInfo
@@ -212,20 +183,12 @@ public static class HarnessWebUiService
         startInfo.ArgumentList.Add(layout.DshBin);
         startInfo.ArgumentList.Add("--profile");
         startInfo.ArgumentList.Add("web");
-        startInfo.ArgumentList.Add("--patch");
-        startInfo.ArgumentList.Add(patchPath);
         startInfo.ArgumentList.Add("--host");
         startInfo.ArgumentList.Add("127.0.0.1");
         startInfo.ArgumentList.Add("--port");
         startInfo.ArgumentList.Add(Port.ToString());
-        // TuringDesk owns the embedded WebView2 surface. The official web profile
-        // otherwise tries to hand the URL to the system browser on local launches.
         startInfo.ArgumentList.Add("--no-open");
-
         HarnessModelBridgeService.ApplyEnvironment(startInfo);
-        startInfo.Environment["TURINGDESK_CAPABILITY_URL"] = "http://127.0.0.1:4318";
-        startInfo.Environment["TURINGDESK_MCP_NODE"] = layout.NodeExecutable;
-        startInfo.Environment["TURINGDESK_MCP_SERVER"] = layout.WindowsMcpServer;
 
         var process = new Process { StartInfo = startInfo, EnableRaisingEvents = true };
         process.ErrorDataReceived += (_, e) =>
@@ -234,8 +197,7 @@ public static class HarnessWebUiService
             lock (LogGate)
             {
                 _stderrTail = (_stderrTail + Environment.NewLine + e.Data).Trim();
-                if (_stderrTail.Length > 6000)
-                    _stderrTail = _stderrTail[^6000..];
+                if (_stderrTail.Length > 6000) _stderrTail = _stderrTail[^6000..];
             }
         };
 
@@ -244,7 +206,6 @@ public static class HarnessWebUiService
             process.Dispose();
             throw new InvalidOperationException("Failed to launch the bundled DeepSeek Harness WebUI process.");
         }
-
         process.BeginErrorReadLine();
         return process;
     }
@@ -252,34 +213,20 @@ public static class HarnessWebUiService
     private static string FormatStderr()
     {
         lock (LogGate)
-        {
-            return string.IsNullOrWhiteSpace(_stderrTail)
-                ? string.Empty
-                : $" Harness stderr: {_stderrTail}";
-        }
+            return string.IsNullOrWhiteSpace(_stderrTail) ? string.Empty : $" Harness stderr: {_stderrTail}";
     }
 
-    private static void Touch()
-    {
-        lock (Gate) TouchNoLock();
-    }
-
+    private static void Touch() { lock (Gate) TouchNoLock(); }
     private static void TouchNoLock() => _lastUseUtc = DateTime.UtcNow;
 
     private static void EnsureIdleTimerNoLock()
     {
-        _idleTimer ??= new Timer(
-            static _ => _ = CheckIdleAsync(),
-            null,
-            IdlePollInterval,
-            IdlePollInterval);
+        _idleTimer ??= new Timer(static _ => _ = CheckIdleAsync(), null, IdlePollInterval, IdlePollInterval);
     }
 
     private static Task CheckIdleAsync()
     {
-        if (Interlocked.Exchange(ref _idleCheckRunning, 1) != 0)
-            return Task.CompletedTask;
-
+        if (Interlocked.Exchange(ref _idleCheckRunning, 1) != 0) return Task.CompletedTask;
         try
         {
             lock (Gate)
@@ -290,11 +237,7 @@ public static class HarnessWebUiService
                 StopOwnedProcessNoLock();
             }
         }
-        finally
-        {
-            Volatile.Write(ref _idleCheckRunning, 0);
-        }
-
+        finally { Volatile.Write(ref _idleCheckRunning, 0); }
         return Task.CompletedTask;
     }
 
@@ -305,24 +248,15 @@ public static class HarnessWebUiService
         AppDomain.CurrentDomain.ProcessExit += (_, _) => StopOwnedProcess();
     }
 
-    private static void StopOwnedProcess()
-    {
-        lock (Gate) StopOwnedProcessNoLock();
-    }
+    private static void StopOwnedProcess() { lock (Gate) StopOwnedProcessNoLock(); }
 
     private static void StopOwnedProcessNoLock()
     {
         _idleTimer?.Dispose();
         _idleTimer = null;
         if (_process is null) return;
-        try
-        {
-            if (!_process.HasExited) _process.Kill(entireProcessTree: true);
-        }
-        catch
-        {
-            // Windows may already be tearing the desktop process down.
-        }
+        try { if (!_process.HasExited) _process.Kill(entireProcessTree: true); }
+        catch { }
         finally
         {
             _process.Dispose();
@@ -352,49 +286,19 @@ public static class HarnessWebUiService
         while (cursor is not null)
         {
             var devDsh = Path.Combine(cursor.FullName, "runtime", "node_modules", "@deepseek-ai", "dsh", "lib", "bin.js");
-            var devMcp = Path.Combine(cursor.FullName, "runtime", "dist", "windows-mcp-server.js");
-            if (File.Exists(devDsh) && File.Exists(devMcp))
-                return new RuntimeLayout("node", devDsh, devMcp);
+            if (File.Exists(devDsh)) return new RuntimeLayout("node", devDsh);
             cursor = cursor.Parent;
         }
 
-        throw new FileNotFoundException(
-            "The bundled DeepSeek Harness WebUI was not found. Expected runtime/app/node_modules/@deepseek-ai/dsh/lib/bin.js in the installed layout.");
+        throw new FileNotFoundException("The bundled DeepSeek Harness WebUI was not found. Expected runtime/app/node_modules/@deepseek-ai/dsh/lib/bin.js in the installed layout.");
     }
 
     private static RuntimeLayout? TryLayout(string installRoot)
     {
         var node = Path.Combine(installRoot, "runtime", "node", "node.exe");
         var dsh = Path.Combine(installRoot, "runtime", "app", "node_modules", "@deepseek-ai", "dsh", "lib", "bin.js");
-        var mcp = Path.Combine(installRoot, "runtime", "app", "windows-mcp-server.js");
-        return File.Exists(node) && File.Exists(dsh) && File.Exists(mcp)
-            ? new RuntimeLayout(node, dsh, mcp)
-            : null;
+        return File.Exists(node) && File.Exists(dsh) ? new RuntimeLayout(node, dsh) : null;
     }
 
-    private static void WriteTuringDeskWebPatch(string path)
-    {
-        const string patch = """
-- id: turingdesk-windows
-  name: '@deepseek-ai/dsh-mcp-client'
-  config:
-    serverName: turingdesk
-    transport: stdio
-    command: !!js process.env.TURINGDESK_MCP_NODE
-    args:
-      - !!js process.env.TURINGDESK_MCP_SERVER
-    env:
-      TURINGDESK_CAPABILITY_URL: !!js process.env.TURINGDESK_CAPABILITY_URL ?? 'http://127.0.0.1:4318'
-    toolCallTimeoutMs: 60000
-    failOnStartupError: false
-    reconnect:
-      enabled: true
-      initialDelayMs: 500
-      maxDelayMs: 10000
-      maxAttempts: 8
-""";
-        File.WriteAllText(path, patch, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
-    }
-
-    private sealed record RuntimeLayout(string NodeExecutable, string DshBin, string WindowsMcpServer);
+    private sealed record RuntimeLayout(string NodeExecutable, string DshBin);
 }
