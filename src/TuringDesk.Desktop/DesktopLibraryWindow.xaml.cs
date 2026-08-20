@@ -349,8 +349,9 @@ public partial class DesktopLibraryWindow : Window
     {
         var asm = System.Reflection.Assembly.GetExecutingAssembly();
         var ver = asm.GetName().Version;
-        var infoVer = asm.GetCustomAttribute<System.Reflection.AssemblyInformationalVersionAttribute>();
-        var display = infoVer?.InformationalVersion ?? ver?.ToString() ?? "未知版本";
+        var infoVer = (System.Reflection.AssemblyInformationalVersionAttribute[])
+            System.Attribute.GetCustomAttributes(asm, typeof(System.Reflection.AssemblyInformationalVersionAttribute));
+        var display = infoVer is { Length: > 0 } ? infoVer[0].InformationalVersion : ver?.ToString() ?? "未知版本";
         var commit = System.Environment.GetEnvironmentVariable("GITHUB_SHA");
         var buildTime = System.IO.File.GetLastWriteTimeUtc(asm.Location);
         VersionText.Text = string.IsNullOrWhiteSpace(commit)
