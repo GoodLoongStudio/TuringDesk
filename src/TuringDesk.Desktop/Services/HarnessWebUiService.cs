@@ -11,6 +11,7 @@ public static class HarnessWebUiService
     private static readonly Uri WebUri = new($"http://127.0.0.1:{Port}/");
     private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromMilliseconds(700) };
     private static readonly object Gate = new();
+    private static readonly object LogGate = new();
     private static readonly TimeSpan IdleTimeout = TimeSpan.FromMinutes(2);
     private static readonly TimeSpan IdlePollInterval = TimeSpan.FromSeconds(15);
 
@@ -21,6 +22,7 @@ public static class HarnessWebUiService
     private static int _activeConsoles;
     private static int _idleCheckRunning;
     private static bool _shutdownHookRegistered;
+    private static string _stderrTail = string.Empty;
 
     public static Uri Url => WebUri;
 
@@ -154,7 +156,7 @@ public static class HarnessWebUiService
             if (process is { HasExited: true })
             {
                 throw new InvalidOperationException(
-                    $"DeepSeek Harness WebUI exited before becoming ready (exit code {process.ExitCode}).",
+                    $"DeepSeek Harness WebUI exited before becoming ready (exit code {process.ExitCode}).{FormatStderr()}",
                     lastError);
             }
 
@@ -162,7 +164,7 @@ public static class HarnessWebUiService
         }
 
         throw new TimeoutException(
-            "DeepSeek Harness WebUI did not become ready on 127.0.0.1:4319 within 20 seconds.",
+            $"DeepSeek Harness WebUI did not become ready on 127.0.0.1:4319 within 20 seconds.{FormatStderr()}",
             lastError);
     }
 
@@ -197,12 +199,15 @@ public static class HarnessWebUiService
         var patchPath = Path.Combine(harnessHome, "turingdesk-web.patch.yml");
         WriteTuringDeskWebPatch(patchPath);
 
+        lock (LogGate) _stderrTail = string.Empty;
+
         var startInfo = new ProcessStartInfo
         {
             FileName = layout.NodeExecutable,
-            WorkingDirectory = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+            WorkingDirectory = harnessHome,
             UseShellExecute = false,
-            CreateNoWindow = true
+            CreateNoWindow = true,
+            RedirectStandardError = true
         };
         startInfo.ArgumentList.Add(layout.DshBin);
         startInfo.ArgumentList.Add("--profile");
@@ -213,14 +218,45 @@ public static class HarnessWebUiService
         startInfo.ArgumentList.Add("127.0.0.1");
         startInfo.ArgumentList.Add("--port");
         startInfo.ArgumentList.Add(Port.ToString());
+        // TuringDesk owns the embedded WebView2 surface. The official web profile
+        // otherwise tries to hand the URL to the system browser on local launches.
+        startInfo.ArgumentList.Add("--no-open");
 
         HarnessModelBridgeService.ApplyEnvironment(startInfo);
         startInfo.Environment["TURINGDESK_CAPABILITY_URL"] = "http://127.0.0.1:4318";
         startInfo.Environment["TURINGDESK_MCP_NODE"] = layout.NodeExecutable;
         startInfo.Environment["TURINGDESK_MCP_SERVER"] = layout.WindowsMcpServer;
 
-        return Process.Start(startInfo)
-            ?? throw new InvalidOperationException("Failed to launch the bundled DeepSeek Harness WebUI process.");
+        var process = new Process { StartInfo = startInfo, EnableRaisingEvents = true };
+        process.ErrorDataReceived += (_, e) =>
+        {
+            if (string.IsNullOrWhiteSpace(e.Data)) return;
+            lock (LogGate)
+            {
+                _stderrTail = (_stderrTail + Environment.NewLine + e.Data).Trim();
+                if (_stderrTail.Length > 6000)
+                    _stderrTail = _stderrTail[^6000..];
+            }
+        };
+
+        if (!process.Start())
+        {
+            process.Dispose();
+            throw new InvalidOperationException("Failed to launch the bundled DeepSeek Harness WebUI process.");
+        }
+
+        process.BeginErrorReadLine();
+        return process;
+    }
+
+    private static string FormatStderr()
+    {
+        lock (LogGate)
+        {
+            return string.IsNullOrWhiteSpace(_stderrTail)
+                ? string.Empty
+                : $" Harness stderr: {_stderrTail}";
+        }
     }
 
     private static void Touch()
