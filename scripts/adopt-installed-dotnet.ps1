@@ -10,69 +10,94 @@ if ([string]::IsNullOrWhiteSpace($DotnetVersion)) {
     throw "global.json does not pin a .NET SDK version."
 }
 
+$runtimeChannel = (($DotnetVersion -split '\.')[0..1] -join '.')
 $osArch = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString()
 $architecture = switch ($osArch) {
     "Arm64" { "arm64" }
     "X64" { "x64" }
-    default { return }
+    default { throw "Unsupported Windows architecture for .NET bootstrap: $osArch" }
 }
 
 $cacheRoot = Join-Path $ToolsRoot "dotnet8-$architecture"
 $cacheExe = Join-Path $cacheRoot "dotnet.exe"
+$installer = Join-Path $ToolsRoot "dotnet-install.ps1"
+$powershell = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
 
-# Existing repository-local verified SDK always wins.
-if (Test-Path $cacheExe) {
+function Test-ExactSdk([string]$DotnetPath) {
+    if (-not $DotnetPath -or -not (Test-Path $DotnetPath)) { return $false }
     try {
-        if ((& $cacheExe --version).Trim() -eq $DotnetVersion) {
-            Write-Host "Found cached .NET SDK $DotnetVersion; no install needed." -ForegroundColor DarkGray
+        $sdks = & $DotnetPath --list-sdks 2>$null
+        return [bool]($sdks | Where-Object { ($_ -split '\s+')[0] -eq $DotnetVersion } | Select-Object -First 1)
+    }
+    catch { return $false }
+}
+
+function Test-WindowsDesktopRuntime([string]$DotnetPath) {
+    if (-not $DotnetPath -or -not (Test-Path $DotnetPath)) { return $false }
+    try {
+        $runtimes = & $DotnetPath --list-runtimes 2>$null
+        return [bool]($runtimes | Where-Object {
+            $_ -match '^Microsoft\.WindowsDesktop\.App\s+' -and
+            (($_ -split '\s+')[1]).StartsWith($runtimeChannel + '.', [StringComparison]::Ordinal)
+        } | Select-Object -First 1)
+    }
+    catch { return $false }
+}
+
+function Ensure-Installer {
+    New-Item -ItemType Directory -Force -Path $ToolsRoot | Out-Null
+    if (-not (Test-Path $installer)) {
+        Write-Host "Downloading Microsoft dotnet-install helper once..." -ForegroundColor DarkGray
+        Invoke-WebRequest "https://dot.net/v1/dotnet-install.ps1" -OutFile $installer -UseBasicParsing | Out-Null
+    }
+}
+
+# A complete repository-local toolchain always wins.
+if ((Test-ExactSdk $cacheExe) -and (Test-WindowsDesktopRuntime $cacheExe)) {
+    Write-Host "Found cached .NET SDK $DotnetVersion + Windows Desktop Runtime $runtimeChannel; no install needed." -ForegroundColor DarkGray
+    exit 0
+}
+
+# Reuse a complete system installation only when it contains BOTH the pinned SDK
+# and the WPF/WinForms desktop runtime required to launch TuringDesk.Desktop.
+$command = Get-Command dotnet -ErrorAction SilentlyContinue
+if ($command) {
+    $systemDotnet = $command.Source
+    $systemRoot = Split-Path $systemDotnet -Parent
+    if ((Test-ExactSdk $systemDotnet) -and (Test-WindowsDesktopRuntime $systemDotnet)) {
+        New-Item -ItemType Directory -Force -Path $ToolsRoot | Out-Null
+        if (Test-Path $cacheRoot) { Remove-Item $cacheRoot -Recurse -Force }
+        New-Item -ItemType Junction -Path $cacheRoot -Target $systemRoot | Out-Null
+
+        if ((Test-ExactSdk $cacheExe) -and (Test-WindowsDesktopRuntime $cacheExe)) {
+            Write-Host "Using installed .NET SDK $DotnetVersion + Windows Desktop Runtime $runtimeChannel; download skipped." -ForegroundColor Green
             exit 0
         }
+
+        Remove-Item $cacheRoot -Force -ErrorAction SilentlyContinue
     }
-    catch { }
 }
 
-$command = Get-Command dotnet -ErrorAction SilentlyContinue
-if (-not $command) {
-    Write-Host "System .NET SDK not found; quick verify will bootstrap $DotnetVersion once." -ForegroundColor DarkGray
-    exit 0
+# The system installation is missing either the exact SDK or WindowsDesktop.
+# Build a private, non-admin toolchain under the repository instead of sending the
+# user to the browser/runtime download page.
+Ensure-Installer
+if (Test-Path $cacheRoot) { Remove-Item $cacheRoot -Recurse -Force }
+New-Item -ItemType Directory -Force -Path $cacheRoot | Out-Null
+
+Write-Host "Preparing repository-local .NET SDK $DotnetVersion ($architecture)..." -ForegroundColor Yellow
+& $powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File $installer -Version $DotnetVersion -Architecture $architecture -InstallDir $cacheRoot -NoPath | Out-Host
+if ($LASTEXITCODE -ne 0) { throw ".NET SDK bootstrap failed with exit code $LASTEXITCODE" }
+if (-not (Test-ExactSdk $cacheExe)) { throw "Pinned .NET SDK bootstrap did not produce $DotnetVersion." }
+
+if (-not (Test-WindowsDesktopRuntime $cacheExe)) {
+    Write-Host "Preparing repository-local Windows Desktop Runtime $runtimeChannel ($architecture)..." -ForegroundColor Yellow
+    & $powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File $installer -Channel $runtimeChannel -Runtime windowsdesktop -Architecture $architecture -InstallDir $cacheRoot -NoPath | Out-Host
+    if ($LASTEXITCODE -ne 0) { throw "Windows Desktop Runtime bootstrap failed with exit code $LASTEXITCODE" }
 }
 
-$systemDotnet = $command.Source
-$systemRoot = Split-Path $systemDotnet -Parent
-$installed = @()
-try {
-    $installed = & $systemDotnet --list-sdks 2>$null
-}
-catch {
-    exit 0
+if (-not (Test-WindowsDesktopRuntime $cacheExe)) {
+    throw "Microsoft.WindowsDesktop.App $runtimeChannel was not available after bootstrap."
 }
 
-$hasExactSdk = $installed | Where-Object {
-    ($_ -split '\s+')[0] -eq $DotnetVersion
-} | Select-Object -First 1
-
-if (-not $hasExactSdk) {
-    Write-Host "System .NET exists but SDK $DotnetVersion is not installed; quick verify will bootstrap the pinned SDK once." -ForegroundColor DarkGray
-    exit 0
-}
-
-# Reuse the complete system dotnet installation through a directory junction.
-# This keeps quick-verify.ps1 unchanged and preserves its exact-version check.
-New-Item -ItemType Directory -Force -Path $ToolsRoot | Out-Null
-if (Test-Path $cacheRoot) {
-    Remove-Item $cacheRoot -Recurse -Force
-}
-New-Item -ItemType Junction -Path $cacheRoot -Target $systemRoot | Out-Null
-
-if (-not (Test-Path $cacheExe)) {
-    throw "Failed to expose installed .NET SDK through quick verify cache: $cacheRoot"
-}
-
-$resolvedVersion = (& $cacheExe --version).Trim()
-if ($resolvedVersion -ne $DotnetVersion) {
-    Remove-Item $cacheRoot -Force -ErrorAction SilentlyContinue
-    Write-Host "Installed dotnet did not resolve pinned SDK $DotnetVersion from this repository; quick verify will bootstrap its local SDK." -ForegroundColor DarkGray
-    exit 0
-}
-
-Write-Host "Using installed .NET SDK $DotnetVersion; download skipped." -ForegroundColor Green
+Write-Host "Repository-local .NET toolchain is ready: SDK $DotnetVersion + Windows Desktop Runtime $runtimeChannel." -ForegroundColor Green
