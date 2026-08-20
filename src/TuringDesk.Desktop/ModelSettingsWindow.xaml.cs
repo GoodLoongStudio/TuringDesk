@@ -6,8 +6,8 @@ namespace TuringDesk.Desktop;
 
 public partial class ModelSettingsWindow : Window
 {
-    private readonly RuntimeClient _runtime;
     private readonly UnifiedModelConfigurationService _modelConfiguration;
+    private readonly ModelConnectionProbeService _connectionProbe = new();
     private bool _initializing = true;
 
     public ModelSettings? SavedSettings { get; private set; }
@@ -15,7 +15,9 @@ public partial class ModelSettingsWindow : Window
     public ModelSettingsWindow(RuntimeClient runtime, ModelSettingsStore store, ModelSettings initial, string? apiKey)
     {
         InitializeComponent();
-        _runtime = runtime;
+        // Keep the current constructor shape until the remaining legacy Runtime callers
+        // are removed. Model save/test themselves no longer use or wake Runtime.
+        _ = runtime;
         _modelConfiguration = new UnifiedModelConfigurationService(runtime, store);
 
         ProviderBox.ItemsSource = ModelProviderPresets.All;
@@ -56,22 +58,13 @@ public partial class ModelSettingsWindow : Window
         try
         {
             var settings = BuildSettings();
-            StatusText.Text = "正在应用配置并测试快捷 Agent…";
-            var configured = await _runtime.ConfigureModelAsync(settings, ApiKeyBox.Password);
-            if (configured is null)
-            {
-                StatusText.Text = "Runtime 没有接受配置。请确认 TuringDesk Runtime 正在运行。";
-                return;
-            }
-
-            var result = await _runtime.TestModelAsync();
-            StatusText.Text = result is null
-                ? "连接测试失败。请检查 Base URL、模型 ID 和 API Key。"
-                : $"连接成功：{result}";
+            StatusText.Text = "正在直接测试模型连接…";
+            var result = await _connectionProbe.ProbeAsync(settings, ApiKeyBox.Password);
+            StatusText.Text = $"连接成功：{result}";
         }
         catch (Exception error)
         {
-            StatusText.Text = error.Message;
+            StatusText.Text = $"连接测试失败：{error.Message}";
         }
     }
 
