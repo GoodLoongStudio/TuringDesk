@@ -49,9 +49,15 @@ jobs:
           foreach ($required in @(
             "src/TuringDesk.Desktop/DesktopSearchBarWindow.xaml",
             "src/TuringDesk.Desktop/DesktopSearchBarWindow.xaml.cs",
+            "src/TuringDesk.Desktop/DesktopSearchBarWindow.IndexStatus.cs",
+            "src/TuringDesk.Desktop/DesktopSearchBarWindow.L3Streaming.cs",
             "src/TuringDesk.Desktop/MainWindow.AgentEntry.cs",
             "src/TuringDesk.Desktop/Services/DesktopSearchIndexService.cs",
+            "src/TuringDesk.Desktop/Services/AppSearch/AppSearchProvider.cs",
+            "src/TuringDesk.Desktop/Services/AppSearch/AppSearchEntry.cs",
+            "src/TuringDesk.Desktop/Services/EverythingFileSearchProvider.cs",
             "src/TuringDesk.Desktop/Services/DesktopQuickAnswerService.cs",
+            "src/TuringDesk.Desktop/Services/L3ChatProviderClient.cs",
             "src/TuringDesk.Desktop/Services/DesktopAiModelChoiceService.cs",
             "src/TuringDesk.Desktop/Services/HarnessWebUiService.cs"
           )) {
@@ -73,8 +79,26 @@ jobs:
           }
 
           $localIndex = Get-Content "src/TuringDesk.Desktop/Services/DesktopSearchIndexService.cs" -Raw
-          foreach ($marker in @("ShellSurfaceCatalog.LoadStartApps", "FileSystemWatcher", "PinyinConvert.GetPinyin", "PinyinConvert.GetPinyinFirstLetter", "SearchApps", "SearchFilesAsync", "_filePrefixIndex", "Task.Run")) {
-            if ($localIndex -notmatch [regex]::Escape($marker)) { throw "Search index contract missing: $marker" }
+          foreach ($marker in @("AppSearchProvider", "EverythingFileSearchProvider", "SearchApps", "SearchFilesAsync")) {
+            if ($localIndex -notmatch [regex]::Escape($marker)) { throw "Search coordinator contract missing: $marker" }
+          }
+          if ($localIndex -match "Directory\.EnumerateFiles|SearchOption\.AllDirectories") {
+            throw "DesktopSearchIndexService must not crawl disks"
+          }
+
+          $appProvider = Get-Content "src/TuringDesk.Desktop/Services/AppSearch/AppSearchProvider.cs" -Raw
+          foreach ($marker in @("FileSystemWatcher", "AppSearchMatcher.Score", "Volatile.Read", "Task.Run")) {
+            if ($appProvider -notmatch [regex]::Escape($marker)) { throw "RAM application-search provider contract missing: $marker" }
+          }
+
+          $appEntry = Get-Content "src/TuringDesk.Desktop/Services/AppSearch/AppSearchEntry.cs" -Raw
+          foreach ($marker in @("PinyinConvert.GetPinyin", "PinyinConvert.GetPinyinFirstLetter")) {
+            if ($appEntry -notmatch [regex]::Escape($marker)) { throw "Application pinyin alias contract missing: $marker" }
+          }
+
+          $everything = Get-Content "src/TuringDesk.Desktop/Services/EverythingFileSearchProvider.cs" -Raw
+          foreach ($marker in @("EverythingVersion", "EsVersion", "Everything.exe", "es.exe", "SearchAsync", "-full-path-and-name")) {
+            if ($everything -notmatch [regex]::Escape($marker)) { throw "Everything-backed L2 contract missing: $marker" }
           }
 
           $desktopProject = Get-Content "src/TuringDesk.Desktop/TuringDesk.Desktop.csproj" -Raw
@@ -91,8 +115,16 @@ jobs:
           if ($quick -match "HarnessWebUiService") {
             throw "Level-3 quick answers must not wake Harness"
           }
-          foreach ($marker in @("TryCalculate", "QuickIntent.Translate", "QuickIntent.Explain", "chat/completions")) {
+          foreach ($marker in @("L3ChatProviderClient", "TryCalculate", "QuickIntent.Translate", "QuickIntent.Explain", "PartialResponseUpdated")) {
             if ($quick -notmatch [regex]::Escape($marker)) { throw "Lightweight direct-answer contract missing: $marker" }
+          }
+
+          $l3Transport = Get-Content "src/TuringDesk.Desktop/Services/L3ChatProviderClient.cs" -Raw
+          foreach ($marker in @("chat/completions", "text/event-stream", "ResponseHeadersRead", "ResolveChatCompletionsEndpoint")) {
+            if ($l3Transport -notmatch [regex]::Escape($marker)) { throw "L3 provider transport contract missing: $marker" }
+          }
+          if ($l3Transport -match "HarnessWebUiService|RuntimeHostService|RuntimeClient") {
+            throw "L3 provider transport must stay independent of Node/Harness Runtime"
           }
 
           $appStartup = Get-Content "src/TuringDesk.Desktop/App.xaml.cs" -Raw
