@@ -35,25 +35,36 @@ public sealed class ModelConnectionProbeService
         if (string.IsNullOrWhiteSpace(apiKey) && settings.ProviderId is not "ollama" and not "lmstudio")
             throw new InvalidOperationException("API Key 为空。这个提供商需要凭据。");
 
-        var baseUrl = settings.BaseUrl.Trim();
-        if (!baseUrl.EndsWith('/')) baseUrl += "/";
-        var endpoint = new Uri(new Uri(baseUrl, UriKind.Absolute), "chat/completions");
+        var endpoint = L3ChatProviderClient.ResolveChatCompletionsEndpoint(settings);
 
         using var request = new HttpRequestMessage(HttpMethod.Post, endpoint);
         if (!string.IsNullOrWhiteSpace(apiKey))
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey.Trim());
 
-        request.Content = JsonContent.Create(new
-        {
-            model = settings.Model,
-            messages = new object[]
+        request.Content = settings.ProviderId.Equals("deepseek", StringComparison.OrdinalIgnoreCase)
+            ? JsonContent.Create(new
             {
-                new { role = "user", content = "Reply with OK only." }
-            },
-            temperature = 0,
-            max_tokens = 8,
-            stream = false
-        });
+                model = settings.Model.Trim(),
+                messages = new object[]
+                {
+                    new { role = "user", content = "Reply with OK only." }
+                },
+                temperature = 0,
+                max_tokens = 8,
+                stream = false,
+                thinking = new { type = "disabled" }
+            })
+            : JsonContent.Create(new
+            {
+                model = settings.Model.Trim(),
+                messages = new object[]
+                {
+                    new { role = "user", content = "Reply with OK only." }
+                },
+                temperature = 0,
+                max_tokens = 8,
+                stream = false
+            });
 
         HttpResponseMessage response;
         try
