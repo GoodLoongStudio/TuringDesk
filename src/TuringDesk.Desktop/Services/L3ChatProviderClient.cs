@@ -1,7 +1,9 @@
+using System.IO;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
+using System.Text;
 using System.Text.Json;
 
 namespace TuringDesk.Desktop.Services;
@@ -10,14 +12,14 @@ public sealed record L3ChatMessage(string Role, string Content);
 
 /// <summary>
 /// Provider transport for the tool-free Level-3 conversation layer.
-/// Keeps provider quirks out of the search UI and exposes useful API errors
-/// instead of collapsing every failure into an HTTP status code.
+/// It follows the OpenAI-compatible streaming contract used by DeepSeek,
+/// Ollama, LM Studio and relays, while keeping provider errors visible.
 /// </summary>
 public sealed class L3ChatProviderClient
 {
     private static readonly HttpClient Http = new()
     {
-        Timeout = TimeSpan.FromSeconds(45)
+        Timeout = TimeSpan.FromSeconds(60)
     };
 
     public async Task<string> CompleteAsync(
@@ -27,6 +29,7 @@ public sealed class L3ChatProviderClient
         IReadOnlyList<L3ChatMessage> history,
         string userText,
         int maxTokens,
+        Action<string>? onPartial = null,
         CancellationToken cancellationToken = default)
     {
         var endpoint = ResolveChatCompletionsEndpoint(settings);
@@ -44,7 +47,8 @@ public sealed class L3ChatProviderClient
                     systemPrompt,
                     history,
                     userText,
-                    maxTokens);
+                    maxTokens,
+                    stream: true);
 
                 using var response = await Http.SendAsync(
                     request,
@@ -52,13 +56,13 @@ public sealed class L3ChatProviderClient
                     cancellationToken).ConfigureAwait(false);
 
                 if (response.IsSuccessStatusCode)
-                    return await ReadAssistantTextAsync(response, cancellationToken).ConfigureAwait(false);
+                    return await ReadStreamingAssistantTextAsync(response, onPartial, cancellationToken).ConfigureAwait(false);
 
                 var error = await ReadProviderErrorAsync(response, cancellationToken).ConfigureAwait(false);
                 if (attempt == 0 && ShouldRetry(response.StatusCode))
                 {
                     lastError = new InvalidOperationException(error);
-                    await Task.Delay(TimeSpan.FromMilliseconds(450), cancellationToken).ConfigureAwait(false);
+                    await Task.Delay(TimeSpan.FromMilliseconds(500), cancellationToken).ConfigureAwait(false);
                     continue;
                 }
 
@@ -71,7 +75,7 @@ public sealed class L3ChatProviderClient
             catch (HttpRequestException error) when (attempt == 0)
             {
                 lastError = error;
-                await Task.Delay(TimeSpan.FromMilliseconds(350), cancellationToken).ConfigureAwait(false);
+                await Task.Delay(TimeSpan.FromMilliseconds(400), cancellationToken).ConfigureAwait(false);
             }
         }
 
@@ -90,8 +94,7 @@ public sealed class L3ChatProviderClient
         if (path.EndsWith("/chat/completions", StringComparison.OrdinalIgnoreCase))
             return baseUri;
 
-        var normalized = raw.TrimEnd('/') + "/chat/completions";
-        return new Uri(normalized, UriKind.Absolute);
+        return new Uri(raw.TrimEnd('/') + "/chat/completions", UriKind.Absolute);
     }
 
     private static HttpRequestMessage BuildRequest(
@@ -101,12 +104,13 @@ public sealed class L3ChatProviderClient
         string systemPrompt,
         IReadOnlyList<L3ChatMessage> history,
         string userText,
-        int maxTokens)
+        int maxTokens,
+        bool stream)
     {
         var request = new HttpRequestMessage(HttpMethod.Post, endpoint);
         if (!string.IsNullOrWhiteSpace(credential))
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", credential.Trim());
-
+        request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("text/event-stream"));
         request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
 
         var messages = new List<object>(history.Count + 2)
@@ -123,13 +127,50 @@ public sealed class L3ChatProviderClient
             messages,
             temperature = 0.2,
             max_tokens = maxTokens,
-            stream = false
+            stream
         });
         return request;
     }
 
-    private static async Task<string> ReadAssistantTextAsync(
+    private static async Task<string> ReadStreamingAssistantTextAsync(
         HttpResponseMessage response,
+        Action<string>? onPartial,
+        CancellationToken cancellationToken)
+    {
+        var mediaType = response.Content.Headers.ContentType?.MediaType;
+        if (!string.Equals(mediaType, "text/event-stream", StringComparison.OrdinalIgnoreCase))
+            return await ReadJsonAssistantTextAsync(response, onPartial, cancellationToken).ConfigureAwait(false);
+
+        await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+        using var reader = new StreamReader(stream);
+        var accumulated = new StringBuilder();
+
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var line = await reader.ReadLineAsync(cancellationToken).ConfigureAwait(false);
+            if (line is null) break;
+            if (!line.StartsWith("data:", StringComparison.OrdinalIgnoreCase)) continue;
+
+            var payload = line[5..].Trim();
+            if (payload.Length == 0) continue;
+            if (payload.Equals("[DONE]", StringComparison.OrdinalIgnoreCase)) break;
+
+            var delta = ExtractStreamDelta(payload);
+            if (string.IsNullOrEmpty(delta)) continue;
+            accumulated.Append(delta);
+            onPartial?.Invoke(accumulated.ToString());
+        }
+
+        var reply = accumulated.ToString().Trim();
+        if (string.IsNullOrWhiteSpace(reply))
+            throw new InvalidOperationException("模型建立了流式连接，但没有返回可显示内容。");
+        return reply;
+    }
+
+    private static async Task<string> ReadJsonAssistantTextAsync(
+        HttpResponseMessage response,
+        Action<string>? onPartial,
         CancellationToken cancellationToken)
     {
         await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
@@ -147,7 +188,29 @@ public sealed class L3ChatProviderClient
         var reply = content.GetString()?.Trim();
         if (string.IsNullOrWhiteSpace(reply))
             throw new InvalidOperationException("模型返回了空内容。");
+        onPartial?.Invoke(reply);
         return reply;
+    }
+
+    private static string ExtractStreamDelta(string payload)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(payload);
+            if (!document.RootElement.TryGetProperty("choices", out var choices) ||
+                choices.ValueKind != JsonValueKind.Array ||
+                choices.GetArrayLength() == 0 ||
+                !choices[0].TryGetProperty("delta", out var delta) ||
+                !delta.TryGetProperty("content", out var content) ||
+                content.ValueKind != JsonValueKind.String)
+                return string.Empty;
+
+            return content.GetString() ?? string.Empty;
+        }
+        catch (JsonException)
+        {
+            return string.Empty;
+        }
     }
 
     private static async Task<string> ReadProviderErrorAsync(
