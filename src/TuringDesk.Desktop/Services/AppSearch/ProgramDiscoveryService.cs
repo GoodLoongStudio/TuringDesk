@@ -192,7 +192,7 @@ internal sealed class ProgramDiscoveryService
                         "aumid:" + appUserModelId,
                         "Windows 应用",
                         "AppsFolder",
-                        [appUserModelId]));
+                        new[] { appUserModelId }));
                 }
                 catch
                 {
