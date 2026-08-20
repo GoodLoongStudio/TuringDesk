@@ -12,7 +12,6 @@ public partial class HarnessConsoleWindow : Window
 {
     private readonly string? _initialQuery;
     private CancellationTokenSource? _loadCancellation;
-    private RuntimeHostService.RuntimeLease? _runtimeLease;
     private bool _lifecycleOpened;
     private bool _prefillAttempted;
 
@@ -32,7 +31,6 @@ public partial class HarnessConsoleWindow : Window
     {
         if (_lifecycleOpened) return;
         _lifecycleOpened = true;
-        RuntimeHostService.NotifyWorkbenchOpened();
         HarnessWebUiService.NotifyConsoleOpened();
     }
 
@@ -42,12 +40,8 @@ public partial class HarnessConsoleWindow : Window
         _loadCancellation?.Dispose();
         _loadCancellation = null;
 
-        _runtimeLease?.Dispose();
-        _runtimeLease = null;
-
         if (!_lifecycleOpened) return;
         _lifecycleOpened = false;
-        RuntimeHostService.NotifyWorkbenchClosed();
         HarnessWebUiService.NotifyConsoleClosed();
     }
 
@@ -61,15 +55,12 @@ public partial class HarnessConsoleWindow : Window
         LoadingPanel.Visibility = Visibility.Visible;
         HarnessView.Visibility = Visibility.Collapsed;
         LoadingTitle.Text = "正在启动 Agent 控制台";
-        LoadingDetail.Text = "按需启动 Runtime 与本机 DeepSeek Harness WebUI…";
+        LoadingDetail.Text = "按需启动本机 DeepSeek Harness WebUI…";
         LoadingProgress.Visibility = Visibility.Visible;
         RetryButton.Visibility = Visibility.Collapsed;
 
         try
         {
-            _runtimeLease ??= await RuntimeHostService.AcquireAsync(
-                RuntimeStartReason.HarnessConsole,
-                cancellationToken);
             var url = await HarnessWebUiService.EnsureRunningAsync(cancellationToken);
 
             var webViewProfile = Path.Combine(
@@ -152,7 +143,6 @@ public partial class HarnessConsoleWindow : Window
 
         LoadingPanel.Visibility = Visibility.Collapsed;
         HarnessView.Visibility = Visibility.Visible;
-        RuntimeHostService.MarkActivity(RuntimeStartReason.HarnessConsole);
         await TryPrefillInitialQueryAsync();
     }
 
@@ -233,7 +223,6 @@ public partial class HarnessConsoleWindow : Window
     {
         if (HarnessView.CoreWebView2 is not null)
         {
-            RuntimeHostService.MarkActivity(RuntimeStartReason.HarnessConsole);
             HarnessView.CoreWebView2.Reload();
             return;
         }
