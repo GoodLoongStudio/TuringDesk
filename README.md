@@ -63,7 +63,7 @@ Windows / Explorer
 - 默认 Windows MCP 或 Capability Server；
 - 旧 Home/Workspace/Tasks/Memory 仪表盘。
 
-这些旧链路目前仍有部分代码残留，删除顺序以清理计划为准。
+这些旧链路已从代码中清除。设计文档保留历史决策记录。
 
 ## 开发与验证
 
@@ -73,7 +73,7 @@ Windows 目标机快速验证入口：
 QUICK-VERIFY.cmd
 ```
 
-当前脚本仍含旧 Runtime 检查，完成架构收口时需要按清理计划同步调整。在脚本完成迁移前，不应把旧 4317/4318 检查当作目标设计。
+当前脚本已移除旧 4317/4318 端口检查，验证目标为三个主界面和场景引擎。
 
 ## Replacement Shell
 

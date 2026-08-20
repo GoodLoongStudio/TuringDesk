@@ -10,7 +10,7 @@ public partial class MainWindow
             return;
         }
 
-        var window = new DesktopLibraryWindow(_runtime, _modelStore)
+        var window = new DesktopLibraryWindow(_modelStore)
         {
             Owner = IsVisible ? this : null
         };

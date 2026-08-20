@@ -54,8 +54,8 @@ public partial class HarnessConsoleWindow : Window
 
         LoadingPanel.Visibility = Visibility.Visible;
         HarnessView.Visibility = Visibility.Collapsed;
-        LoadingTitle.Text = "正在启动 Agent 控制台";
-        LoadingDetail.Text = "按需启动本机 DeepSeek Harness WebUI…";
+        LoadingTitle.Text = "正在启动 AI 工作台";
+        LoadingDetail.Text = "正在启动官方 DeepSeek Harness 工作台…";
         LoadingProgress.Visibility = Visibility.Visible;
         RetryButton.Visibility = Visibility.Collapsed;
 
@@ -72,7 +72,14 @@ public partial class HarnessConsoleWindow : Window
             await HarnessView.EnsureCoreWebView2Async(environment);
 
             ConfigureBrowserSurface();
-            HarnessView.Source = url;
+
+            // Spec §8.4: prefer official URL/session interface over DOM injection.
+            // Append the initial query as a URL hash so the WebUI can pick it up
+            // if it supports hash-based prefill. DOM injection remains as fallback.
+            var targetUrl = _initialQuery is not null
+                ? new UriBuilder(url) { Fragment = $"prompt={Uri.EscapeDataString(_initialQuery)}" }.Uri
+                : url;
+            HarnessView.Source = targetUrl;
         }
         catch (OperationCanceledException)
         {
@@ -80,7 +87,7 @@ public partial class HarnessConsoleWindow : Window
         }
         catch (Exception error)
         {
-            LoadingTitle.Text = "Agent 控制台启动失败";
+            LoadingTitle.Text = "AI 工作台启动失败";
             LoadingDetail.Text = error.Message;
             LoadingProgress.Visibility = Visibility.Collapsed;
             RetryButton.Visibility = Visibility.Visible;
@@ -112,6 +119,29 @@ public partial class HarnessConsoleWindow : Window
         core.NavigationCompleted += Core_NavigationCompleted;
         core.NewWindowRequested -= Core_NewWindowRequested;
         core.NewWindowRequested += Core_NewWindowRequested;
+
+        // Spec §8.5: downloads, popups and permission requests need explicit policies.
+        // Downloads are blocked in the workbench shell — the Harness WebUI manages
+        // its own file operations within the sandboxed profile.
+        core.DownloadStarting -= Core_DownloadStarting;
+        core.DownloadStarting += Core_DownloadStarting;
+
+        // Permission requests (camera, mic, geolocation, etc.) are denied by
+        // default. The Harness WebUI should not need device access through the
+        // shell. If a future feature requires it, add an explicit user prompt.
+        core.PermissionRequested -= Core_PermissionRequested;
+        core.PermissionRequested += Core_PermissionRequested;
+    }
+
+    private void Core_DownloadStarting(object? sender, CoreWebView2DownloadStartingEventArgs e)
+    {
+        // Block all downloads from the workbench shell.
+        e.Cancel = true;
+    }
+
+    private void Core_PermissionRequested(object? sender, CoreWebView2PermissionRequestedEventArgs e)
+    {
+        e.State = CoreWebView2PermissionState.Deny;
     }
 
     private void Core_NavigationStarting(object? sender, CoreWebView2NavigationStartingEventArgs e)
@@ -134,8 +164,8 @@ public partial class HarnessConsoleWindow : Window
         {
             HarnessView.Visibility = Visibility.Collapsed;
             LoadingPanel.Visibility = Visibility.Visible;
-            LoadingTitle.Text = "Agent 控制台无法加载";
-            LoadingDetail.Text = $"Harness WebUI 返回了导航错误：{e.WebErrorStatus}";
+            LoadingTitle.Text = "AI 工作台无法加载";
+            LoadingDetail.Text = $"DeepSeek Harness WebUI 返回了导航错误：{e.WebErrorStatus}";
             LoadingProgress.Visibility = Visibility.Collapsed;
             RetryButton.Visibility = Visibility.Visible;
             return;
@@ -178,8 +208,9 @@ public partial class HarnessConsoleWindow : Window
         }
         catch
         {
-            // WebUI DOM can change between Harness versions. The workbench is
-            // still open and usable even if best-effort query prefill misses.
+            // WebUI DOM can change between Harness versions. The query was already
+            // passed via URL hash (#prompt=...); DOM injection is a best-effort
+            // fallback and the workbench remains usable even if it misses.
         }
     }
 

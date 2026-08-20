@@ -54,7 +54,6 @@ public partial class ShellBarWindow : Window
     private readonly MainWindow _controlCenter;
     private readonly DisplayMonitor _monitor;
     private readonly WindowManager _windows = new();
-    private readonly RuntimeClient _runtime = new();
     private readonly AppLauncher _launcher = new();
     private readonly StartMenuWindow _startMenu;
     private readonly TaskSwitcherWindow _taskSwitcher;
@@ -248,7 +247,7 @@ public partial class ShellBarWindow : Window
     private void Settings_Click(object sender, RoutedEventArgs e)
     {
         HidePopups();
-        _controlCenter.ShowDiyCenter();
+        _controlCenter.ShowDesktopLibrary();
     }
 
     private void TaskSwitcher_Click(object sender, RoutedEventArgs e)
@@ -412,29 +411,19 @@ public partial class ShellBarWindow : Window
         var text = AgentBox.Text.Trim();
         if (string.IsNullOrWhiteSpace(text)) return;
 
-        AgentBox.IsEnabled = false;
-        AgentFloatingCardsService.Begin(_monitor, text);
+        AgentBox.Clear();
+
+        // Shell mode Agent input opens the official Harness WebUI with the
+        // user's query, consistent with the desktop search bar L4 path.
         try
         {
-            AgentBox.Clear();
-            var reply = await _runtime.ChatAsync(text);
-            AgentBox.ToolTip = string.IsNullOrWhiteSpace(reply) ? "Agent 暂时没有返回结果" : reply;
-            if (!string.IsNullOrWhiteSpace(reply))
-            {
-                var preview = reply.Length <= 140 ? reply : $"{reply[..140]}…";
-                ShellNotificationService.Publish("图灵已完成", preview, "agent");
-                AgentFloatingCardsService.Complete(reply);
-            }
-            else
-            {
-                AgentFloatingCardsService.Fail("Agent 暂时没有返回结果。请检查 Runtime 或模型设置。");
-            }
+            var window = new HarnessConsoleWindow(text);
+            window.Show();
+            window.Activate();
         }
         catch (Exception ex)
         {
-            AgentBox.ToolTip = "Agent 请求失败";
-            ShellNotificationService.Publish("图灵执行失败", ex.Message, "error");
-            AgentFloatingCardsService.Fail(ex.Message);
+            ShellNotificationService.Publish("AI 工作台启动失败", ex.Message, "error");
         }
         finally
         {

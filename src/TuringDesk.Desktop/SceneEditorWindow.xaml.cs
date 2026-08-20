@@ -30,6 +30,10 @@ public partial class SceneEditorWindow : Window
         };
     }
 
+    public SceneEditorWindow() : this(new SceneCatalogService().CreateNewScene())
+    {
+    }
+
     public SceneManifest Scene => _scene;
 
     private void RefreshLayerList(string? selectId = null)

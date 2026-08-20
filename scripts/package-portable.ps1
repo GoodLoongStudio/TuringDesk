@@ -43,9 +43,6 @@ try {
     pnpm build
     if ($LASTEXITCODE -ne 0) { throw "Runtime build failed with exit code $LASTEXITCODE" }
 
-    pnpm test:harness
-    if ($LASTEXITCODE -ne 0) { throw "Harness integration smoke failed with exit code $LASTEXITCODE" }
-
     # pnpm deploy creates an isolated, portable production node_modules tree.
     # --legacy allows deploy for this single-package workspace without requiring
     # inject-workspace-packages=true. It reuses the dependency tree already
@@ -59,9 +56,8 @@ finally {
 
 # The repository intentionally ignores dist/, so explicitly place the compiled
 # runtime into the deployed production package after pnpm deploy.
-Write-Host "Copying compiled runtime and Harness integration profile..." -ForegroundColor Cyan
+Write-Host "Copying compiled runtime..." -ForegroundColor Cyan
 Copy-Item (Join-Path $RuntimeRoot "dist\*") $RuntimeAppDir -Recurse -Force
-Copy-Item (Join-Path $RuntimeRoot "harness") (Join-Path $RuntimeAppDir "harness") -Recurse -Force
 
 Write-Host "Publishing self-contained Windows desktop for $RuntimeIdentifier..." -ForegroundColor Cyan
 $DesktopProject = Join-Path $Root "src\TuringDesk.Desktop\TuringDesk.Desktop.csproj"
@@ -107,12 +103,6 @@ if (Test-Path (Join-Path $NodeSource "LICENSE")) {
     Copy-Item (Join-Path $NodeSource "LICENSE") (Join-Path $RuntimeNodeDir "NODE-LICENSE.txt") -Force
 }
 
-Write-Host "Verifying Harness Agent kernel from the final installed layout..." -ForegroundColor Cyan
-& $EmbeddedNode (Join-Path $RuntimeAppDir "harness-integration-smoke.js")
-if ($LASTEXITCODE -ne 0) {
-    throw "Packaged DeepSeek Harness integration smoke failed with exit code $LASTEXITCODE"
-}
-
 Write-Host "Verifying official Harness WebUI from the final installed layout..." -ForegroundColor Cyan
 & $EmbeddedNode (Join-Path $RuntimeAppDir "harness-web-smoke.js")
 if ($LASTEXITCODE -ne 0) {
@@ -136,10 +126,8 @@ foreach ($Required in @(
     (Join-Path $ShellHostDir "TuringDesk.ShellHost.exe"),
     $BrandIcon,
     $EmbeddedNode,
-    (Join-Path $RuntimeAppDir "harness-integration-smoke.js"),
     (Join-Path $RuntimeAppDir "harness-web-smoke.js"),
     (Join-Path $RuntimeAppDir "node_modules\@deepseek-ai\dsh\lib\bin.js"),
-    (Join-Path $RuntimeAppDir "harness\turingdesk.cordis.yml"),
     (Join-Path $PackageRoot "Enable-TuringDeskShell.cmd"),
     (Join-Path $PackageRoot "Enable-TuringDeskShell.ps1"),
     (Join-Path $PackageRoot "Restore-Explorer.ps1")
@@ -192,7 +180,7 @@ Node: $NodeVersion ($DetectedNodeArch)
 DeepSeek Harness: 0.1.0-rc.6
 Harness UI: official DeepSeek Harness WebUI wrapped by TuringDesk WebView2
 Harness WebUI: packaged and boot-smoke verified
-Harness startup: process launch begins before MainWindow construction
+Harness startup: on-demand via official dsh --profile web
 Harness configuration: shared official settings.yaml + .credentials.yaml stores
 Harness credentials: Models page and beginner setup use the same writable credential source
 Default desktop mode: Explorer Desktop Enhancement (WorkerW/Progman scene host)
@@ -209,7 +197,6 @@ Shell mode: Windows Custom User Interface (current-user policy)
 Shell host: shellhost/TuringDesk.ShellHost.exe
 Recovery: Restore-Explorer.ps1
 Application icon: embedded multi-size TuringDesk.ico
-Harness profile: runtime/app/harness/turingdesk.cordis.yml
 Build commit: $env:GITHUB_SHA
 Build time (UTC): $([DateTime]::UtcNow.ToString("o"))
 "@

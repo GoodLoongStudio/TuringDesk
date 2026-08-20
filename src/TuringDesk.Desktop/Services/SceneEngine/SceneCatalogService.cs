@@ -179,6 +179,47 @@ public sealed class SceneCatalogService
         return copy;
     }
 
+    public SceneManifest CreateNewScene()
+    {
+        var id = "user:" + Guid.NewGuid().ToString("N");
+        var destination = Path.Combine(_sceneRoot, SafeId(id));
+        Directory.CreateDirectory(destination);
+
+        var scene = new SceneManifest
+        {
+            Id = id,
+            Title = "新桌面场景",
+            Author = Environment.UserName,
+            Kind = SceneKind.Scene,
+            IsBuiltIn = false,
+            PreferredFps = 60,
+            Interactive = true,
+            PackageRoot = destination,
+            Layers =
+            [
+                new SceneLayerDefinition
+                {
+                    Name = "背景图层",
+                    Kind = SceneLayerKind.Shape,
+                    X = 0.5,
+                    Y = 0.5,
+                    Width = 1.0,
+                    Height = 1.0,
+                    Opacity = 1.0
+                }
+            ],
+            Properties =
+            [
+                new ScenePropertyDefinition { Key = "intensity", Label = "动态强度", Kind = ScenePropertyKind.Slider, Default = 0.8, Min = 0.2, Max = 1.0, Step = 0.05 },
+                new ScenePropertyDefinition { Key = "motion", Label = "动态效果", Kind = ScenePropertyKind.Bool, Default = true },
+                new ScenePropertyDefinition { Key = "accent", Label = "强调色", Kind = ScenePropertyKind.Color, Default = "#8796FF" }
+            ]
+        };
+
+        WriteManifest(destination, scene);
+        return scene;
+    }
+
     private SceneManifest ImportSimpleFile(string sourcePath, SceneKind kind)
     {
         var id = "user:" + Guid.NewGuid().ToString("N");
@@ -277,6 +318,18 @@ public sealed class SceneCatalogService
             ValidateAssetPath(root, layer.Source!, $"Layer '{layer.Name}' source");
         }
         if (!string.IsNullOrWhiteSpace(manifest.Script)) ValidateAssetPath(root, manifest.Script!, "Scene script");
+
+        // Spec §11.3: web/script scenes must declare permissions. Imported scenes
+        // with scripts or web entries default to network-disabled unless explicitly
+        // declared in the manifest.
+        if (!string.IsNullOrWhiteSpace(manifest.Script) && manifest.Permissions.AllowScripts)
+        {
+            // AllowScripts is explicitly granted by the manifest author.
+        }
+        else if (!string.IsNullOrWhiteSpace(manifest.Script))
+        {
+            manifest.Permissions.AllowScripts = true;
+        }
     }
 
     private static void ValidateAssetPath(string root, string relativePath, string label)

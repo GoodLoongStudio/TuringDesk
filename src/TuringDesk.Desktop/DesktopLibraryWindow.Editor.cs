@@ -14,7 +14,6 @@ public partial class DesktopLibraryWindow
         SceneList.MouseDoubleClick += SceneList_MouseDoubleClick;
         SceneList.ContextMenuOpening -= SceneList_ContextMenuOpening;
         SceneList.ContextMenuOpening += SceneList_ContextMenuOpening;
-        EnsureProfilesTab();
     }
 
     private void SceneList_MouseDoubleClick(object sender, MouseButtonEventArgs e)

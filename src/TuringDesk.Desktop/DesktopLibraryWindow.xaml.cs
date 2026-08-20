@@ -9,7 +9,6 @@ namespace TuringDesk.Desktop;
 
 public partial class DesktopLibraryWindow : Window
 {
-    private readonly RuntimeClient _runtime;
     private readonly ModelSettingsStore _modelStore;
     private readonly ShellSettingsStore _shellStore = new();
     private readonly SceneCatalogService _sceneCatalog = new();
@@ -17,9 +16,8 @@ public partial class DesktopLibraryWindow : Window
     private List<SceneManifest> _allScenes = [];
     private DesktopPlaybackSettings _playback = new();
 
-    public DesktopLibraryWindow(RuntimeClient runtime, ModelSettingsStore modelStore)
+    public DesktopLibraryWindow(ModelSettingsStore modelStore)
     {
-        _runtime = runtime;
         _modelStore = modelStore;
         InitializeComponent();
         Loaded += async (_, _) =>
@@ -27,6 +25,7 @@ public partial class DesktopLibraryWindow : Window
             ReloadScenes();
             ReloadPlayback();
             await RefreshAiStatusAsync();
+            RefreshDiagnostics();
         };
     }
 
@@ -136,6 +135,15 @@ public partial class DesktopLibraryWindow : Window
         {
             ApplySceneButton.IsEnabled = SceneList.SelectedItem is SceneManifest;
         }
+    }
+
+    private void NewScene_Click(object sender, RoutedEventArgs e)
+    {
+        var editor = new SceneEditorWindow { Owner = this };
+        editor.ShowDialog();
+        ReloadScenes();
+        var latest = _allScenes.FirstOrDefault(item => item.Id == editor.Scene.Id);
+        if (latest is not null) SceneList.SelectedItem = latest;
     }
 
     private void Import_Click(object sender, RoutedEventArgs e)
@@ -320,7 +328,7 @@ public partial class DesktopLibraryWindow : Window
     {
         var current = await _modelStore.LoadAsync();
         var key = _modelStore.LoadApiKey();
-        var dialog = new ModelSettingsWindow(_runtime, _modelStore, current, key) { Owner = this };
+        var dialog = new ModelSettingsWindow(_modelStore, current, key) { Owner = this };
         dialog.ShowDialog();
         await RefreshAiStatusAsync();
     }
@@ -335,6 +343,36 @@ public partial class DesktopLibraryWindow : Window
         }
         var preset = ModelProviderPresets.Find(settings.ProviderId);
         AiModelText.Text = $"{preset.Name} · {settings.Model}";
+    }
+
+    private void RefreshDiagnostics()
+    {
+        var asm = System.Reflection.Assembly.GetExecutingAssembly();
+        var ver = asm.GetName().Version;
+        var infoVer = asm.GetCustomAttribute<System.Reflection.AssemblyInformationalVersionAttribute>();
+        var display = infoVer?.InformationalVersion ?? ver?.ToString() ?? "未知版本";
+        var commit = System.Environment.GetEnvironmentVariable("GITHUB_SHA");
+        var buildTime = System.IO.File.GetLastWriteTimeUtc(asm.Location);
+        VersionText.Text = string.IsNullOrWhiteSpace(commit)
+            ? $"{display} · 构建 {buildTime:yyyy-MM-dd HH:mm} UTC"
+            : $"{display} · commit {commit[..Math.Min(7, commit.Length)]} · 构建 {buildTime:yyyy-MM-dd HH:mm} UTC";
+
+        var harnessReady = HarnessWebUiService.Url;
+        HarnessStatusText.Text = $"官方 DeepSeek Harness WebUI · 按需启动 · {harnessReady}";
+
+        try
+        {
+            var webViewPath = System.IO.Path.Combine(
+                System.Environment.GetFolderPath(System.Environment.SpecialFolder.LocalApplicationData),
+                "TuringDesk", "WebView2");
+            var installed = System.IO.Directory.Exists(webViewPath) ||
+                Microsoft.Web.WebView2.Core.CoreWebView2Environment.GetAvailableBrowserVersionString() is not null;
+            WebViewStatusText.Text = installed ? "已安装" : "未安装（工作台需要 WebView2 Runtime）";
+        }
+        catch
+        {
+            WebViewStatusText.Text = "检测中…";
+        }
     }
 
     private void Harness_Click(object sender, RoutedEventArgs e)

@@ -19,13 +19,6 @@ public sealed class ShellAppearanceSettings
     public bool SceneMotionEnabled { get; set; } = true;
     public double SceneIntensity { get; set; } = 0.86;
     public bool PauseSceneOnFullscreen { get; set; } = true;
-
-    // Lightweight Agent surfaces stay independent from the optional Harness WebUI.
-    public bool AgentOrbEnabled { get; set; } = true;
-    public bool AgentCardsEnabled { get; set; } = true;
-    public double AgentCardOpacity { get; set; } = 0.96;
-    public int AgentCardAutoHideSeconds { get; set; } = 12;
-    public string AgentCardSide { get; set; } = "right";
 }
 
 public sealed class ShellSettings
@@ -127,9 +120,6 @@ public sealed class ShellSettingsStore
         appearance.TaskbarOpacity = Math.Clamp(appearance.TaskbarOpacity, 0.60, 1.0);
         appearance.SceneId = NormalizeSceneId(appearance.SceneId);
         appearance.SceneIntensity = Math.Clamp(appearance.SceneIntensity, 0.20, 1.0);
-        appearance.AgentCardOpacity = Math.Clamp(appearance.AgentCardOpacity, 0.70, 1.0);
-        appearance.AgentCardAutoHideSeconds = Math.Clamp(appearance.AgentCardAutoHideSeconds, 0, 60);
-        appearance.AgentCardSide = appearance.AgentCardSide is "left" or "right" ? appearance.AgentCardSide : "right";
 
         return new ShellSettings
         {

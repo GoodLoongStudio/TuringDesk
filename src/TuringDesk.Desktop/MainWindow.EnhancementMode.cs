@@ -72,13 +72,12 @@ public partial class MainWindow
             var attached = _enhancementWallpapers.Count(window => window.IsAttached);
             if (attached > 0)
             {
-                AddActivity(
-                    "desktop",
+                SceneEngineTrace.Info(
+                    "desktop.engine",
                     $"Desktop Engine attached on {attached}/{_enhancementWallpapers.Count} monitor(s); Explorer remains the Windows shell.");
             }
             else
             {
-                AddActivity("desktop", "Explorer wallpaper host was unavailable. Search/AI remains available while the Windows desktop stays untouched.");
                 ShellNotificationService.Publish(
                     "桌面引擎正在等待 Explorer",
                     "Windows 桌面不受影响；顶部 AI 搜索和语音仍可正常使用。",
@@ -88,7 +87,7 @@ public partial class MainWindow
             var onboarding = new OnboardingStateStore();
             if (!onboarding.IsCompleted())
             {
-                var setup = new FirstRunSetupWindow(_runtime, _modelStore);
+                var setup = new FirstRunSetupWindow(_modelStore);
                 setup.ShowDialog();
             }
 

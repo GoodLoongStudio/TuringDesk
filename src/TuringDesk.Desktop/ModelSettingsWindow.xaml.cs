@@ -27,13 +27,6 @@ public partial class ModelSettingsWindow : Window
         ApplyProviderState();
     }
 
-    // Transitional overload for remaining legacy UI callers. Runtime is not used.
-    public ModelSettingsWindow(RuntimeClient runtime, ModelSettingsStore store, ModelSettings initial, string? apiKey)
-        : this(store, initial, apiKey)
-    {
-        _ = runtime;
-    }
-
     private void ProviderBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (ProviderBox.SelectedItem is not ModelProviderPreset preset) return;

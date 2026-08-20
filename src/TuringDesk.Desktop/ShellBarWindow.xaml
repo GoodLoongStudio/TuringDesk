@@ -68,7 +68,7 @@
             <Border Grid.Column="6" Height="42" Background="#1B202B" BorderBrush="#35405B" BorderThickness="1" CornerRadius="9" Margin="0,0,8,0">
                 <Grid>
                     <Grid.ColumnDefinitions><ColumnDefinition Width="76"/><ColumnDefinition Width="*"/><ColumnDefinition Width="40"/></Grid.ColumnDefinitions>
-                    <local:AgentStatusBadge Margin="3"/>
+                    <local:ShellIcon Kind="Agent" Width="17" Height="17" Foreground="#B7C1D5" Margin="3" HorizontalAlignment="Center" VerticalAlignment="Center"/>
                     <TextBox Grid.Column="1" x:Name="AgentBox" BorderThickness="0" Background="Transparent" Padding="3,8" VerticalContentAlignment="Center" KeyDown="AgentBox_KeyDown" ToolTip="直接告诉图灵你想做什么"/>
                     <Button Grid.Column="2" Margin="4" Padding="0" Click="AgentSend_Click" ToolTip="发送给图灵"><local:ShellIcon Kind="ArrowRight" Width="17" Height="17" Foreground="#B7C1D5"/></Button>
                 </Grid>

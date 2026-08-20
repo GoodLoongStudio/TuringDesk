@@ -41,6 +41,13 @@ try {
   child.stderr?.on('data', chunk => { output = keepTail(output + String(chunk)) })
 
   await waitUntilReady(child, url, 45_000)
+
+  // Verify the WebUI serves real HTML content, not just a 200 status.
+  const body = await fetchResponseBody(url)
+  if (!body.includes('<html') && !body.includes('<!DOCTYPE')) {
+    throw new Error(`DeepSeek Harness WebUI did not return HTML. Body preview: ${body.slice(0, 200)}`)
+  }
+
   console.log(`Official DeepSeek Harness WebUI smoke passed: ${url}`)
 } finally {
   if (child && child.exitCode === null) {
@@ -74,6 +81,14 @@ async function waitUntilReady(process: ReturnType<typeof spawn>, target: string,
   }
 
   throw new Error(`DeepSeek Harness WebUI did not become ready at ${target}: ${lastError}\n${output}`)
+}
+
+async function fetchResponseBody(target: string): Promise<string> {
+  const response = await fetch(target, { signal: AbortSignal.timeout(3_000) })
+  if (!response.ok) {
+    throw new Error(`WebUI returned HTTP ${response.status} when fetching body`)
+  }
+  return await response.text()
 }
 
 function keepTail(value: string): string {

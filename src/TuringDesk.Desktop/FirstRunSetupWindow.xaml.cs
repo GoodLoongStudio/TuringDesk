@@ -20,12 +20,6 @@ public partial class FirstRunSetupWindow : Window
         Loaded += (_, _) => ApplyProviderUi("deepseek");
     }
 
-    public FirstRunSetupWindow(RuntimeClient runtime, ModelSettingsStore modelStore)
-        : this(modelStore)
-    {
-        _ = runtime;
-    }
-
     private void Scene_Checked(object sender, RoutedEventArgs e)
     {
         if (sender is RadioButton { Tag: string id }) _selectedSceneId = id;
@@ -158,8 +152,6 @@ public partial class FirstRunSetupWindow : Window
         var settings = _shellStore.Load();
         settings.Appearance.SceneId = _selectedSceneId;
         settings.Appearance.SceneMotionEnabled = true;
-        settings.Appearance.AgentOrbEnabled = false;
-        settings.Appearance.AgentCardsEnabled = true;
         _shellStore.Save(settings);
     }
 

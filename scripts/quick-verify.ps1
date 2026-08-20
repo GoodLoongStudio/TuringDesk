@@ -229,18 +229,6 @@ Write-Host "Stopping previous TuringDesk processes..." -ForegroundColor Cyan
 Get-Process TuringDesk.Desktop,TuringDesk.ShellHost -ErrorAction SilentlyContinue | Stop-Process -Force
 Start-Sleep -Milliseconds 500
 
-$connections = Get-NetTCPConnection -LocalPort 4317 -State Listen -ErrorAction SilentlyContinue
-foreach ($connection in $connections) {
-    $owner = Get-Process -Id $connection.OwningProcess -ErrorAction SilentlyContinue
-    if ($owner -and $owner.ProcessName -eq "node") {
-        Write-Host "Stopping old TuringDesk runtime node PID $($owner.Id)..." -ForegroundColor DarkGray
-        Stop-Process -Id $owner.Id -Force
-    }
-    elseif ($owner) {
-        throw "Port 4317 is occupied by $($owner.ProcessName) PID $($owner.Id). Stop it before verification."
-    }
-}
-
 $statusPath = Join-Path $env:LOCALAPPDATA "TuringDesk\desktop-engine-status.json"
 $sceneLogPath = Join-Path $env:LOCALAPPDATA "TuringDesk\logs\scene-engine.log"
 if (Test-Path $statusPath) { Remove-Item $statusPath -Force }
@@ -338,9 +326,6 @@ Write-Host "Commit: $commit"
 Write-Host "Pinned environment: Node $NodeVersion | pnpm $PnpmVersion | .NET $DotnetVersion"
 Write-Host "Scene log: $sceneLogPath" -ForegroundColor Cyan
 Write-Host "Scene status: $statusPath" -ForegroundColor Cyan
-
-$runtimeReady = Get-NetTCPConnection -LocalPort 4317 -State Listen -ErrorAction SilentlyContinue
-Write-Host ("Runtime 4317: " + $(if ($runtimeReady) { "LISTENING" } else { "NOT READY YET" }))
 
 if (Test-Path $statusPath) {
     Write-Host ""

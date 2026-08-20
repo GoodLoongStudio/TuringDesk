@@ -32,7 +32,7 @@
                 <Button DockPanel.Dock="Right" Content="刷新" Click="Refresh_Click" Width="72"/>
                 <StackPanel VerticalAlignment="Center">
                     <TextBlock Text="DeepSeek Harness" Foreground="#1F2328" FontSize="14" FontWeight="SemiBold"/>
-                    <TextBlock Text="高级 Agent 控制台" Foreground="#667085" FontSize="10" Margin="0,1,0,0"/>
+                    <TextBlock Text="官方 AI 工作台" Foreground="#667085" FontSize="10" Margin="0,1,0,0"/>
                 </StackPanel>
             </DockPanel>
         </Border>
@@ -42,9 +42,9 @@
 
             <Grid x:Name="LoadingPanel" Background="White">
                 <StackPanel Width="420" HorizontalAlignment="Center" VerticalAlignment="Center">
-                    <TextBlock x:Name="LoadingTitle" Text="正在启动 Agent 控制台" Foreground="#1F2328" FontSize="20" FontWeight="SemiBold" TextAlignment="Center"/>
+                    <TextBlock x:Name="LoadingTitle" Text="正在启动 AI 工作台" Foreground="#1F2328" FontSize="20" FontWeight="SemiBold" TextAlignment="Center"/>
                     <TextBlock x:Name="LoadingDetail"
-                               Text="正在启动本机 DeepSeek Harness WebUI…"
+                               Text="正在启动官方 DeepSeek Harness 工作台…"
                                Foreground="#667085"
                                TextAlignment="Center"
                                TextWrapping="Wrap"

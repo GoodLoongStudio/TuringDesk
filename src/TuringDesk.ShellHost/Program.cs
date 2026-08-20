@@ -16,28 +16,15 @@ internal static class Program
         var packageRoot = Directory.GetParent(AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar))?.FullName
             ?? AppContext.BaseDirectory;
 
-        var runtimeExe = Path.Combine(packageRoot, "runtime", "node", "node.exe");
-        var runtimeEntry = Path.Combine(packageRoot, "runtime", "app", "server.js");
         var desktopExe = Path.Combine(packageRoot, "desktop", "TuringDesk.Desktop.exe");
 
-        foreach (var required in new[] { runtimeExe, runtimeEntry, desktopExe })
+        if (!File.Exists(desktopExe))
         {
-            if (!File.Exists(required))
-            {
-                return FailSafe(preview, $"Required shell component is missing: {required}");
-            }
+            return FailSafe(preview, $"Required shell component is missing: {desktopExe}");
         }
 
-        Process? runtime = null;
         try
         {
-            runtime = StartRuntime(runtimeExe, runtimeEntry, packageRoot);
-            Thread.Sleep(900);
-            if (runtime.HasExited)
-            {
-                return FailSafe(preview, "TuringDesk Runtime exited before the desktop shell started.");
-            }
-
             var consecutiveFailures = 0;
             while (true)
             {
@@ -74,32 +61,6 @@ internal static class Program
         {
             return FailSafe(preview, error.ToString());
         }
-        finally
-        {
-            try
-            {
-                if (runtime is { HasExited: false }) runtime.Kill(entireProcessTree: true);
-            }
-            catch
-            {
-                // Best-effort cleanup only.
-            }
-        }
-    }
-
-    private static Process StartRuntime(string runtimeExe, string runtimeEntry, string packageRoot)
-    {
-        var startInfo = new ProcessStartInfo
-        {
-            FileName = runtimeExe,
-            Arguments = $"\"{runtimeEntry}\"",
-            WorkingDirectory = Path.Combine(packageRoot, "runtime"),
-            UseShellExecute = false,
-            CreateNoWindow = true
-        };
-        startInfo.Environment["TURINGDESK_RUNTIME_MODE"] = "mock";
-        Log("Starting embedded TuringDesk Runtime.");
-        return Process.Start(startInfo) ?? throw new InvalidOperationException("Could not start TuringDesk Runtime.");
     }
 
     private static Process StartDesktop(string desktopExe, string packageRoot)

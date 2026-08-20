@@ -15,14 +15,6 @@ public sealed class UnifiedModelConfigurationService
         _store = store;
     }
 
-    // Transitional overload for legacy callers. Runtime is intentionally ignored;
-    // new code should use the store-only constructor.
-    public UnifiedModelConfigurationService(RuntimeClient runtime, ModelSettingsStore store)
-        : this(store)
-    {
-        _ = runtime;
-    }
-
     public async Task<ModelSettings> ApplyAndSaveAsync(ModelSettings settings, string? apiKey)
     {
         var normalizedKey = apiKey?.Trim();

@@ -32,9 +32,7 @@ jobs:
       - run: pnpm install --no-frozen-lockfile
       - run: pnpm typecheck
       - run: pnpm build
-      - run: pnpm test:mcp
-      - name: Boot bundled DeepSeek Harness + TuringDesk MCP
-        run: pnpm test:harness
+      - run: pnpm test:web
 
   desktop-win-arm64:
     needs: [runtime]
@@ -55,8 +53,6 @@ jobs:
             "src/TuringDesk.Desktop/Services/DesktopSearchIndexService.cs",
             "src/TuringDesk.Desktop/Services/DesktopQuickAnswerService.cs",
             "src/TuringDesk.Desktop/Services/DesktopAiModelChoiceService.cs",
-            "src/TuringDesk.Desktop/Services/RuntimeHostService.cs",
-            "src/TuringDesk.Desktop/Services/RuntimeClient.cs",
             "src/TuringDesk.Desktop/Services/HarnessWebUiService.cs"
           )) {
             if (-not (Test-Path $required)) { throw "Missing desktop source: $required" }
@@ -92,8 +88,8 @@ jobs:
           if ($manifest -notmatch 'PerMonitorV2,PerMonitor') { throw "Desktop process is not PerMonitorV2 DPI-aware" }
 
           $quick = Get-Content "src/TuringDesk.Desktop/Services/DesktopQuickAnswerService.cs" -Raw
-          if ($quick -match "RuntimeHostService|HarnessWebUiService") {
-            throw "Level-3 quick answers must not wake Runtime or Harness"
+          if ($quick -match "HarnessWebUiService") {
+            throw "Level-3 quick answers must not wake Harness"
           }
           foreach ($marker in @("TryCalculate", "QuickIntent.Translate", "QuickIntent.Explain", "chat/completions")) {
             if ($quick -notmatch [regex]::Escape($marker)) { throw "Lightweight direct-answer contract missing: $marker" }
@@ -103,17 +99,19 @@ jobs:
           if ($appStartup -match "HarnessWebUiService.StartEarly") { throw "App startup must not eagerly start Harness" }
 
           $mainWindow = Get-Content "src/TuringDesk.Desktop/MainWindow.xaml.cs" -Raw
-          if ($mainWindow -match "RuntimeHostService.EnsureRunningAsync") { throw "MainWindow startup must not eagerly start Runtime" }
-          if ($mainWindow -match "StartHarnessServiceAsync") { throw "MainWindow startup must not prewarm Harness" }
+          if ($mainWindow -match "RuntimeHostService|RuntimeClient") { throw "MainWindow must not reference legacy Runtime" }
 
-          $runtimeClient = Get-Content "src/TuringDesk.Desktop/Services/RuntimeClient.cs" -Raw
-          foreach ($marker in @("RuntimeHostService.AcquireAsync", "RuntimeStartReason.AgentRequest", "RuntimeStartReason.ModelConfiguration", "EnsurePersistedAgentModelIfColdAsync")) {
-            if ($runtimeClient -notmatch [regex]::Escape($marker)) { throw "RuntimeClient lazy lease contract missing: $marker" }
-          }
-
-          $runtimeHost = Get-Content "src/TuringDesk.Desktop/Services/RuntimeHostService.cs" -Raw
-          foreach ($marker in @("EnsureRuntimeStartedAsync", "AcquireAsync", "IdleTimeout", "v1/runtime/shutdown", "NotifyWorkbenchOpened", "NotifyWorkbenchClosed")) {
-            if ($runtimeHost -notmatch [regex]::Escape($marker)) { throw "Runtime lifecycle contract missing: $marker" }
+          # Verify removed files do not exist
+          foreach ($removed in @(
+            "src/TuringDesk.Desktop/Services/RuntimeClient.cs",
+            "src/TuringDesk.Desktop/Services/RuntimeHostService.cs",
+            "src/TuringDesk.Desktop/Services/CapabilityServer.cs",
+            "src/TuringDesk.Desktop/Services/AgentFloatingCardsService.cs",
+            "runtime/src/server.ts",
+            "runtime/src/windows-mcp-server.ts",
+            "runtime/harness/turingdesk.cordis.yml"
+          )) {
+            if (Test-Path $removed) { throw "Legacy file must be deleted: $removed" }
           }
 
           $harnessWeb = Get-Content "src/TuringDesk.Desktop/Services/HarnessWebUiService.cs" -Raw
@@ -121,11 +119,7 @@ jobs:
           if ($applyStart -lt 0) { throw "Harness model synchronization method missing" }
           $applySlice = $harnessWeb.Substring($applyStart, [Math]::Min(1200, $harnessWeb.Length - $applyStart))
           if ($applySlice -match "EnsureRunningAsync") { throw "Saving model settings must not wake a cold Harness WebUI" }
-
-          $mcp = Get-Content "runtime/src/windows-mcp-server.ts" -Raw
-          foreach ($marker in @("executionClass", "instant", "interactive", "requiresAgentPlanning")) {
-            if ($mcp -notmatch [regex]::Escape($marker)) { throw "Windows MCP routing metadata missing: $marker" }
-          }
+          if ($harnessWeb -match "windows-mcp|turingdesk-web\.patch") { throw "Harness WebUI must not inject old Windows MCP" }
 
       - name: Verify mixed-DPI desktop host and zero-power scene contract
         shell: pwsh

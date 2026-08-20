@@ -23,6 +23,7 @@ public partial class DesktopSearchBarWindow : Window
     private readonly MainWindow _host;
     private readonly DesktopSearchIndexService _searchIndex;
     private readonly DesktopQuickAnswerService _quickAnswer = new();
+    private readonly WindowsSpeechService _speech = new();
     private HwndSource? _source;
     private bool _hotkeyRegistered;
     private bool _fallbackHotkeyRegistered;
@@ -39,6 +40,7 @@ public partial class DesktopSearchBarWindow : Window
         _host = host;
         InitializeComponent();
         _searchIndex = new DesktopSearchIndexService();
+        _speech.Recognized += OnSpeechRecognized;
 
         SourceInitialized += OnSourceInitialized;
         Loaded += (_, _) =>
@@ -121,6 +123,7 @@ public partial class DesktopSearchBarWindow : Window
         _activeRequest = null;
         CancelSearchPipeline();
         _searchIndex.Dispose();
+        _speech.Dispose();
 
         DesktopSearchReservedArea.Clear();
         var hwnd = new WindowInteropHelper(this).Handle;
@@ -378,7 +381,7 @@ public partial class DesktopSearchBarWindow : Window
     }
 
     /// <summary>
-    /// Level 3 only. This method must never call RuntimeClient/Harness directly.
+    /// Level 3 only. This method must never start Node or the Harness workbench.
     /// Complex requests are converted into an explicit deep-processing offer.
     /// </summary>
     private async Task SubmitQuickAsync()
@@ -536,13 +539,41 @@ public partial class DesktopSearchBarWindow : Window
         RefreshPosition();
     }
 
-    private void Mic_Click(object sender, RoutedEventArgs e)
+    private async void Mic_Click(object sender, RoutedEventArgs e)
     {
-        FocusSearch();
-        ShellNotificationService.Publish(
-            "语音已常驻",
-            "直接说“图灵桌面”再说你的需求；简单检索保持轻量，复杂任务按需启动 Agent。",
-            "voice");
+        if (_speech.IsListening)
+        {
+            await _speech.StopAsync();
+            return;
+        }
+
+        var started = await _speech.StartAsync();
+        if (started)
+        {
+            ShellNotificationService.Publish(
+                "语音已启动",
+                $"正在使用 {_speech.RecognizerName} ({_speech.RecognizerCulture})。直接说话，结果会进入搜索框。",
+                "voice");
+        }
+        else
+        {
+            ShellNotificationService.Publish(
+                "语音不可用",
+                "当前设备没有安装 Windows 语音识别器。键盘输入仍然可用。",
+                "warning");
+        }
+    }
+
+    private void OnSpeechRecognized(string text, float confidence)
+    {
+        Dispatcher.BeginInvoke(new Action(() =>
+        {
+            if (confidence < 0.30f) return;
+            SearchBox.Text = text;
+            SearchBox.CaretIndex = text.Length;
+            SearchBox.Focus();
+            Keyboard.Focus(SearchBox);
+        }), DispatcherPriority.Normal);
     }
 
     [DllImport("user32.dll", SetLastError = true)]

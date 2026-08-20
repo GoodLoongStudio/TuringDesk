@@ -91,7 +91,7 @@
 
                 <StackPanel Grid.Column="2">
                     <TextBlock Text="2  连接 AI" FontSize="18" FontWeight="SemiBold"/>
-                    <TextBlock Text="普通用户不需要理解 Harness、MCP 或 Runtime。" Foreground="#8F9AB0" FontSize="11" Margin="0,5,0,15"/>
+                    <TextBlock Text="配置一次即可，搜索栏轻量对话和 AI 工作台共用同一模型。" Foreground="#8F9AB0" FontSize="11" Margin="0,5,0,15"/>
 
                     <Border Background="#151B27" BorderBrush="#3A4660" BorderThickness="1" CornerRadius="14" Padding="17">
                         <StackPanel>
@@ -118,7 +118,7 @@
                             <Border Background="#0F1420" CornerRadius="10" Padding="12" Margin="0,14,0,0">
                                 <StackPanel>
                                     <StackPanel Orientation="Horizontal"><Ellipse Width="7" Height="7" Fill="#63E6BE" Margin="0,0,8,0"/><TextBlock Text="接好以后就这样用" FontWeight="SemiBold" FontSize="11"/></StackPanel>
-                                    <TextBlock Text="Alt + Space  →  直接输入任务&#x0a;点击右下角 Orb  →  快捷对话&#x0a;说“图灵桌面”  →  语音命令" Foreground="#AAB5C8" FontSize="11" LineHeight="20" Margin="0,8,0,0"/>
+                                    <TextBlock Text="Alt + Space  →  聚焦搜索栏&#x0a;输入文字  →  应用 / 文件搜索或轻量对话&#x0a;点击麦克风  →  语音输入&#x0a;点击深度处理  →  进入 AI 工作台" Foreground="#AAB5C8" FontSize="11" LineHeight="20" Margin="0,8,0,0"/>
                                 </StackPanel>
                             </Border>
                         </StackPanel>

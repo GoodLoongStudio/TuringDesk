@@ -15,6 +15,7 @@
         DragOver="Window_DragOver"
         Drop="Window_Drop">
     <Window.Resources>
+        <local:ScenePreviewConverter x:Key="ScenePreviewBrush"/>
         <SolidColorBrush x:Key="PageBrush" Color="#F5F6F8"/>
         <SolidColorBrush x:Key="CardBrush" Color="#FFFFFF"/>
         <SolidColorBrush x:Key="StrokeBrushLocal" Color="#D9DEE6"/>
@@ -97,7 +98,8 @@
 
         <Border Grid.Row="0" Background="White" BorderBrush="#D9DEE6" BorderThickness="0,0,0,1" Padding="18,12">
             <DockPanel LastChildFill="True">
-                <Button DockPanel.Dock="Right" Content="导入壁纸" Click="Import_Click" Style="{StaticResource PrimaryButton}" Margin="14,0,0,0"/>
+                <Button DockPanel.Dock="Right" Content="新建场景" Click="NewScene_Click" Margin="8,0,0,0"/>
+                <Button DockPanel.Dock="Right" Content="导入壁纸" Click="Import_Click" Style="{StaticResource PrimaryButton}" Margin="8,0,0,0"/>
                 <StackPanel>
                     <TextBlock Text="桌面设置" FontSize="18" FontWeight="SemiBold" Foreground="#1F2328"/>
                     <TextBlock Text="场景、播放列表、多屏、应用规则、性能和 AI" Foreground="{StaticResource MutedBrushLocal}" FontSize="11" Margin="0,3,0,0"/>
@@ -126,11 +128,11 @@
                                     <Border Width="214" Height="146" Margin="0,0,12,12" CornerRadius="10" Background="White" BorderBrush="#D9DEE6" BorderThickness="1" Padding="12">
                                         <Grid>
                                             <Grid.RowDefinitions><RowDefinition Height="68"/><RowDefinition Height="*"/></Grid.RowDefinitions>
-                                            <Border CornerRadius="7" Background="#EEF2FF" BorderBrush="#DCE5FF" BorderThickness="1">
+                                            <Border CornerRadius="7" BorderBrush="#DCE5FF" BorderThickness="1" Background="{Binding Converter={StaticResource ScenePreviewBrush}}">
                                                 <Grid>
-                                                    <Rectangle Fill="#F7F9FF"/>
-                                                    <Ellipse Width="90" Height="90" Fill="#604F7CFF" Opacity="0.18" HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,-34,-22,0"><Ellipse.Effect><BlurEffect Radius="16"/></Ellipse.Effect></Ellipse>
-                                                    <TextBlock Text="{Binding Kind}" Foreground="#4B5B79" FontSize="10" HorizontalAlignment="Left" VerticalAlignment="Bottom" Margin="9"/>
+                                                    <Ellipse Width="90" Height="90" Fill="#604F7CFF" Opacity="0.22" HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,-34,-22,0"><Ellipse.Effect><BlurEffect Radius="16"/></Ellipse.Effect></Ellipse>
+                                                    <Ellipse Width="60" Height="60" Fill="#408796FF" Opacity="0.18" HorizontalAlignment="Left" VerticalAlignment="Bottom" Margin="-18,-10,0,-18"><Ellipse.Effect><BlurEffect Radius="12"/></Ellipse.Effect></Ellipse>
+                                                    <TextBlock Text="{Binding Kind}" Foreground="#9EB3D4" FontSize="10" HorizontalAlignment="Left" VerticalAlignment="Bottom" Margin="9"/>
                                                 </Grid>
                                             </Border>
                                             <StackPanel Grid.Row="1" Margin="1,8,1,0">
@@ -254,6 +256,26 @@
                                         <Button Content="模型设置" Click="ModelSettings_Click" Padding="15,7"/>
                                         <Button Content="打开 Harness" Click="Harness_Click" Padding="15,7" Margin="8,0,0,0" Style="{StaticResource PrimaryButton}"/>
                                     </StackPanel>
+                                </StackPanel>
+                            </Border>
+                        </StackPanel>
+                    </ScrollViewer>
+                </Grid>
+            </TabItem>
+            <TabItem Header="高级 / 诊断">
+                <Grid Margin="8,14" MaxWidth="760" HorizontalAlignment="Left">
+                    <ScrollViewer VerticalScrollBarVisibility="Auto">
+                        <StackPanel>
+                            <TextBlock Text="高级 / 诊断" FontSize="20" FontWeight="SemiBold" Foreground="#1F2328"/>
+                            <TextBlock Text="版本、构建信息和运行状态。" Foreground="#667085" FontSize="11" Margin="0,4,0,18"/>
+                            <Border Background="White" BorderBrush="#D9DEE6" BorderThickness="1" CornerRadius="10" Padding="18">
+                                <StackPanel>
+                                    <TextBlock Text="版本信息" Foreground="#667085" FontSize="10.5"/>
+                                    <TextBlock x:Name="VersionText" Text="加载中…" Foreground="#1F2328" FontSize="13" Margin="0,4,0,14"/>
+                                    <TextBlock Text="Harness WebUI" Foreground="#667085" FontSize="10.5"/>
+                                    <TextBlock x:Name="HarnessStatusText" Text="未启动（按需运行）" Foreground="#1F2328" FontSize="13" Margin="0,4,0,14"/>
+                                    <TextBlock Text="WebView2" Foreground="#667085" FontSize="10.5"/>
+                                    <TextBlock x:Name="WebViewStatusText" Text="加载中…" Foreground="#1F2328" FontSize="13" Margin="0,4,0,14"/>
                                 </StackPanel>
                             </Border>
                         </StackPanel>

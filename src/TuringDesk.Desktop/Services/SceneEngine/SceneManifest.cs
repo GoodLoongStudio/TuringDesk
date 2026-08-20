@@ -68,6 +68,12 @@ public sealed class SceneManifest
     public List<SceneLayerDefinition> Layers { get; set; } = [];
     public List<SceneTimelineTrack> Timeline { get; set; } = [];
 
+    /// <summary>
+    /// Permission declarations for web/script scenes. Spec §11.3: web/script
+    /// scenes must declare network and file-access policy.
+    /// </summary>
+    public ScenePermissions Permissions { get; set; } = new();
+
     [JsonIgnore]
     public string PackageRoot { get; set; } = string.Empty;
 
@@ -169,4 +175,23 @@ public sealed class SceneInstanceSettings
     public double Volume { get; set; }
     public int FpsLimit { get; set; } = 60;
     public bool Muted { get; set; } = true;
+}
+
+/// <summary>
+/// Declares what a web/script scene is allowed to access. Default-deny.
+/// Spec §11.3: "对 Web/脚本场景声明权限和网络策略".
+/// </summary>
+public sealed class ScenePermissions
+{
+    /// <summary>Allow the scene to make outbound network requests.</summary>
+    public bool AllowNetwork { get; set; } = false;
+
+    /// <summary>Allow the scene to read files from its own package directory.</summary>
+    public bool AllowLocalFiles { get; set; } = true;
+
+    /// <summary>Allow the scene to execute user-provided scripts.</summary>
+    public bool AllowScripts { get; set; } = false;
+
+    /// <summary>Maximum allowed memory in MB, or 0 for unlimited.</summary>
+    public int MaxMemoryMb { get; set; } = 0;
 }
