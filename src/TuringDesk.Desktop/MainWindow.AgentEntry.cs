@@ -105,14 +105,14 @@ public partial class MainWindow
 
         var current = _modelStore.Load();
         var apiKey = _modelStore.LoadApiKey();
-        var dialog = new ModelSettingsWindow(_runtime, _modelStore, current, apiKey)
+        var window = new ModelSettingsWindow(_runtime, _modelStore, current, apiKey);
+        window.Closed += (_, _) =>
         {
-            Owner = IsVisible ? this : null
+            _modelSettings = window.SavedSettings ?? _modelStore.Load();
+            UpdateModelStatus();
         };
-
-        _ = dialog.ShowDialog();
-        _modelSettings = dialog.SavedSettings ?? _modelStore.Load();
-        UpdateModelStatus();
+        window.Show();
+        window.Activate();
     }
 
     /// <summary>
@@ -131,12 +131,9 @@ public partial class MainWindow
         var prompt = query.Trim();
         if (string.IsNullOrWhiteSpace(prompt)) return;
 
-        var dialog = new HarnessConsoleWindow(prompt)
-        {
-            Owner = IsVisible ? this : null
-        };
-        dialog.Show();
-        dialog.Activate();
+        var window = new HarnessConsoleWindow(prompt);
+        window.Show();
+        window.Activate();
     }
 
     internal async Task SubmitExternalCommandAsync(string text)
