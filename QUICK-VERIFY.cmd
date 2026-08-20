@@ -34,9 +34,19 @@ echo Preparing pinned Everything file search backend...
 powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\bootstrap-everything.ps1"
 if errorlevel 1 goto :failed
 
-echo Checking installed .NET SDK before bootstrap...
+echo Checking .NET SDK and Windows Desktop Runtime...
 powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\adopt-installed-dotnet.ps1"
 if errorlevel 1 goto :failed
+
+if /I "%PROCESSOR_ARCHITECTURE%"=="ARM64" (
+    set "TURINGDESK_DOTNET_ROOT=%~dp0.tools\quick-verify\dotnet8-arm64"
+    set "DOTNET_ROOT_ARM64=%~dp0.tools\quick-verify\dotnet8-arm64"
+) else (
+    set "TURINGDESK_DOTNET_ROOT=%~dp0.tools\quick-verify\dotnet8-x64"
+    set "DOTNET_ROOT_X64=%~dp0.tools\quick-verify\dotnet8-x64"
+)
+set "DOTNET_ROOT=%TURINGDESK_DOTNET_ROOT%"
+set "PATH=%TURINGDESK_DOTNET_ROOT%;%PATH%"
 
 powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\quick-verify.ps1" -SkipPull
 if errorlevel 1 goto :failed
