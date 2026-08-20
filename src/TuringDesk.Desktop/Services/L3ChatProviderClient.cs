@@ -1,4 +1,5 @@
 using System.Net;
+using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
@@ -89,13 +90,7 @@ public sealed class L3ChatProviderClient
         if (path.EndsWith("/chat/completions", StringComparison.OrdinalIgnoreCase))
             return baseUri;
 
-        // Preserve an explicit /v1 supplied by Ollama, LM Studio or a relay.
-        // DeepSeek's configured root intentionally remains /chat/completions.
-        var suffix = path.EndsWith("/v1", StringComparison.OrdinalIgnoreCase)
-            ? "chat/completions"
-            : "chat/completions";
-
-        var normalized = raw.TrimEnd('/') + "/" + suffix;
+        var normalized = raw.TrimEnd('/') + "/chat/completions";
         return new Uri(normalized, UriKind.Absolute);
     }
 
@@ -166,7 +161,6 @@ public sealed class L3ChatProviderClient
         }
         catch
         {
-            // Keep the HTTP status even when an upstream closes the error body early.
         }
 
         var detail = ExtractErrorMessage(body);
@@ -198,7 +192,6 @@ public sealed class L3ChatProviderClient
         }
         catch (JsonException)
         {
-            // Some relays return plain text or HTML. Show a small safe excerpt.
         }
 
         return TrimError(body);
