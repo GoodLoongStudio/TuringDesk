@@ -189,16 +189,6 @@ if ($git) {
     $branch = (& $git branch --show-current).Trim()
     if ($branch -and $branch -ne "main") { throw "Quick verification only runs from main. Current branch: $branch" }
     $commit = (& $git rev-parse --short HEAD).Trim()
-
-    # SDK-style .csproj auto-includes all .cs files in the directory tree.
-    # If git deleted a file in a newer commit but the working tree still has a
-    # stale local copy (e.g. due to local edits preventing automatic deletion),
-    # the build will fail. Restore tracked files to HEAD and remove untracked
-    # leftovers in source directories only — never touch .tools/, node_modules,
-    # user data, or the pinned toolchain cache.
-    Write-Host "Syncing source tree to HEAD..." -ForegroundColor Cyan
-    & $git restore -- "src/" "runtime/src/" "runtime/harness/" "scripts/" ".github/" "docs/" 2>$null
-    & $git clean -fd -- "src/" "runtime/src/" "runtime/harness/" "scripts/" ".github/" "docs/" 2>$null
 }
 else {
     if (-not $SkipPull) {
@@ -234,6 +224,75 @@ $env:PATH = "$nodeDir;$pnpmDir;$dotnetDir;$env:PATH"
 Write-Host "Node: $((& $node -p 'process.versions.node').Trim()) [$node]" -ForegroundColor DarkGray
 Write-Host "pnpm: $((& $pnpm --version).Trim()) [$pnpm]" -ForegroundColor DarkGray
 Write-Host ".NET: $((& $dotnet --version).Trim()) [$dotnet]" -ForegroundColor DarkGray
+
+# ── Prune stale files that robocopy / git pull may leave behind ──────────────
+# QUICK-VERIFY.cmd downloads a zip and robocopies it over the working tree.
+# robocopy adds and overwrites but never deletes files that no longer exist
+# upstream. SDK-style .csproj auto-includes every .cs/.ts/.xaml in the tree,
+# so stale copies of deleted files will break the build.
+#
+# This list is the single source of truth for files that have been permanently
+# removed from the repository. Add to it whenever a file is deleted in a commit.
+# This does NOT touch .tools/, node_modules, user data, or the toolchain cache.
+$legacyFiles = @(
+    # Old 4317 Runtime TS files
+    "runtime\src\server.ts",
+    "runtime\src\agent-activity.ts",
+    "runtime\src\mock-agent.ts",
+    "runtime\src\model-gateway.ts",
+    "runtime\src\model-config.ts",
+    "runtime\src\harness-gateway.ts",
+    "runtime\src\harness-runtime.ts",
+    "runtime\src\harness-integration-smoke.ts",
+    "runtime\src\openai-compatible-gateway.ts",
+    "runtime\src\capability-client.ts",
+    "runtime\src\windows-mcp-server.ts",
+    "runtime\src\windows-mcp-smoke.ts",
+    # Old Cordis profile
+    "runtime\harness\turingdesk.cordis.yml",
+    # Old Agent UI WPF files
+    "src\TuringDesk.Desktop\AgentActivityWindow.xaml",
+    "src\TuringDesk.Desktop\AgentActivityWindow.xaml.cs",
+    "src\TuringDesk.Desktop\AgentConversationCardWindow.xaml",
+    "src\TuringDesk.Desktop\AgentConversationCardWindow.xaml.cs",
+    "src\TuringDesk.Desktop\AgentTraceCardWindow.xaml",
+    "src\TuringDesk.Desktop\AgentTraceCardWindow.xaml.cs",
+    "src\TuringDesk.Desktop\AgentStatusBadge.xaml",
+    "src\TuringDesk.Desktop\AgentStatusBadge.xaml.cs",
+    # Old Runtime services
+    "src\TuringDesk.Desktop\Services\RuntimeClient.cs",
+    "src\TuringDesk.Desktop\Services\RuntimeHostService.cs",
+    "src\TuringDesk.Desktop\Services\CapabilityServer.cs",
+    "src\TuringDesk.Desktop\Services\AgentFloatingCardsService.cs",
+    # Old settings center
+    "src\TuringDesk.Desktop\DesktopDiyCenterWindow.xaml",
+    "src\TuringDesk.Desktop\DesktopDiyCenterWindow.xaml.cs",
+    # Old dev script
+    "scripts\verify-lazy-runtime.ps1"
+)
+
+$pruned = 0
+foreach ($file in $legacyFiles) {
+    $full = Join-Path $Root $file
+    if (Test-Path $full) {
+        Remove-Item $full -Force
+        $pruned++
+        Write-Host "  Pruned stale file: $file" -ForegroundColor DarkYellow
+    }
+}
+if ($pruned -gt 0) {
+    Write-Host "Removed $pruned stale file(s) left by previous versions." -ForegroundColor Yellow
+}
+else {
+    Write-Host "No stale legacy files found." -ForegroundColor DarkGray
+}
+
+# Also try git restore+clean if git is available — catches anything not in the
+# explicit list above. Only affects source directories, never the toolchain.
+if ($git) {
+    & $git restore -- "src/" "runtime/src/" "runtime/harness/" "scripts/" ".github/" "docs/" 2>$null
+    & $git clean -fd -- "src/" "runtime/src/" "runtime/harness/" "scripts/" ".github/" "docs/" 2>$null
+}
 
 Write-Host "Stopping previous TuringDesk processes..." -ForegroundColor Cyan
 Get-Process TuringDesk.Desktop,TuringDesk.ShellHost -ErrorAction SilentlyContinue | Stop-Process -Force
