@@ -80,6 +80,8 @@ public sealed class DesktopSearchIndexService : IDisposable
     /// <summary>
     /// Level 2: bounded Everything query. Everything maintains the global filename
     /// index; TuringDesk only asks for the small number of rows visible in the UI.
+    /// Single-character queries stay on the RAM-only app tier to avoid turning
+    /// every first keystroke into IPC and UI churn.
     /// </summary>
     public async Task<IReadOnlyList<DesktopSearchResult>> SearchFilesAsync(
         string query,
@@ -87,7 +89,7 @@ public sealed class DesktopSearchIndexService : IDisposable
         CancellationToken cancellationToken = default)
     {
         var normalized = NormalizeQuery(query);
-        if (normalized.Length == 0)
+        if (normalized.Length < 2)
             return Array.Empty<DesktopSearchResult>();
 
         limit = Math.Clamp(limit, 1, 16);
