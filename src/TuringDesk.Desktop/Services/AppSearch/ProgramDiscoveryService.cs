@@ -181,10 +181,12 @@ internal sealed class ProgramDiscoveryService
                     if (item is null) continue;
 
                     dynamic app = item;
-                    var name = Convert.ToString(app.Name)?.Trim() ?? string.Empty;
+                    object? rawName = app.Name;
+                    var name = Convert.ToString(rawName)?.Trim() ?? string.Empty;
                     if (string.IsNullOrWhiteSpace(name)) continue;
 
-                    var appUserModelId = Convert.ToString(app.ExtendedProperty("System.AppUserModel.ID"))?.Trim() ?? string.Empty;
+                    object? rawAppUserModelId = app.ExtendedProperty("System.AppUserModel.ID");
+                    var appUserModelId = Convert.ToString(rawAppUserModelId)?.Trim() ?? string.Empty;
                     if (string.IsNullOrWhiteSpace(appUserModelId)) continue;
 
                     discovered.Add(new DiscoveredProgram(
