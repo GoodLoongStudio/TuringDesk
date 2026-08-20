@@ -378,8 +378,12 @@ public partial class DesktopLibraryWindow : Window
 
     private void Harness_Click(object sender, RoutedEventArgs e)
     {
-        var dialog = new HarnessConsoleWindow { Owner = this };
-        dialog.ShowDialog();
+        // The workbench and settings are sibling top-level surfaces. Never make
+        // Harness modal or owned by Settings: users must be able to click, move and
+        // compare both windows independently while the official WebUI is open.
+        var workbench = new HarnessConsoleWindow();
+        workbench.Show();
+        workbench.Activate();
     }
 
     private void TitleBar_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
