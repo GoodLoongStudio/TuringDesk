@@ -10,10 +10,8 @@
   "scripts": {
     "dev": "tsx watch src/server.ts",
     "start": "node dist/server.js",
-    "mcp:windows": "node dist/windows-mcp-server.js",
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test:mcp": "node dist/windows-mcp-smoke.js",
     "test:harness": "node dist/harness-integration-smoke.js"
   },
   "dependencies": {
