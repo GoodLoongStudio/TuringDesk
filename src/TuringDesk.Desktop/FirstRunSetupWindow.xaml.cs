@@ -13,11 +13,17 @@ public partial class FirstRunSetupWindow : Window
     private string _selectedSceneId = "builtin:aurora";
     private bool _loadingProvider;
 
-    public FirstRunSetupWindow(RuntimeClient runtime, ModelSettingsStore modelStore)
+    public FirstRunSetupWindow(ModelSettingsStore modelStore)
     {
-        _modelConfiguration = new UnifiedModelConfigurationService(runtime, modelStore);
+        _modelConfiguration = new UnifiedModelConfigurationService(modelStore);
         InitializeComponent();
         Loaded += (_, _) => ApplyProviderUi("deepseek");
+    }
+
+    public FirstRunSetupWindow(RuntimeClient runtime, ModelSettingsStore modelStore)
+        : this(modelStore)
+    {
+        _ = runtime;
     }
 
     private void Scene_Checked(object sender, RoutedEventArgs e)
@@ -80,7 +86,7 @@ public partial class FirstRunSetupWindow : Window
     private async void Finish_Click(object sender, RoutedEventArgs e)
     {
         FinishButton.IsEnabled = false;
-        StatusText.Text = "正在连接 AI，并同步 DeepSeek Harness…";
+        StatusText.Text = "正在保存 AI 配置，并同步 DeepSeek Harness…";
         try
         {
             ApplyScene();
