@@ -74,6 +74,31 @@ std::wstring Lower(std::wstring value) {
     return value;
 }
 
+std::wstring ClassifyTransportFailure(std::wstring text) {
+    if (text.empty()) return text;
+    if (text.find(L"WinHTTP 错误 12002") != std::wstring::npos) {
+        return L"L3 请求超时。模型服务在限定时间内没有响应；本地搜索与工具不受影响，可输入 /retry 重试。";
+    }
+    if (text.find(L"WinHTTP 错误 12007") != std::wstring::npos) {
+        return L"L3 无法解析模型服务地址（DNS）。请检查 Base URL 或网络连接，可输入 /retry 重试。";
+    }
+    if (text.find(L"WinHTTP 错误 12029") != std::wstring::npos ||
+        text.find(L"WinHTTP 错误 12030") != std::wstring::npos ||
+        text.find(L"WinHTTP 错误 12031") != std::wstring::npos) {
+        return L"L3 无法连接模型服务，或连接被服务端中断。请检查网络/服务状态，可输入 /retry 重试。";
+    }
+    if (text.find(L"WinHTTP 错误 12175") != std::wstring::npos) {
+        return L"L3 HTTPS/TLS 握手失败。请检查证书、系统时间或代理设置；不会自动升级到 Harness。";
+    }
+    if (text.find(L"HTTP 401") != std::wstring::npos || text.find(L"HTTP 403") != std::wstring::npos) {
+        return L"L3 模型鉴权失败（HTTP 401/403）。请在 AI 设置中检查 API Key 和权限；不会自动升级到 Harness。";
+    }
+    if (text.find(L"HTTP 429") != std::wstring::npos) {
+        return L"L3 模型服务限流（HTTP 429）。稍后可输入 /retry 重试；不会自动升级到 Harness。";
+    }
+    return text;
+}
+
 std::wstring ReadText(HWND control) {
     const int len = GetWindowTextLengthW(control);
     std::wstring value(static_cast<std::size_t>(len) + 1, L'\0');
@@ -287,10 +312,12 @@ LRESULT CALLBACK CliProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) 
         std::unique_ptr<UiMessage> payload(reinterpret_cast<UiMessage*>(lParam));
         if (!payload || payload->generation != state->generation ||
             payload->generation != gCliGeneration.load(std::memory_order_relaxed)) return 0;
-        if (!payload->text.empty()) {
-            if (state->streaming.empty()) state->streaming = payload->text;
-            else state->streaming += L"\r\n" + payload->text;
-            if (!state->lastPrompt.empty()) state->streaming += L"\r\n[可输入 /retry 重试上一请求]";
+        const auto doneText = ClassifyTransportFailure(payload->text);
+        if (!doneText.empty()) {
+            if (state->streaming.empty()) state->streaming = doneText;
+            else state->streaming += L"\r\n" + doneText;
+            if (!state->lastPrompt.empty() && doneText.find(L"/retry") == std::wstring::npos)
+                state->streaming += L"\r\n[可输入 /retry 重试上一请求]";
         }
         if (state->streaming.empty()) state->streaming = L"[完成，无可显示内容]";
         state->transcriptPrefix += state->streaming + L"\r\n\r\n";
