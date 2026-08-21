@@ -33,12 +33,16 @@ public partial class DesktopSearchBarWindow : Window
     private CancellationTokenSource? _searchPipeline;
     private long _searchGeneration;
     private string? _pendingDeepQuery;
+    private string? _pendingRetryQuery;
     private DesktopAiModelChoice? _selectedModel;
+    private System.Windows.Controls.Button? _retryButton;
+    private System.Windows.Controls.Button? _newConversationButton;
 
     public DesktopSearchBarWindow(MainWindow host)
     {
         _host = host;
         InitializeComponent();
+        InitializeL3ReplyActions();
         _searchIndex = new DesktopSearchIndexService();
         _speech.Recognized += OnSpeechRecognized;
 
@@ -61,6 +65,53 @@ public partial class DesktopSearchBarWindow : Window
             DispatcherPriority.ContextIdle);
         Deactivated += (_, _) => RefreshPosition();
         Closed += OnClosed;
+    }
+
+    private void InitializeL3ReplyActions()
+    {
+        if (ReplyPanel.Child is not System.Windows.Controls.Grid grid) return;
+
+        grid.Children.Remove(DeepProcessButton);
+        var actions = new System.Windows.Controls.StackPanel
+        {
+            Orientation = System.Windows.Controls.Orientation.Horizontal,
+            Margin = new Thickness(0, 10, 0, 0)
+        };
+        System.Windows.Controls.Grid.SetRow(actions, 2);
+
+        DeepProcessButton.Margin = new Thickness(0, 0, 8, 0);
+        actions.Children.Add(DeepProcessButton);
+
+        _retryButton = new System.Windows.Controls.Button
+        {
+            Content = "重试",
+            Visibility = Visibility.Collapsed,
+            Padding = new Thickness(13, 6, 13, 6),
+            Margin = new Thickness(0, 0, 8, 0),
+            Background = Brushes.White,
+            Foreground = new SolidColorBrush(Color.FromRgb(51, 65, 85)),
+            BorderBrush = new SolidColorBrush(Color.FromRgb(203, 213, 225)),
+            BorderThickness = new Thickness(1),
+            FontSize = 11.5,
+            FontWeight = FontWeights.SemiBold
+        };
+        _retryButton.Click += Retry_Click;
+        actions.Children.Add(_retryButton);
+
+        _newConversationButton = new System.Windows.Controls.Button
+        {
+            Content = "新对话",
+            Padding = new Thickness(13, 6, 13, 6),
+            Background = Brushes.White,
+            Foreground = new SolidColorBrush(Color.FromRgb(51, 65, 85)),
+            BorderBrush = new SolidColorBrush(Color.FromRgb(203, 213, 225)),
+            BorderThickness = new Thickness(1),
+            FontSize = 11.5,
+            FontWeight = FontWeights.SemiBold
+        };
+        _newConversationButton.Click += ResetConversation_Click;
+        actions.Children.Add(_newConversationButton);
+        grid.Children.Add(actions);
     }
 
     internal void RefreshPosition()
@@ -368,7 +419,7 @@ public partial class DesktopSearchBarWindow : Window
             ReplyTitle.Text = "无法打开";
             ReplyText.Text = result.Target;
             ReplyDot.Fill = new SolidColorBrush(Color.FromRgb(240, 125, 125));
-            DeepProcessButton.Visibility = Visibility.Collapsed;
+            SetL3ActionState(retry: false, deep: false);
             CollapseSearchResults();
             ExpandReply(92);
             return;
@@ -390,12 +441,14 @@ public partial class DesktopSearchBarWindow : Window
         if (_busy || string.IsNullOrWhiteSpace(prompt)) return;
 
         _busy = true;
-        SearchBox.IsEnabled = false;
+        _pendingRetryQuery = null;
+        SearchBox.IsReadOnly = true;
         ModelSelector.IsEnabled = false;
+        if (_newConversationButton is not null) _newConversationButton.IsEnabled = false;
         ReplyTitle.Text = "轻量直答 · 正在处理";
         ReplyText.Text = prompt;
         ReplyDot.Fill = new SolidColorBrush(Color.FromRgb(127, 143, 255));
-        DeepProcessButton.Visibility = Visibility.Collapsed;
+        SetL3ActionState(retry: false, deep: false);
         CollapseSearchResults();
         ExpandReply();
 
@@ -410,20 +463,28 @@ public partial class DesktopSearchBarWindow : Window
             switch (result.Disposition)
             {
                 case DesktopQuickAnswerDisposition.Answered:
+                    if (result.Title.StartsWith("CLI 连接失败", StringComparison.Ordinal))
+                    {
+                        ShowL3Failure(prompt, result.Title, result.Message);
+                        break;
+                    }
+
                     _pendingDeepQuery = null;
+                    _pendingRetryQuery = null;
                     ReplyTitle.Text = result.Title;
                     ReplyText.Text = result.Message;
                     ReplyDot.Fill = new SolidColorBrush(Color.FromRgb(99, 230, 190));
-                    DeepProcessButton.Visibility = Visibility.Collapsed;
+                    SetL3ActionState(retry: false, deep: false);
                     ExpandReply();
                     break;
 
                 case DesktopQuickAnswerDisposition.RequiresModel:
                     _pendingDeepQuery = null;
+                    _pendingRetryQuery = null;
                     ReplyTitle.Text = result.Title;
                     ReplyText.Text = result.Message;
                     ReplyDot.Fill = new SolidColorBrush(Color.FromRgb(241, 182, 106));
-                    DeepProcessButton.Visibility = Visibility.Collapsed;
+                    SetL3ActionState(retry: false, deep: false);
                     ExpandReply(120);
                     break;
 
@@ -438,7 +499,7 @@ public partial class DesktopSearchBarWindow : Window
         }
         catch (Exception error)
         {
-            ShowDeepProcessingOffer(prompt, "轻量直答未完成", error.Message);
+            ShowL3Failure(prompt, "CLI 未完成", error.Message);
         }
         finally
         {
@@ -446,8 +507,9 @@ public partial class DesktopSearchBarWindow : Window
                 _activeRequest = null;
             request.Dispose();
             _busy = false;
-            SearchBox.IsEnabled = true;
+            SearchBox.IsReadOnly = false;
             ModelSelector.IsEnabled = true;
+            if (_newConversationButton is not null) _newConversationButton.IsEnabled = true;
             if (IsVisible)
             {
                 SearchBox.Focus();
@@ -456,15 +518,64 @@ public partial class DesktopSearchBarWindow : Window
         }
     }
 
+    private void ShowL3Failure(string prompt, string title, string message)
+    {
+        _pendingRetryQuery = prompt;
+        _pendingDeepQuery = null;
+        ReplyTitle.Text = title;
+        ReplyText.Text = message;
+        ReplyDot.Fill = new SolidColorBrush(Color.FromRgb(225, 91, 91));
+        SetL3ActionState(retry: true, deep: false);
+        CollapseSearchResults();
+        ExpandReply(175);
+    }
+
     private void ShowDeepProcessingOffer(string prompt, string title, string message)
     {
+        _pendingRetryQuery = null;
         _pendingDeepQuery = prompt;
         ReplyTitle.Text = title;
         ReplyText.Text = message;
         ReplyDot.Fill = new SolidColorBrush(Color.FromRgb(99, 102, 241));
-        DeepProcessButton.Visibility = Visibility.Visible;
+        SetL3ActionState(retry: false, deep: true);
         CollapseSearchResults();
         ExpandReply(175);
+    }
+
+    private void SetL3ActionState(bool retry, bool deep)
+    {
+        if (_retryButton is not null)
+            _retryButton.Visibility = retry ? Visibility.Visible : Visibility.Collapsed;
+        DeepProcessButton.Visibility = deep ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private async void Retry_Click(object sender, RoutedEventArgs e)
+    {
+        if (_busy || string.IsNullOrWhiteSpace(_pendingRetryQuery)) return;
+        var prompt = _pendingRetryQuery;
+        if (!string.Equals(SearchBox.Text, prompt, StringComparison.Ordinal))
+        {
+            SearchBox.Text = prompt;
+            SearchBox.CaretIndex = SearchBox.Text.Length;
+        }
+        await SubmitQuickAsync();
+    }
+
+    private void ResetConversation_Click(object sender, RoutedEventArgs e)
+    {
+        if (_busy) return;
+        _quickAnswer.ResetConversation();
+        _pendingRetryQuery = null;
+        _pendingDeepQuery = null;
+        SearchBox.Clear();
+        ReplyTitle.Text = "CLI · 新对话";
+        ReplyText.Text = "已清除当前轻量对话上下文。下一条消息会从新的会话开始。";
+        ReplyDot.Fill = new SolidColorBrush(Color.FromRgb(99, 230, 190));
+        SetL3ActionState(retry: false, deep: false);
+        CollapseSearchResults();
+        ExpandReply(105);
+        SearchBox.Focus();
+        Keyboard.Focus(SearchBox);
     }
 
     private void DeepProcess_Click(object sender, RoutedEventArgs e) =>
@@ -474,6 +585,7 @@ public partial class DesktopSearchBarWindow : Window
     {
         if (string.IsNullOrWhiteSpace(query)) return;
         _pendingDeepQuery = query;
+        _pendingRetryQuery = null;
         _host.ShowHarnessConsoleFromSearch(query);
         CollapseReply();
         CollapseSearchResults();
@@ -484,12 +596,15 @@ public partial class DesktopSearchBarWindow : Window
         if (clearText) SearchBox.Clear();
         ReplyTitle.Text = "图灵";
         ReplyText.Text = string.Empty;
-        DeepProcessButton.Visibility = Visibility.Collapsed;
         _pendingDeepQuery = null;
+        _pendingRetryQuery = null;
+        SetL3ActionState(retry: false, deep: false);
         CollapseSearchResults();
         CollapseReply();
+        SearchBox.IsReadOnly = false;
         SearchBox.IsEnabled = true;
         ModelSelector.IsEnabled = true;
+        if (_newConversationButton is not null) _newConversationButton.IsEnabled = true;
         _busy = false;
     }
 
@@ -519,8 +634,9 @@ public partial class DesktopSearchBarWindow : Window
     {
         ReplyPanel.Visibility = Visibility.Collapsed;
         ReplyRow.Height = new GridLength(0);
-        DeepProcessButton.Visibility = Visibility.Collapsed;
         _pendingDeepQuery = null;
+        _pendingRetryQuery = null;
+        SetL3ActionState(retry: false, deep: false);
         UpdateExpandedHeight();
     }
 
