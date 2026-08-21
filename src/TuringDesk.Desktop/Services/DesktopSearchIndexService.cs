@@ -60,9 +60,9 @@ public sealed class DesktopSearchIndexService : IDisposable
     public int IndexedFileCount => 0;
 
     /// <summary>
-    /// Level 1: application ranking over the immutable in-memory app snapshot.
-    /// Native icon resolution is deliberately a separate asynchronous enrichment
-    /// step so the keystroke hot path can remain free of Shell/COM work.
+    /// Level 1: RAM-only application ranking over the immutable app snapshot.
+    /// Do not resolve Shell icons here: this method runs synchronously for every
+    /// keystroke and must never touch disk, registry, COM, IPC or Explorer.
     /// </summary>
     public IReadOnlyList<DesktopSearchResult> SearchApps(string query, int limit = 5)
     {
@@ -72,7 +72,7 @@ public sealed class DesktopSearchIndexService : IDisposable
                 hit.Target,
                 DesktopSearchResultKind.App,
                 BuildAppSubtitle(hit.Category, hit.Source),
-                ShellIconService.GetApplicationIcon(hit.Target, large: false),
+                null,
                 hit.Score,
                 Level: 1))
             .ToArray();
