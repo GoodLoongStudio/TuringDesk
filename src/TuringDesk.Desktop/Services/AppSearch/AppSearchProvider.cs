@@ -49,7 +49,8 @@ internal sealed class AppSearchProvider : IDisposable
         get
         {
             EnsureStarted();
-            return _initializationTask ?? Task.CompletedTask;
+            lock (_startGate)
+                return _initializationTask ?? Task.CompletedTask;
         }
     }
 
@@ -99,7 +100,6 @@ internal sealed class AppSearchProvider : IDisposable
         lock (_startGate)
         {
             if (Volatile.Read(ref _disposed) != 0 || _started != 0) return;
-            _started = 1;
             _status = "正在建立应用索引…";
 
             StartWatchers();
@@ -113,6 +113,7 @@ internal sealed class AppSearchProvider : IDisposable
             }
 
             _initializationTask = Task.Run(() => RefreshCoreAsync(_lifetime.Token));
+            Volatile.Write(ref _started, 1);
         }
     }
 
