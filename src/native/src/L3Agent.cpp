@@ -32,6 +32,11 @@ std::wstring Lower(std::wstring value) {
     return value;
 }
 
+bool EndsWithInsensitive(const std::wstring& value, const std::wstring& suffix) {
+    if (suffix.size() > value.size()) return false;
+    return Lower(value.substr(value.size() - suffix.size())) == Lower(suffix);
+}
+
 std::string WideToUtf8(const std::wstring& value) {
     if (value.empty()) return {};
     const int count = WideCharToMultiByte(CP_UTF8, 0, value.data(), static_cast<int>(value.size()), nullptr, 0, nullptr, nullptr);
@@ -154,6 +159,24 @@ std::string ExtractJsonString(std::string_view json, std::string_view key) {
     return out;
 }
 
+std::vector<std::wstring> ExtractModelIds(const std::string& json) {
+    std::vector<std::wstring> models;
+    std::size_t pos = 0;
+    constexpr std::string_view key = "\"id\"";
+    while ((pos = json.find(key, pos)) != std::string::npos) {
+        const auto value = ExtractJsonString(std::string_view(json).substr(pos), key);
+        if (!value.empty()) {
+            auto wide = Utf8ToWide(value);
+            if (wide.starts_with(L"models/")) wide.erase(0, 7);
+            if (!wide.empty() && std::find(models.begin(), models.end(), wide) == models.end()) {
+                models.push_back(std::move(wide));
+            }
+        }
+        pos += key.size();
+    }
+    return models;
+}
+
 fs::path SettingsPath() {
     wchar_t localAppData[32768]{};
     const DWORD count = GetEnvironmentVariableW(L"LOCALAPPDATA", localAppData, static_cast<DWORD>(std::size(localAppData)));
@@ -171,19 +194,312 @@ std::wstring HttpError(DWORD error) {
     return L"WinHTTP 错误 " + std::to_wstring(error);
 }
 
-std::wstring BuildRequestPath(const std::wstring& basePathRaw, const std::wstring& endpointRaw) {
-    std::wstring basePath = basePathRaw;
-    if (basePath.empty()) basePath = L"/";
-    while (basePath.size() > 1 && basePath.back() == L'/') basePath.pop_back();
+std::wstring NormalizePrefix(std::wstring prefix) {
+    prefix = Trim(std::move(prefix));
+    if (prefix.empty() || prefix == L"/") return {};
+    if (prefix.front() != L'/') prefix.insert(prefix.begin(), L'/');
+    while (prefix.size() > 1 && prefix.back() == L'/') prefix.pop_back();
+    return prefix;
+}
 
+std::wstring JoinPath(const std::wstring& prefix, const wchar_t* suffix) {
+    const auto normalized = NormalizePrefix(prefix);
+    return normalized.empty() ? std::wstring(suffix) : normalized + suffix;
+}
+
+std::wstring BuildRequestPath(const std::wstring& basePathRaw, const std::wstring& endpointRaw) {
+    std::wstring basePath = NormalizePrefix(basePathRaw);
     std::wstring endpoint = Trim(endpointRaw);
     if (endpoint == L"-") endpoint.clear();
     if (endpoint.empty()) return basePath.empty() ? L"/" : basePath;
     if (endpoint.front() != L'/') endpoint.insert(endpoint.begin(), L'/');
+    if (!basePath.empty() && endpoint.starts_with(basePath)) return endpoint;
+    return basePath.empty() ? endpoint : basePath + endpoint;
+}
 
-    if (basePath == L"/") basePath.clear();
-    if (!basePath.ends_with(endpoint)) basePath += endpoint;
-    return basePath.empty() ? L"/" : basePath;
+struct ParsedUrl {
+    bool valid{};
+    std::wstring root;
+    std::wstring host;
+    std::wstring path;
+};
+
+ParsedUrl ParseUrl(const std::wstring& raw) {
+    ParsedUrl out;
+    const auto value = Trim(raw);
+    if (!value.starts_with(L"https://") && !value.starts_with(L"http://")) return out;
+
+    URL_COMPONENTS parts{};
+    parts.dwStructSize = sizeof(parts);
+    parts.dwSchemeLength = static_cast<DWORD>(-1);
+    parts.dwHostNameLength = static_cast<DWORD>(-1);
+    parts.dwUrlPathLength = static_cast<DWORD>(-1);
+    if (!WinHttpCrackUrl(value.c_str(), 0, 0, &parts) || !parts.lpszHostName || parts.dwHostNameLength == 0) return out;
+
+    out.host.assign(parts.lpszHostName, parts.dwHostNameLength);
+    if (parts.lpszUrlPath && parts.dwUrlPathLength) out.path.assign(parts.lpszUrlPath, parts.dwUrlPathLength);
+    if (out.path == L"/") out.path.clear();
+    while (out.path.size() > 1 && out.path.back() == L'/') out.path.pop_back();
+
+    std::wstring authorityHost = out.host;
+    if (authorityHost.find(L':') != std::wstring::npos && !authorityHost.starts_with(L"[")) {
+        authorityHost = L"[" + authorityHost + L"]";
+    }
+    const bool secure = parts.nScheme == INTERNET_SCHEME_HTTPS;
+    out.root = secure ? L"https://" : L"http://";
+    out.root += authorityHost;
+    const bool defaultPort = (secure && parts.nPort == 443) || (!secure && parts.nPort == 80);
+    if (!defaultPort && parts.nPort != 0) out.root += L":" + std::to_wstring(parts.nPort);
+    out.valid = true;
+    return out;
+}
+
+bool IsLocalHost(const std::wstring& host) {
+    const auto lower = Lower(host);
+    return lower == L"localhost" || lower == L"127.0.0.1" || lower == L"::1";
+}
+
+bool IsLocalUrl(const std::wstring& url) {
+    const auto parsed = ParseUrl(url);
+    return parsed.valid && IsLocalHost(parsed.host);
+}
+
+struct ProviderCandidate {
+    std::wstring providerId;
+    std::wstring protocolLabel;
+    std::wstring baseUrl;
+    std::wstring chatPath;
+    std::wstring modelsPath;
+    bool anthropic{};
+};
+
+std::wstring PrefixFromPath(const std::wstring& path, bool anthropic) {
+    if (path.empty()) return {};
+    const std::wstring chatSuffix = anthropic ? L"/messages" : L"/chat/completions";
+    if (EndsWithInsensitive(path, chatSuffix)) return NormalizePrefix(path.substr(0, path.size() - chatSuffix.size()));
+    if (EndsWithInsensitive(path, L"/models")) return NormalizePrefix(path.substr(0, path.size() - 7));
+    return NormalizePrefix(path);
+}
+
+ProviderCandidate MakeCandidate(const ParsedUrl& parsed,
+                                std::wstring providerId,
+                                std::wstring label,
+                                std::wstring prefix,
+                                bool anthropic = false) {
+    ProviderCandidate candidate;
+    candidate.providerId = std::move(providerId);
+    candidate.protocolLabel = std::move(label);
+    candidate.baseUrl = parsed.root;
+    candidate.anthropic = anthropic;
+    candidate.chatPath = JoinPath(prefix, anthropic ? L"/messages" : L"/chat/completions");
+    candidate.modelsPath = JoinPath(prefix, L"/models");
+    return candidate;
+}
+
+std::vector<ProviderCandidate> BuildProviderCandidates(const std::wstring& apiUrl) {
+    const auto parsed = ParseUrl(apiUrl);
+    if (!parsed.valid) return {};
+
+    const auto host = Lower(parsed.host);
+    const auto path = Lower(parsed.path);
+    std::vector<ProviderCandidate> candidates;
+
+    const bool looksAnthropic = host.find(L"anthropic.com") != std::wstring::npos || EndsWithInsensitive(path, L"/messages");
+    if (looksAnthropic) {
+        auto prefix = parsed.path.empty() ? L"/v1" : PrefixFromPath(parsed.path, true);
+        candidates.push_back(MakeCandidate(parsed, L"anthropic", L"Anthropic Messages", prefix, true));
+        return candidates;
+    }
+
+    if (host.find(L"generativelanguage.googleapis.com") != std::wstring::npos) {
+        auto prefix = parsed.path.empty() ? L"/v1beta/openai" : PrefixFromPath(parsed.path, false);
+        candidates.push_back(MakeCandidate(parsed, L"gemini", L"Gemini · OpenAI-compatible", prefix));
+        return candidates;
+    }
+
+    if (host.find(L"openrouter.ai") != std::wstring::npos) {
+        auto prefix = parsed.path.empty() ? L"/api/v1" : PrefixFromPath(parsed.path, false);
+        candidates.push_back(MakeCandidate(parsed, L"openrouter", L"OpenRouter · OpenAI-compatible", prefix));
+        return candidates;
+    }
+
+    if (host.find(L"api.openai.com") != std::wstring::npos) {
+        auto prefix = parsed.path.empty() ? L"/v1" : PrefixFromPath(parsed.path, false);
+        candidates.push_back(MakeCandidate(parsed, L"openai", L"OpenAI", prefix));
+        return candidates;
+    }
+
+    if (host.find(L"deepseek.com") != std::wstring::npos) {
+        auto prefix = parsed.path.empty() ? L"" : PrefixFromPath(parsed.path, false);
+        candidates.push_back(MakeCandidate(parsed, L"deepseek", L"DeepSeek · OpenAI-compatible", prefix));
+        if (parsed.path.empty()) candidates.push_back(MakeCandidate(parsed, L"deepseek", L"DeepSeek · OpenAI-compatible", L"/v1"));
+        return candidates;
+    }
+
+    if (IsLocalHost(parsed.host) && (parsed.root.find(L":11434") != std::wstring::npos || host.find(L"ollama") != std::wstring::npos)) {
+        auto prefix = parsed.path.empty() ? L"/v1" : PrefixFromPath(parsed.path, false);
+        candidates.push_back(MakeCandidate(parsed, L"ollama", L"Ollama · OpenAI-compatible", prefix));
+        return candidates;
+    }
+
+    if (!parsed.path.empty()) {
+        candidates.push_back(MakeCandidate(parsed, IsLocalHost(parsed.host) ? L"local-openai-compatible" : L"openai-compatible",
+                                           IsLocalHost(parsed.host) ? L"Local · OpenAI-compatible" : L"OpenAI-compatible",
+                                           PrefixFromPath(parsed.path, false)));
+        return candidates;
+    }
+
+    const auto id = IsLocalHost(parsed.host) ? L"local-openai-compatible" : L"openai-compatible";
+    const auto label = IsLocalHost(parsed.host) ? L"Local · OpenAI-compatible" : L"OpenAI-compatible";
+    candidates.push_back(MakeCandidate(parsed, id, label, L"/v1"));
+    candidates.push_back(MakeCandidate(parsed, id, label, L""));
+    return candidates;
+}
+
+struct HttpResponse {
+    bool transportOk{};
+    DWORD status{};
+    DWORD error{};
+    std::string body;
+};
+
+HttpResponse HttpGet(const std::wstring& url, const std::wstring& headers) {
+    HttpResponse response;
+    URL_COMPONENTS parts{};
+    parts.dwStructSize = sizeof(parts);
+    parts.dwSchemeLength = static_cast<DWORD>(-1);
+    parts.dwHostNameLength = static_cast<DWORD>(-1);
+    parts.dwUrlPathLength = static_cast<DWORD>(-1);
+    if (!WinHttpCrackUrl(url.c_str(), 0, 0, &parts)) {
+        response.error = GetLastError();
+        return response;
+    }
+
+    const std::wstring host(parts.lpszHostName, parts.dwHostNameLength);
+    std::wstring path = L"/";
+    if (parts.lpszUrlPath && parts.dwUrlPathLength) path.assign(parts.lpszUrlPath, parts.dwUrlPathLength);
+
+    HINTERNET session = WinHttpOpen(L"TuringDesk.Native/2.0", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
+                                    WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+    if (!session) {
+        response.error = GetLastError();
+        return response;
+    }
+    WinHttpSetTimeouts(session, 3000, 3000, 5000, 8000);
+
+    HINTERNET connection = WinHttpConnect(session, host.c_str(), parts.nPort, 0);
+    if (!connection) {
+        response.error = GetLastError();
+        WinHttpCloseHandle(session);
+        return response;
+    }
+
+    const DWORD flags = parts.nScheme == INTERNET_SCHEME_HTTPS ? WINHTTP_FLAG_SECURE : 0;
+    HINTERNET request = WinHttpOpenRequest(connection, L"GET", path.c_str(), nullptr, WINHTTP_NO_REFERER,
+                                           WINHTTP_DEFAULT_ACCEPT_TYPES, flags);
+    if (!request) {
+        response.error = GetLastError();
+        WinHttpCloseHandle(connection);
+        WinHttpCloseHandle(session);
+        return response;
+    }
+
+    const LPCWSTR headerPtr = headers.empty() ? WINHTTP_NO_ADDITIONAL_HEADERS : headers.c_str();
+    const DWORD headerLength = headers.empty() ? 0 : static_cast<DWORD>(-1L);
+    if (!WinHttpSendRequest(request, headerPtr, headerLength, WINHTTP_NO_REQUEST_DATA, 0, 0, 0) ||
+        !WinHttpReceiveResponse(request, nullptr)) {
+        response.error = GetLastError();
+        WinHttpCloseHandle(request);
+        WinHttpCloseHandle(connection);
+        WinHttpCloseHandle(session);
+        return response;
+    }
+
+    DWORD statusBytes = sizeof(response.status);
+    WinHttpQueryHeaders(request, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, WINHTTP_HEADER_NAME_BY_INDEX,
+                        &response.status, &statusBytes, WINHTTP_NO_HEADER_INDEX);
+
+    for (;;) {
+        DWORD available = 0;
+        if (!WinHttpQueryDataAvailable(request, &available)) {
+            response.error = GetLastError();
+            break;
+        }
+        if (available == 0) {
+            response.transportOk = true;
+            break;
+        }
+        std::vector<char> buffer(available);
+        DWORD read = 0;
+        if (!WinHttpReadData(request, buffer.data(), available, &read)) {
+            response.error = GetLastError();
+            break;
+        }
+        if (read == 0) {
+            response.transportOk = true;
+            break;
+        }
+        if (response.body.size() + read <= 2 * 1024 * 1024) response.body.append(buffer.data(), read);
+    }
+
+    WinHttpCloseHandle(request);
+    WinHttpCloseHandle(connection);
+    WinHttpCloseHandle(session);
+    return response;
+}
+
+std::wstring ProbeHeaders(const ProviderCandidate& candidate, const std::wstring& apiKey) {
+    std::wstring headers = L"Accept: application/json\r\n";
+    if (candidate.anthropic) {
+        if (!apiKey.empty()) headers += L"x-api-key: " + apiKey + L"\r\n";
+        headers += L"anthropic-version: 2023-06-01\r\n";
+    } else if (!apiKey.empty()) {
+        headers += L"Authorization: Bearer " + apiKey + L"\r\n";
+    }
+    return headers;
+}
+
+int ModelScore(const std::wstring& model, const std::wstring& current, const std::wstring& providerId) {
+    const auto lower = Lower(model);
+    int score = 0;
+    if (!current.empty() && Lower(current) == lower) score += 1000;
+    if (providerId == L"deepseek" && lower == L"deepseek-chat") score += 500;
+    if (lower.find(L"chat") != std::wstring::npos) score += 120;
+    if (lower.find(L"instruct") != std::wstring::npos) score += 90;
+    if (lower.find(L"sonnet") != std::wstring::npos) score += 85;
+    if (lower.find(L"flash") != std::wstring::npos) score += 80;
+    if (lower.find(L"mini") != std::wstring::npos) score += 70;
+    if (lower.find(L"reasoner") != std::wstring::npos || lower.find(L"reasoning") != std::wstring::npos) score += 55;
+    if (lower.find(L"latest") != std::wstring::npos) score += 20;
+
+    for (const wchar_t* bad : {L"embedding", L"embed", L"rerank", L"moderation", L"whisper", L"tts", L"image", L"audio"}) {
+        if (lower.find(bad) != std::wstring::npos) score -= 500;
+    }
+    return score;
+}
+
+std::wstring RecommendModel(const std::vector<std::wstring>& models,
+                            const std::wstring& current,
+                            const std::wstring& providerId) {
+    if (models.empty()) return {};
+    std::size_t best = 0;
+    int bestScore = ModelScore(models[0], current, providerId);
+    for (std::size_t i = 1; i < models.size(); ++i) {
+        const int score = ModelScore(models[i], current, providerId);
+        if (score > bestScore) {
+            best = i;
+            bestScore = score;
+        }
+    }
+    return models[best];
+}
+
+void FillProbeMetadata(ModelProbeResult& result, const ProviderCandidate& candidate) {
+    result.providerId = candidate.providerId;
+    result.protocolLabel = candidate.protocolLabel;
+    result.baseUrl = candidate.baseUrl;
+    result.endpoint = candidate.chatPath;
+    result.apiUrl = candidate.baseUrl + candidate.chatPath;
 }
 
 } // namespace
@@ -204,7 +520,7 @@ ModelConfig L3Agent::LoadConfig() const {
     const auto baseUrl = ConfigValue(json, "\"BaseUrl\"");
     const auto model = ConfigValue(json, "\"Model\"");
     const auto endpoint = ConfigValue(json, "\"Endpoint\"");
-    if (!provider.empty() && provider != L"unconfigured") result.providerId = provider;
+    if (!provider.empty()) result.providerId = provider;
     if (!baseUrl.empty()) result.baseUrl = baseUrl;
     if (!model.empty() && model != L"未配置") result.model = model;
     if (!endpoint.empty()) result.endpoint = endpoint;
@@ -220,7 +536,7 @@ bool L3Agent::SaveConfig(const ModelConfig& config) const {
            << "  \"BaseUrl\": \"" << EscapeJson(config.baseUrl) << "\",\n"
            << "  \"Model\": \"" << EscapeJson(config.model) << "\",\n"
            << "  \"Endpoint\": \"" << EscapeJson(config.endpoint) << "\",\n"
-           << "  \"HasApiKey\": " << (HasApiKey() ? "true" : "false") << "\n}\n";
+           << "  \"HasApiKey\": " << (HasStoredApiKey() ? "true" : "false") << "\n}\n";
     return static_cast<bool>(stream);
 }
 
@@ -255,8 +571,130 @@ bool L3Agent::SaveApiKey(const std::wstring& key) const {
     return CredWriteW(&credential, 0) != FALSE;
 }
 
-bool L3Agent::HasApiKey() const {
+bool L3Agent::HasStoredApiKey() const {
     return !LoadApiKey().empty();
+}
+
+bool L3Agent::HasApiKey() const {
+    return HasStoredApiKey() || IsLocalUrl(config_.baseUrl);
+}
+
+std::wstring L3Agent::CurrentApiUrl() const {
+    if (config_.baseUrl.empty()) return {};
+    std::wstring endpoint = Trim(config_.endpoint);
+    if (endpoint.starts_with(L"/https://") || endpoint.starts_with(L"/http://")) {
+        endpoint.erase(endpoint.begin());
+        return endpoint;
+    }
+    if (endpoint.starts_with(L"https://") || endpoint.starts_with(L"http://")) return endpoint;
+    std::wstring base = Trim(config_.baseUrl);
+    while (base.size() > 1 && base.back() == L'/') base.pop_back();
+    if (endpoint.empty() || endpoint == L"-") return base;
+    if (endpoint.front() != L'/') endpoint.insert(endpoint.begin(), L'/');
+    return base + endpoint;
+}
+
+ModelProbeResult L3Agent::ProbeModels(const std::wstring& apiUrl,
+                                     const std::wstring& apiKeyOverride,
+                                     bool useStoredApiKey) const {
+    ModelProbeResult result;
+    const auto candidates = BuildProviderCandidates(apiUrl);
+    if (candidates.empty()) {
+        result.message = L"API 地址无效，请填写以 http:// 或 https:// 开头的地址。";
+        return result;
+    }
+
+    const std::wstring apiKey = !apiKeyOverride.empty() ? apiKeyOverride : (useStoredApiKey ? LoadApiKey() : L"");
+    FillProbeMetadata(result, candidates.front());
+
+    DWORD lastStatus = 0;
+    DWORD lastError = ERROR_SUCCESS;
+    for (const auto& candidate : candidates) {
+        const auto modelsUrl = candidate.baseUrl + candidate.modelsPath;
+        const auto response = HttpGet(modelsUrl, ProbeHeaders(candidate, apiKey));
+        if (!response.transportOk) {
+            lastError = response.error;
+            continue;
+        }
+
+        lastStatus = response.status;
+        FillProbeMetadata(result, candidate);
+        result.statusCode = response.status;
+
+        if (response.status == 200) {
+            result.models = ExtractModelIds(response.body);
+            if (!result.models.empty()) {
+                result.ok = true;
+                result.recommendedModel = RecommendModel(result.models, config_.model, result.providerId);
+                result.message = L"已自动识别协议并读取模型列表。";
+                return result;
+            }
+            result.message = L"连接成功，但服务没有返回可识别的模型 ID。可手动填写模型名称后保存。";
+            return result;
+        }
+
+        if (response.status == 401 || response.status == 403) {
+            result.message = L"API Key 无效、缺失或没有读取模型列表的权限。";
+            return result;
+        }
+
+        if (response.status != 404 && response.status != 405) {
+            std::wstring detail = L"模型列表请求返回 HTTP " + std::to_wstring(response.status) + L"。";
+            if (!response.body.empty()) {
+                const auto shortBody = Utf8ToWide(response.body.substr(0, 220));
+                if (!shortBody.empty()) detail += L" " + shortBody;
+            }
+            result.message = std::move(detail);
+            return result;
+        }
+    }
+
+    result.statusCode = lastStatus;
+    if (lastError != ERROR_SUCCESS) {
+        result.message = L"无法连接 API：" + HttpError(lastError);
+    } else {
+        result.message = L"已推断为 " + result.protocolLabel + L"，但没有找到模型列表接口。可手动填写模型名称后保存。";
+    }
+    return result;
+}
+
+bool L3Agent::ApplyModelConfig(const ModelProbeResult& probe,
+                               const std::wstring& rawModel,
+                               const std::wstring& apiKeyOverride,
+                               bool preserveExistingKey,
+                               std::wstring& reply) {
+    const auto model = Trim(rawModel);
+    if (probe.baseUrl.empty() || probe.endpoint.empty() || model.empty()) {
+        reply = L"API 地址或模型名称为空。";
+        return false;
+    }
+
+    if (!apiKeyOverride.empty()) {
+        if (!SaveApiKey(apiKeyOverride)) {
+            reply = L"API Key 保存失败，Windows 错误：" + std::to_wstring(GetLastError());
+            return false;
+        }
+    } else if (!preserveExistingKey && !IsLocalUrl(probe.baseUrl)) {
+        if (!HasStoredApiKey()) {
+            reply = L"该远程服务需要 API Key。";
+            return false;
+        }
+    }
+
+    const bool changed = config_.providerId != probe.providerId || config_.baseUrl != probe.baseUrl ||
+                         config_.endpoint != probe.endpoint || config_.model != model;
+    config_.providerId = probe.providerId.empty() ? L"openai-compatible" : probe.providerId;
+    config_.baseUrl = probe.baseUrl;
+    config_.endpoint = probe.endpoint;
+    config_.model = model;
+    if (changed) ClearConversation();
+
+    if (!SaveConfig(config_)) {
+        reply = L"模型配置保存失败。";
+        return false;
+    }
+    reply = L"已保存 · " + (probe.protocolLabel.empty() ? config_.providerId : probe.protocolLabel) + L" · " + config_.model;
+    return true;
 }
 
 void L3Agent::ClearConversation() {
@@ -270,13 +708,14 @@ bool L3Agent::TryHandleLocal(const std::wstring& raw, std::wstring& reply, bool&
     const auto lower = Lower(input);
 
     if (lower == L"/help") {
-        reply = L"L3 命令：/status、/time、/new、/provider <BaseURL> <Model>、/endpoint <Path>、/key <API Key>、/clear-key。Ctrl+Enter 强制使用模型。";
+        reply = L"L3 命令：/status、/time、/new。模型和 API Key 请使用右上角 AI 设置；Ctrl+Enter 强制进入 L3。";
         return true;
     }
     if (lower == L"/status") {
-        reply = L"Native L3 · Provider=" + config_.providerId + L" · Model=" + config_.model +
-                L" · Endpoint=" + (config_.endpoint.empty() ? L"(Base URL path)" : config_.endpoint) +
-                L" · API Key=" + (HasApiKey() ? L"已配置" : L"未配置") + L" · Harness=未参与";
+        reply = L"Native L3 · Provider=" + config_.providerId + L" · Model=" +
+                (config_.model.empty() ? L"未配置" : config_.model) + L" · API Key=" +
+                (HasStoredApiKey() ? L"已配置" : (IsLocalUrl(config_.baseUrl) ? L"本地服务无需 Key" : L"未配置")) +
+                L" · Harness=未参与";
         return true;
     }
     if (lower == L"/new" || lower == L"/new-chat" || lower == L"新对话") {
@@ -319,8 +758,7 @@ bool L3Agent::TryHandleLocal(const std::wstring& raw, std::wstring& reply, bool&
         const bool changed = config_.endpoint != endpoint;
         config_.endpoint = endpoint;
         if (changed) ClearConversation();
-        reply = SaveConfig(config_) ? L"Endpoint 已保存：" + (config_.endpoint.empty() ? L"使用 Base URL 自带路径" : config_.endpoint)
-                                    : L"Endpoint 保存失败。";
+        reply = SaveConfig(config_) ? L"Endpoint 已保存。" : L"Endpoint 保存失败。";
         return true;
     }
     if (lower.starts_with(L"/provider ")) {
@@ -336,12 +774,15 @@ bool L3Agent::TryHandleLocal(const std::wstring& raw, std::wstring& reply, bool&
             reply = L"Base URL 必须以 http:// 或 https:// 开头，并填写模型 ID。";
             return true;
         }
+        const auto lowerBase = Lower(baseUrl);
         const bool changed = config_.baseUrl != baseUrl || config_.model != model;
         config_.baseUrl = baseUrl;
         config_.model = model;
-        config_.providerId = Lower(baseUrl).find(L"deepseek") != std::wstring::npos ? L"deepseek" : L"openai-compatible";
+        if (lowerBase.find(L"anthropic") != std::wstring::npos) config_.providerId = L"anthropic";
+        else if (lowerBase.find(L"deepseek") != std::wstring::npos) config_.providerId = L"deepseek";
+        else config_.providerId = L"openai-compatible";
         if (changed) ClearConversation();
-        reply = SaveConfig(config_) ? L"模型配置已保存：" + config_.model + L" @ " + config_.baseUrl : L"模型配置保存失败。";
+        reply = SaveConfig(config_) ? L"模型配置已保存。" : L"模型配置保存失败。";
         return true;
     }
     return false;
@@ -364,8 +805,12 @@ void L3Agent::AskAsync(std::wstring prompt, DeltaCallback onDelta, DoneCallback 
 
 void L3Agent::RunRequest(std::wstring prompt, DeltaCallback onDelta, DoneCallback onDone, std::stop_token stopToken) {
     const auto apiKey = LoadApiKey();
-    if (apiKey.empty()) {
+    if (apiKey.empty() && !IsLocalUrl(config_.baseUrl)) {
         onDone(L"未配置 API Key。请打开右上角 AI 设置填写 Key。");
+        return;
+    }
+    if (config_.baseUrl.empty() || config_.endpoint.empty() || config_.model.empty()) {
+        onDone(L"L3 模型尚未配置。请打开右上角 AI 设置。");
         return;
     }
 
@@ -375,7 +820,7 @@ void L3Agent::RunRequest(std::wstring prompt, DeltaCallback onDelta, DoneCallbac
     parts.dwHostNameLength = static_cast<DWORD>(-1);
     parts.dwUrlPathLength = static_cast<DWORD>(-1);
     if (!WinHttpCrackUrl(config_.baseUrl.c_str(), 0, 0, &parts)) {
-        onDone(L"模型 Base URL 无效。请在 AI 设置中重新填写。");
+        onDone(L"模型 API 地址无效。请在 AI 设置中重新检测。");
         return;
     }
 
@@ -415,16 +860,38 @@ void L3Agent::RunRequest(std::wstring prompt, DeltaCallback onDelta, DoneCallbac
         history = conversation_;
     }
 
-    const std::wstring headers = L"Content-Type: application/json\r\nAccept: text/event-stream\r\nAuthorization: Bearer " + apiKey + L"\r\n";
-    std::string body = "{\"model\":\"" + EscapeJson(config_.model) +
-                       "\",\"messages\":[{\"role\":\"system\",\"content\":\"You are TuringDesk L3. Be concise. Never claim an OS action ran unless a registered native tool actually ran it.\"}";
-    for (const auto& turn : history) {
-        body += ",{\"role\":\"user\",\"content\":\"" + EscapeJson(turn.user) + "\"}";
-        body += ",{\"role\":\"assistant\",\"content\":\"" + EscapeJson(turn.assistant) + "\"}";
+    const bool anthropic = config_.providerId == L"anthropic";
+    std::wstring headers = L"Content-Type: application/json\r\nAccept: text/event-stream\r\n";
+    if (anthropic) {
+        headers += L"x-api-key: " + apiKey + L"\r\nanthropic-version: 2023-06-01\r\n";
+    } else if (!apiKey.empty()) {
+        headers += L"Authorization: Bearer " + apiKey + L"\r\n";
     }
-    body += ",{\"role\":\"user\",\"content\":\"" + EscapeJson(prompt) + "\"}],\"stream\":true";
-    if (Lower(host).find(L"deepseek") != std::wstring::npos) body += ",\"thinking\":{\"type\":\"disabled\"}";
-    body += "}";
+
+    std::string body;
+    if (anthropic) {
+        body = "{\"model\":\"" + EscapeJson(config_.model) +
+               "\",\"max_tokens\":1024,\"stream\":true,\"system\":\"You are TuringDesk L3. Be concise. Never claim an OS action ran unless a registered native tool actually ran it.\",\"messages\":[";
+        bool first = true;
+        for (const auto& turn : history) {
+            if (!first) body += ',';
+            body += "{\"role\":\"user\",\"content\":\"" + EscapeJson(turn.user) + "\"}";
+            body += ",{\"role\":\"assistant\",\"content\":\"" + EscapeJson(turn.assistant) + "\"}";
+            first = false;
+        }
+        if (!first) body += ',';
+        body += "{\"role\":\"user\",\"content\":\"" + EscapeJson(prompt) + "\"}]}";
+    } else {
+        body = "{\"model\":\"" + EscapeJson(config_.model) +
+               "\",\"messages\":[{\"role\":\"system\",\"content\":\"You are TuringDesk L3. Be concise. Never claim an OS action ran unless a registered native tool actually ran it.\"}";
+        for (const auto& turn : history) {
+            body += ",{\"role\":\"user\",\"content\":\"" + EscapeJson(turn.user) + "\"}";
+            body += ",{\"role\":\"assistant\",\"content\":\"" + EscapeJson(turn.assistant) + "\"}";
+        }
+        body += ",{\"role\":\"user\",\"content\":\"" + EscapeJson(prompt) + "\"}],\"stream\":true";
+        if (Lower(host).find(L"deepseek") != std::wstring::npos) body += ",\"thinking\":{\"type\":\"disabled\"}";
+        body += "}";
+    }
 
     auto closeHandles = [&]() {
         if (activeRequest_.exchange(nullptr) == request) WinHttpCloseHandle(request);
@@ -479,7 +946,14 @@ void L3Agent::RunRequest(std::wstring prompt, DeltaCallback onDelta, DoneCallbac
             data.remove_prefix(5);
             while (!data.empty() && data.front() == ' ') data.remove_prefix(1);
             if (data == "[DONE]") { done = true; break; }
-            const auto content = ExtractJsonString(data, "\"content\"");
+            if (anthropic && data.find("\"type\":\"message_stop\"") != std::string_view::npos) {
+                done = true;
+                break;
+            }
+
+            const auto content = anthropic
+                ? ExtractJsonString(data, "\"text\"")
+                : ExtractJsonString(data, "\"content\"");
             if (!content.empty()) {
                 const auto wide = Utf8ToWide(content);
                 if (!wide.empty()) {
@@ -500,8 +974,7 @@ void L3Agent::RunRequest(std::wstring prompt, DeltaCallback onDelta, DoneCallbac
     if (status < 200 || status >= 300) {
         std::wstring detail = L"模型请求失败：HTTP " + std::to_wstring(status) + L" · Endpoint=" + path;
         if (!fullBody.empty()) {
-            std::string shortBody = fullBody.substr(0, 300);
-            const auto wideBody = Utf8ToWide(shortBody);
+            const auto wideBody = Utf8ToWide(fullBody.substr(0, 300));
             if (!wideBody.empty()) detail += L" · " + wideBody;
         }
         onDone(detail);
@@ -509,7 +982,9 @@ void L3Agent::RunRequest(std::wstring prompt, DeltaCallback onDelta, DoneCallbac
     }
 
     if (!emitted) {
-        const auto content = ExtractJsonString(fullBody, "\"content\"");
+        const auto content = anthropic
+            ? ExtractJsonString(fullBody, "\"text\"")
+            : ExtractJsonString(fullBody, "\"content\"");
         if (!content.empty()) {
             const auto wide = Utf8ToWide(content);
             if (!wide.empty()) {
@@ -527,7 +1002,7 @@ void L3Agent::RunRequest(std::wstring prompt, DeltaCallback onDelta, DoneCallbac
             conversation_.erase(conversation_.begin(), conversation_.begin() + (conversation_.size() - kMaxConversationTurns));
         }
     }
-    onDone(emitted ? L"" : L"模型返回成功，但没有可显示的 content。请检查 OpenAI-compatible 响应格式。");
+    onDone(emitted ? L"" : L"模型返回成功，但没有可显示的文本内容。请检查服务的兼容格式。");
 }
 
 } // namespace turingdesk

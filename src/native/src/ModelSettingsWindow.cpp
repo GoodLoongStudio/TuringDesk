@@ -9,20 +9,25 @@ namespace {
 constexpr wchar_t kSettingsClass[] = L"TuringDesk.Native.ModelSettingsWindow";
 constexpr wchar_t kSavedKeyMask[] = L"********";
 constexpr int kApiUrlEditId = 2101;
-constexpr int kModelEditId = 2102;
-constexpr int kApiKeyEditId = 2103;
-constexpr int kClearKeyButtonId = 2104;
-constexpr int kStatusLabelId = 2105;
+constexpr int kApiKeyEditId = 2102;
+constexpr int kModelComboId = 2103;
+constexpr int kProbeButtonId = 2104;
+constexpr int kClearKeyButtonId = 2105;
+constexpr int kStatusLabelId = 2106;
 
 struct SettingsState {
     L3Agent* agent{};
     HWND window{};
     HWND apiUrlEdit{};
-    HWND modelEdit{};
     HWND apiKeyEdit{};
+    HWND modelCombo{};
+    HWND probeButton{};
     HWND statusLabel{};
     bool hadExistingKey{};
+    bool hasProbe{};
     bool saved{};
+    std::wstring probedApiUrl;
+    ModelProbeResult probe;
 };
 
 std::wstring ReadText(HWND control) {
@@ -40,115 +45,118 @@ std::wstring Trim(std::wstring value) {
     return value;
 }
 
-std::wstring Lower(std::wstring value) {
-    std::transform(value.begin(), value.end(), value.begin(), [](wchar_t ch) {
-        return static_cast<wchar_t>(std::towlower(ch));
-    });
-    return value;
-}
-
 void SetControlFont(HWND control, HFONT font) {
     SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
 }
 
-std::wstring CurrentApiUrl(const ModelConfig& config) {
-    std::wstring endpoint = Trim(config.endpoint);
-
-    // Repair the old settings UI bug where a complete URL entered in Endpoint
-    // was stored as /https://host/... . Do not make the user understand this
-    // migration detail; simply present a valid full API URL next time.
-    if (endpoint.starts_with(L"/https://") || endpoint.starts_with(L"/http://")) {
-        endpoint.erase(endpoint.begin());
-        return endpoint;
-    }
-    if (endpoint.starts_with(L"https://") || endpoint.starts_with(L"http://")) {
-        return endpoint;
-    }
-
-    std::wstring base = Trim(config.baseUrl);
-    while (base.size() > 1 && base.back() == L'/') base.pop_back();
-    if (endpoint.empty() || endpoint == L"-") return base;
-    if (endpoint.front() != L'/') endpoint.insert(endpoint.begin(), L'/');
-    return base + endpoint;
-}
-
-bool SplitApiUrl(std::wstring apiUrl, std::wstring& baseUrl, std::wstring& endpoint) {
-    apiUrl = Trim(std::move(apiUrl));
-    if (!apiUrl.starts_with(L"https://") && !apiUrl.starts_with(L"http://")) return false;
-    if (apiUrl.find_first_of(L" \t\r\n") != std::wstring::npos) return false;
-
-    const auto schemeEnd = apiUrl.find(L"://");
-    if (schemeEnd == std::wstring::npos) return false;
-    const auto pathStart = apiUrl.find(L'/', schemeEnd + 3);
-
-    if (pathStart == std::wstring::npos) {
-        baseUrl = apiUrl;
-        const auto lower = Lower(baseUrl);
-        endpoint = lower.find(L"deepseek") != std::wstring::npos
-            ? L"/chat/completions"
-            : L"/v1/chat/completions";
-        return true;
-    }
-
-    baseUrl = apiUrl.substr(0, pathStart);
-    endpoint = apiUrl.substr(pathStart);
-    if (baseUrl.empty() || endpoint.empty()) return false;
-    return true;
-}
-
-void RefreshKeyStatus(SettingsState& state) {
-    state.hadExistingKey = state.agent->HasApiKey();
-    const std::wstring text = state.hadExistingKey
-        ? L"API Key：已安全保存到 Windows Credential Manager"
-        : L"API Key：未配置";
+void SetStatus(SettingsState& state, const std::wstring& text) {
     SetWindowTextW(state.statusLabel, text.c_str());
+    UpdateWindow(state.statusLabel);
+}
+
+void RefreshKeyField(SettingsState& state) {
+    state.hadExistingKey = state.agent->HasStoredApiKey();
     SetWindowTextW(state.apiKeyEdit, state.hadExistingKey ? kSavedKeyMask : L"");
+}
+
+bool UsingStoredKey(const SettingsState& state, const std::wstring& fieldText) {
+    return state.hadExistingKey && (fieldText.empty() || fieldText == kSavedKeyMask);
+}
+
+void PopulateModels(SettingsState& state, const ModelProbeResult& probe) {
+    const auto previous = Trim(ReadText(state.modelCombo));
+    SendMessageW(state.modelCombo, CB_RESETCONTENT, 0, 0);
+
+    if (probe.models.empty()) {
+        const auto fallback = !previous.empty() ? previous : state.agent->Config().model;
+        SetWindowTextW(state.modelCombo, fallback.c_str());
+        return;
+    }
+
+    for (const auto& model : probe.models) {
+        SendMessageW(state.modelCombo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(model.c_str()));
+    }
+
+    std::wstring selected = probe.recommendedModel;
+    if (!previous.empty() && std::find(probe.models.begin(), probe.models.end(), previous) != probe.models.end()) {
+        selected = previous;
+    }
+    if (selected.empty()) selected = probe.models.front();
+
+    const auto index = SendMessageW(state.modelCombo, CB_FINDSTRINGEXACT, static_cast<WPARAM>(-1),
+                                    reinterpret_cast<LPARAM>(selected.c_str()));
+    if (index != CB_ERR) SendMessageW(state.modelCombo, CB_SETCURSEL, static_cast<WPARAM>(index), 0);
+    else SetWindowTextW(state.modelCombo, selected.c_str());
+}
+
+ModelProbeResult RunProbe(SettingsState& state) {
+    const auto apiUrl = Trim(ReadText(state.apiUrlEdit));
+    const auto keyField = Trim(ReadText(state.apiKeyEdit));
+    const bool useStored = UsingStoredKey(state, keyField);
+    const std::wstring keyOverride = useStored ? L"" : keyField;
+
+    SetStatus(state, L"正在自动识别协议并读取模型列表…");
+    EnableWindow(state.probeButton, FALSE);
+    HCURSOR oldCursor = SetCursor(LoadCursorW(nullptr, IDC_WAIT));
+
+    auto probe = state.agent->ProbeModels(apiUrl, keyOverride, useStored);
+
+    SetCursor(oldCursor);
+    EnableWindow(state.probeButton, TRUE);
+    state.probe = probe;
+    state.hasProbe = !probe.baseUrl.empty() && !probe.endpoint.empty();
+    state.probedApiUrl = apiUrl;
+    PopulateModels(state, probe);
+
+    if (probe.ok) {
+        SetStatus(state, L"✓ " + probe.protocolLabel + L" · 已发现 " +
+                         std::to_wstring(probe.models.size()) + L" 个模型 · 已自动推荐");
+    } else if (!probe.protocolLabel.empty()) {
+        SetStatus(state, L"⚠ " + probe.protocolLabel + L" · " + probe.message);
+    } else {
+        SetStatus(state, L"✕ " + probe.message);
+    }
+    return probe;
 }
 
 bool SaveSettings(SettingsState& state) {
     const auto apiUrl = Trim(ReadText(state.apiUrlEdit));
-    const auto model = Trim(ReadText(state.modelEdit));
-    const auto apiKey = Trim(ReadText(state.apiKeyEdit));
+    auto model = Trim(ReadText(state.modelCombo));
+    const auto keyField = Trim(ReadText(state.apiKeyEdit));
 
-    std::wstring baseUrl;
-    std::wstring endpoint;
-    if (!SplitApiUrl(apiUrl, baseUrl, endpoint) || model.empty()) {
+    if (apiUrl.empty()) {
+        MessageBoxW(state.window, L"请填写 API 地址。", L"TuringDesk AI 设置", MB_OK | MB_ICONWARNING);
+        return false;
+    }
+
+    if (!state.hasProbe || Trim(state.probedApiUrl) != apiUrl) {
+        RunProbe(state);
+        model = Trim(ReadText(state.modelCombo));
+    }
+
+    if (!state.hasProbe) {
+        MessageBoxW(state.window, L"无法识别这个 API 地址，请检查地址后重试。",
+                    L"TuringDesk AI 设置", MB_OK | MB_ICONERROR);
+        return false;
+    }
+    if (state.probe.statusCode == 401 || state.probe.statusCode == 403) {
+        MessageBoxW(state.window, state.probe.message.c_str(), L"TuringDesk AI 设置", MB_OK | MB_ICONERROR);
+        return false;
+    }
+    if (model.empty()) {
         MessageBoxW(state.window,
-                    L"请填写完整 API URL 和模型 ID。\n例如：https://api.example.com/v1/chat/completions",
+                    L"没有自动获取到模型。可以在“模型”框中手动输入模型 ID 后保存。",
                     L"TuringDesk AI 设置", MB_OK | MB_ICONWARNING);
         return false;
     }
 
+    const bool preserveExistingKey = UsingStoredKey(state, keyField);
+    const std::wstring keyOverride = preserveExistingKey ? L"" : keyField;
     std::wstring reply;
-    bool consumedSecret = false;
-    const std::wstring providerCommand = L"/provider " + baseUrl + L" " + model;
-    if (!state.agent->TryHandleLocal(providerCommand, reply, consumedSecret) ||
-        reply.find(L"失败") != std::wstring::npos || reply.find(L"用法") != std::wstring::npos) {
-        MessageBoxW(state.window, reply.empty() ? L"模型配置保存失败。" : reply.c_str(),
+    if (!state.agent->ApplyModelConfig(state.probe, model, keyOverride, preserveExistingKey, reply)) {
+        MessageBoxW(state.window, reply.empty() ? L"保存失败。" : reply.c_str(),
                     L"TuringDesk AI 设置", MB_OK | MB_ICONERROR);
         return false;
-    }
-
-    reply.clear();
-    consumedSecret = false;
-    if (!state.agent->TryHandleLocal(L"/endpoint " + endpoint, reply, consumedSecret) ||
-        reply.find(L"失败") != std::wstring::npos) {
-        MessageBoxW(state.window, reply.empty() ? L"API URL 保存失败。" : reply.c_str(),
-                    L"TuringDesk AI 设置", MB_OK | MB_ICONERROR);
-        return false;
-    }
-
-    const bool isSavedMask = state.hadExistingKey && apiKey == kSavedKeyMask;
-    if (!apiKey.empty() && !isSavedMask) {
-        reply.clear();
-        consumedSecret = false;
-        if (!state.agent->TryHandleLocal(L"/key " + apiKey, reply, consumedSecret) ||
-            reply.find(L"失败") != std::wstring::npos) {
-            RefreshKeyStatus(state);
-            MessageBoxW(state.window, reply.empty() ? L"API Key 保存失败。" : reply.c_str(),
-                        L"TuringDesk AI 设置", MB_OK | MB_ICONERROR);
-            return false;
-        }
     }
 
     state.saved = true;
@@ -173,7 +181,11 @@ LRESULT CALLBACK SettingsProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPa
             SendMessageW(state->apiKeyEdit, EM_SETSEL, 0, -1);
             return 0;
         }
+
         switch (LOWORD(wParam)) {
+        case kProbeButtonId:
+            if (HIWORD(wParam) == BN_CLICKED) RunProbe(*state);
+            return 0;
         case IDOK:
             if (SaveSettings(*state)) DestroyWindow(hwnd);
             return 0;
@@ -184,7 +196,9 @@ LRESULT CALLBACK SettingsProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPa
             std::wstring reply;
             bool consumedSecret = false;
             state->agent->TryHandleLocal(L"/clear-key", reply, consumedSecret);
-            RefreshKeyStatus(*state);
+            RefreshKeyField(*state);
+            state->hasProbe = false;
+            SetStatus(*state, L"API Key 已清除。重新填写 Key 后点击“检测模型”。");
             return 0;
         }
         }
@@ -211,57 +225,76 @@ bool ShowModelSettingsWindow(HINSTANCE instance, HWND owner, L3Agent& agent) {
     SettingsState state{};
     state.agent = &agent;
 
-    constexpr int width = 560;
-    constexpr int height = 310;
+    constexpr int width = 640;
+    constexpr int height = 350;
     RECT ownerRect{};
     GetWindowRect(owner, &ownerRect);
     const int x = ownerRect.left + ((ownerRect.right - ownerRect.left) - width) / 2;
-    const int y = ownerRect.top + 60;
+    const int y = ownerRect.top + 45;
 
     HWND window = CreateWindowExW(WS_EX_DLGMODALFRAME | WS_EX_TOOLWINDOW,
-                                  kSettingsClass, L"TuringDesk L3 设置",
+                                  kSettingsClass, L"TuringDesk AI 设置",
                                   WS_CAPTION | WS_SYSMENU | WS_POPUP,
                                   x, y, width, height, owner, nullptr, instance, &state);
     if (!window) return false;
 
     HFONT font = reinterpret_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
 
-    const auto apiUrl = CurrentApiUrl(agent.Config());
-    HWND labelApi = CreateWindowExW(0, L"STATIC", L"API URL", WS_CHILD | WS_VISIBLE,
-                                    24, 20, 500, 20, window, nullptr, instance, nullptr);
+    HWND labelApi = CreateWindowExW(0, L"STATIC", L"API 地址", WS_CHILD | WS_VISIBLE,
+                                    24, 18, 572, 20, window, nullptr, instance, nullptr);
+    const auto apiUrl = agent.CurrentApiUrl();
     state.apiUrlEdit = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", apiUrl.c_str(),
                                        WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
-                                       24, 42, 500, 28, window, reinterpret_cast<HMENU>(kApiUrlEditId), instance, nullptr);
+                                       24, 40, 572, 28, window, reinterpret_cast<HMENU>(kApiUrlEditId), instance, nullptr);
 
-    HWND labelModel = CreateWindowExW(0, L"STATIC", L"Model", WS_CHILD | WS_VISIBLE,
-                                      24, 80, 500, 20, window, nullptr, instance, nullptr);
-    state.modelEdit = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", agent.Config().model.c_str(),
-                                      WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
-                                      24, 102, 500, 28, window, reinterpret_cast<HMENU>(kModelEditId), instance, nullptr);
-
-    HWND labelKey = CreateWindowExW(0, L"STATIC", L"API Key（已有 Key 显示为 ********；输入新值即可覆盖）",
+    HWND labelKey = CreateWindowExW(0, L"STATIC", L"API Key（已有 Key 显示为 ********）",
                                     WS_CHILD | WS_VISIBLE,
-                                    24, 140, 500, 20, window, nullptr, instance, nullptr);
+                                    24, 80, 572, 20, window, nullptr, instance, nullptr);
     state.apiKeyEdit = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"",
                                        WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL | ES_PASSWORD,
-                                       24, 162, 500, 28, window, reinterpret_cast<HMENU>(kApiKeyEditId), instance, nullptr);
+                                       24, 102, 420, 28, window, reinterpret_cast<HMENU>(kApiKeyEditId), instance, nullptr);
+    state.probeButton = CreateWindowExW(0, L"BUTTON", L"检测模型",
+                                        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+                                        456, 101, 140, 30, window, reinterpret_cast<HMENU>(kProbeButtonId), instance, nullptr);
 
-    state.statusLabel = CreateWindowExW(0, L"STATIC", L"", WS_CHILD | WS_VISIBLE,
-                                        24, 198, 500, 20, window, reinterpret_cast<HMENU>(kStatusLabelId), instance, nullptr);
+    HWND labelModel = CreateWindowExW(0, L"STATIC", L"模型（自动获取并推荐，可手动切换）",
+                                      WS_CHILD | WS_VISIBLE,
+                                      24, 144, 572, 20, window, nullptr, instance, nullptr);
+    state.modelCombo = CreateWindowExW(WS_EX_CLIENTEDGE, L"COMBOBOX", L"",
+                                       WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL |
+                                       CBS_DROPDOWN | CBS_AUTOHSCROLL,
+                                       24, 166, 572, 180, window, reinterpret_cast<HMENU>(kModelComboId), instance, nullptr);
+    if (!agent.Config().model.empty()) {
+        SendMessageW(state.modelCombo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(agent.Config().model.c_str()));
+        SendMessageW(state.modelCombo, CB_SETCURSEL, 0, 0);
+    }
+
+    state.statusLabel = CreateWindowExW(0, L"STATIC", L"协议自动识别，无需选择。填写地址和 Key 后点击“检测模型”。",
+                                        WS_CHILD | WS_VISIBLE,
+                                        24, 208, 572, 42, window, reinterpret_cast<HMENU>(kStatusLabelId), instance, nullptr);
+
+    HWND autoHint = CreateWindowExW(0, L"STATIC", L"检测只读取模型列表，不发送聊天请求。",
+                                    WS_CHILD | WS_VISIBLE,
+                                    24, 250, 300, 20, window, nullptr, instance, nullptr);
 
     HWND saveButton = CreateWindowExW(0, L"BUTTON", L"保存", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON,
-                                      292, 234, 72, 28, window, reinterpret_cast<HMENU>(IDOK), instance, nullptr);
+                                      364, 274, 72, 28, window, reinterpret_cast<HMENU>(IDOK), instance, nullptr);
     HWND clearButton = CreateWindowExW(0, L"BUTTON", L"清除 Key", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
-                                       372, 234, 72, 28, window, reinterpret_cast<HMENU>(kClearKeyButtonId), instance, nullptr);
+                                       444, 274, 72, 28, window, reinterpret_cast<HMENU>(kClearKeyButtonId), instance, nullptr);
     HWND cancelButton = CreateWindowExW(0, L"BUTTON", L"取消", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
-                                        452, 234, 72, 28, window, reinterpret_cast<HMENU>(IDCANCEL), instance, nullptr);
+                                        524, 274, 72, 28, window, reinterpret_cast<HMENU>(IDCANCEL), instance, nullptr);
 
-    for (HWND control : {labelApi, state.apiUrlEdit, labelModel, state.modelEdit, labelKey,
-                         state.apiKeyEdit, state.statusLabel, saveButton, clearButton, cancelButton}) {
+    for (HWND control : {labelApi, state.apiUrlEdit, labelKey, state.apiKeyEdit, state.probeButton,
+                         labelModel, state.modelCombo, state.statusLabel, autoHint,
+                         saveButton, clearButton, cancelButton}) {
         SetControlFont(control, font);
     }
     SendMessageW(state.apiKeyEdit, EM_SETPASSWORDCHAR, static_cast<WPARAM>(L'*'), 0);
-    RefreshKeyStatus(state);
+    RefreshKeyField(state);
+
+    if (!agent.Config().providerId.empty() && agent.Config().providerId != L"unconfigured" && !agent.Config().model.empty()) {
+        SetStatus(state, L"已保存：" + agent.Config().providerId + L" · " + agent.Config().model + L"。可点击“检测模型”刷新。");
+    }
 
     EnableWindow(owner, FALSE);
     ShowWindow(window, SW_SHOWNORMAL);

@@ -11,10 +11,23 @@
 namespace turingdesk {
 
 struct ModelConfig {
-    std::wstring providerId{L"deepseek"};
-    std::wstring baseUrl{L"https://api.deepseek.com"};
-    std::wstring model{L"deepseek-v4-flash"};
-    std::wstring endpoint{L"/chat/completions"};
+    std::wstring providerId{L"unconfigured"};
+    std::wstring baseUrl;
+    std::wstring model;
+    std::wstring endpoint;
+};
+
+struct ModelProbeResult {
+    bool ok{};
+    DWORD statusCode{};
+    std::wstring providerId;
+    std::wstring protocolLabel;
+    std::wstring baseUrl;
+    std::wstring endpoint;
+    std::wstring apiUrl;
+    std::vector<std::wstring> models;
+    std::wstring recommendedModel;
+    std::wstring message;
 };
 
 class L3Agent {
@@ -31,6 +44,17 @@ public:
     bool Busy() const noexcept { return busy_.load(); }
     const ModelConfig& Config() const noexcept { return config_; }
     bool HasApiKey() const;
+    bool HasStoredApiKey() const;
+    std::wstring CurrentApiUrl() const;
+
+    ModelProbeResult ProbeModels(const std::wstring& apiUrl,
+                                 const std::wstring& apiKeyOverride = {},
+                                 bool useStoredApiKey = true) const;
+    bool ApplyModelConfig(const ModelProbeResult& probe,
+                          const std::wstring& model,
+                          const std::wstring& apiKeyOverride,
+                          bool preserveExistingKey,
+                          std::wstring& reply);
 
 private:
     struct ChatTurn {
