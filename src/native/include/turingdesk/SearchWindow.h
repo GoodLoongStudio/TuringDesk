@@ -53,6 +53,7 @@ private:
     bool fileSearchQueryFailed_{false};
     std::wstring currentQuery_;
     std::wstring streamingText_;
+    std::wstring lastL3Prompt_;
 
     Microsoft::WRL::ComPtr<ID2D1Factory> d2dFactory_;
     Microsoft::WRL::ComPtr<ID2D1HwndRenderTarget> renderTarget_;
