@@ -1,5 +1,6 @@
 #include "turingdesk/L3CliWindow.h"
 #include "turingdesk/CodexRuntime.h"
+#include "turingdesk/DirectToolRuntime.h"
 #include "turingdesk/ModelSettingsWindow.h"
 #include <CommCtrl.h>
 #include <algorithm>
@@ -20,7 +21,8 @@ constexpr UINT kDeltaMessage = WM_APP + 31;
 constexpr UINT kDoneMessage = WM_APP + 32;
 
 enum class ActiveRuntime {
-    Direct,
+    DirectModel,
+    DirectTools,
     Codex,
 };
 
@@ -40,6 +42,7 @@ struct CliState {
     WNDPROC oldInputProc{};
     L3Agent* agent{};
     std::unique_ptr<CodexRuntime> codex;
+    std::unique_ptr<DirectToolRuntime> directTools;
     HBRUSH backgroundBrush{};
     HFONT monoFont{};
     HFONT uiFont{};
@@ -47,8 +50,8 @@ struct CliState {
     std::wstring streaming;
     std::wstring lastPrompt;
     std::uint64_t generation{};
-    ActiveRuntime activeRuntime{ActiveRuntime::Direct};
-    ActiveRuntime lastRuntime{ActiveRuntime::Direct};
+    ActiveRuntime activeRuntime{ActiveRuntime::DirectModel};
+    ActiveRuntime lastRuntime{ActiveRuntime::DirectModel};
     bool busy{};
 };
 
@@ -96,14 +99,30 @@ void AppendCompleted(CliState& state, const std::wstring& user, const std::wstri
     RenderTranscript(state);
 }
 
+std::wstring RuntimeName(const CliState& state, ActiveRuntime runtime) {
+    switch (runtime) {
+    case ActiveRuntime::Codex: return L"Codex Agent Runtime";
+    case ActiveRuntime::DirectTools: return L"Direct Agent Tool Runtime";
+    case ActiveRuntime::DirectModel: return L"Direct Model Runtime";
+    }
+    return L"Unknown Runtime";
+}
+
+ActiveRuntime ChooseRuntime(CliState& state) {
+    if (state.codex->CanHandle(*state.agent)) return ActiveRuntime::Codex;
+    if (state.directTools->CanHandle(*state.agent)) return ActiveRuntime::DirectTools;
+    return ActiveRuntime::DirectModel;
+}
+
 std::wstring RuntimeStatusText(CliState& state) {
     const auto status = state.codex->Status(*state.agent);
-    std::wstring text = L"当前路由：";
-    text += state.codex->CanHandle(*state.agent) ? L"Codex Agent Runtime" : L"Direct Model Runtime";
+    const auto selected = ChooseRuntime(state);
+    std::wstring text = L"当前路由：" + RuntimeName(state, selected);
     text += L"\r\nCodex sidecar：";
     text += status.binaryAvailable ? L"已安装" : L"未安装";
     text += L"\r\nProvider → Codex：";
     text += status.providerCompatible ? L"Responses 可直连" : L"等待协议桥";
+    text += L"\r\nDirect Tools：" + state.directTools->StatusText(*state.agent);
     text += L"\r\n" + status.message;
     return text;
 }
@@ -112,6 +131,7 @@ void StopTurn(CliState& state) {
     if (!state.busy) return;
     gCliGeneration.fetch_add(1, std::memory_order_relaxed);
     if (state.activeRuntime == ActiveRuntime::Codex) state.codex->Stop();
+    else if (state.activeRuntime == ActiveRuntime::DirectTools) state.directTools->Stop();
     else state.agent->Stop();
     state.busy = false;
     if (state.streaming.empty()) state.streaming = L"[已停止]";
@@ -153,6 +173,7 @@ void SendPrompt(CliState& state) {
             if (lower == L"/new" || lower == L"/new-chat" || lower == L"新对话") {
                 state.lastPrompt.clear();
                 state.codex->ResetSession();
+                state.directTools->ResetSession();
             }
             AppendCompleted(state, typedPrompt, localReply);
             return;
@@ -164,10 +185,12 @@ void SendPrompt(CliState& state) {
         return;
     }
 
-    const bool canUseCodex = state.codex->CanHandle(*state.agent);
-    ActiveRuntime runtime = canUseCodex ? ActiveRuntime::Codex : ActiveRuntime::Direct;
-    if (retry && state.lastRuntime == ActiveRuntime::Direct) runtime = ActiveRuntime::Direct;
-    if (retry && state.lastRuntime == ActiveRuntime::Codex && !canUseCodex) runtime = ActiveRuntime::Direct;
+    ActiveRuntime runtime = ChooseRuntime(state);
+    if (retry) {
+        if (state.lastRuntime == ActiveRuntime::Codex && state.codex->CanHandle(*state.agent)) runtime = ActiveRuntime::Codex;
+        else if (state.lastRuntime == ActiveRuntime::DirectTools && state.directTools->CanHandle(*state.agent)) runtime = ActiveRuntime::DirectTools;
+        else if (state.lastRuntime == ActiveRuntime::DirectModel) runtime = ActiveRuntime::DirectModel;
+    }
 
     if (!retry) {
         state.lastPrompt = actualPrompt;
@@ -179,7 +202,9 @@ void SendPrompt(CliState& state) {
     state.busy = true;
     state.generation = gCliGeneration.fetch_add(1, std::memory_order_relaxed) + 1;
     EnableWindow(state.input, FALSE);
-    RenderTranscript(state, runtime == ActiveRuntime::Codex ? L"[Codex Agent] …" : L"…");
+    if (runtime == ActiveRuntime::Codex) RenderTranscript(state, L"[Codex Agent] …");
+    else if (runtime == ActiveRuntime::DirectTools) RenderTranscript(state, L"[Direct Agent] …");
+    else RenderTranscript(state, L"…");
 
     const auto generation = state.generation;
     const HWND hwnd = state.window;
@@ -192,6 +217,8 @@ void SendPrompt(CliState& state) {
 
     if (runtime == ActiveRuntime::Codex) {
         state.codex->AskAsync(*state.agent, actualPrompt, std::move(onDelta), std::move(onDone));
+    } else if (runtime == ActiveRuntime::DirectTools) {
+        state.directTools->AskAsync(*state.agent, actualPrompt, std::move(onDelta), std::move(onDone));
     } else {
         state.agent->AskAsync(actualPrompt, std::move(onDelta), std::move(onDone));
     }
@@ -230,6 +257,7 @@ LRESULT CALLBACK CliProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) 
             if (state->busy) StopTurn(*state);
             if (ShowModelSettingsWindow(state->instance, hwnd, *state->agent)) {
                 state->codex->ResetSession();
+                state->directTools->ResetSession();
                 state->transcriptPrefix += L"[配置] " + state->agent->Config().model + L" 已保存\r\n";
                 state->transcriptPrefix += L"[Runtime] " + RuntimeStatusText(*state) + L"\r\n\r\n";
                 RenderTranscript(*state);
@@ -289,6 +317,7 @@ LRESULT CALLBACK CliProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) 
     case WM_DESTROY:
         gCliGeneration.fetch_add(1, std::memory_order_relaxed);
         state->agent->Stop();
+        state->directTools->ResetSession();
         state->codex->ResetSession();
         return 0;
     }
@@ -312,6 +341,7 @@ bool ShowL3CliWindow(HINSTANCE instance, HWND owner, L3Agent& agent, const std::
     state.owner = owner;
     state.agent = &agent;
     state.codex = std::make_unique<CodexRuntime>();
+    state.directTools = std::make_unique<DirectToolRuntime>();
     state.backgroundBrush = CreateSolidBrush(RGB(24, 26, 31));
     state.monoFont = CreateFontW(-17, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
                                  OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
@@ -370,6 +400,7 @@ bool ShowL3CliWindow(HINSTANCE instance, HWND owner, L3Agent& agent, const std::
     std::wstring ignored;
     bool secret = false;
     agent.TryHandleLocal(L"/new", ignored, secret);
+    state.directTools->ResetSession();
     state.codex->ResetSession();
 
     ShowWindow(window, SW_SHOWNORMAL);
