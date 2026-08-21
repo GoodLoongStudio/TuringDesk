@@ -11,6 +11,11 @@ internal sealed record AppSearchHit(
 /// Immutable-snapshot application search provider. Discovery and refresh are
 /// performed off the UI thread; queries only read a RAM snapshot and never touch
 /// the shell, registry or filesystem.
+///
+/// Startup is intentionally lazy. Creating the top search bar must not immediately
+/// fan out into shell/registry discovery and FileSystemWatchers. The provider starts
+/// when the desktop has reached its deferred warm-up phase or when the user actually
+/// searches, whichever happens first.
 /// </summary>
 internal sealed class AppSearchProvider : IDisposable
 {
@@ -20,30 +25,41 @@ internal sealed class AppSearchProvider : IDisposable
     private readonly List<FileSystemWatcher> _watchers = new();
     private readonly Timer _refreshDebounce;
     private readonly Timer _periodicRefresh;
+    private readonly object _startGate = new();
     private AppSearchEntry[] _snapshot = [];
-    private readonly Task _initializationTask;
+    private Task? _initializationTask;
     private volatile bool _isReady;
     private volatile bool _initializationCompleted;
-    private volatile string _status = "正在建立应用索引…";
+    private volatile string _status = "应用索引等待后台预热…";
+    private int _started;
     private int _disposed;
 
     public AppSearchProvider()
     {
         _refreshDebounce = new Timer(_ => QueueRefresh(), null, Timeout.Infinite, Timeout.Infinite);
-        _periodicRefresh = new Timer(_ => QueueRefresh(), null, TimeSpan.FromMinutes(10), TimeSpan.FromMinutes(10));
-        StartWatchers();
-        _initializationTask = Task.Run(() => RefreshCoreAsync(_lifetime.Token));
+        _periodicRefresh = new Timer(_ => QueueRefresh(), null, Timeout.Infinite, Timeout.Infinite);
     }
 
     public bool IsReady => _isReady;
     public bool InitializationCompleted => _initializationCompleted;
     public int Count => Volatile.Read(ref _snapshot).Length;
     public string Status => _status;
-    public Task Initialization => _initializationTask;
+    public Task Initialization
+    {
+        get
+        {
+            EnsureStarted();
+            lock (_startGate)
+                return _initializationTask ?? Task.CompletedTask;
+        }
+    }
+
+    public void WarmUp() => EnsureStarted();
 
     public IReadOnlyList<AppSearchHit> Search(string query, int limit = 5)
     {
         if (string.IsNullOrWhiteSpace(query)) return Array.Empty<AppSearchHit>();
+        EnsureStarted();
         limit = Math.Clamp(limit, 1, 12);
 
         var snapshot = Volatile.Read(ref _snapshot);
@@ -75,6 +91,30 @@ internal sealed class AppSearchProvider : IDisposable
         }
 
         return results;
+    }
+
+    private void EnsureStarted()
+    {
+        if (Volatile.Read(ref _disposed) != 0 || Volatile.Read(ref _started) != 0) return;
+
+        lock (_startGate)
+        {
+            if (Volatile.Read(ref _disposed) != 0 || _started != 0) return;
+            _status = "正在建立应用索引…";
+
+            StartWatchers();
+            try
+            {
+                _periodicRefresh.Change(TimeSpan.FromMinutes(10), TimeSpan.FromMinutes(10));
+            }
+            catch (ObjectDisposedException)
+            {
+                return;
+            }
+
+            _initializationTask = Task.Run(() => RefreshCoreAsync(_lifetime.Token));
+            Volatile.Write(ref _started, 1);
+        }
     }
 
     private async Task RefreshCoreAsync(CancellationToken cancellationToken)
@@ -129,7 +169,7 @@ internal sealed class AppSearchProvider : IDisposable
 
     private void QueueRefresh()
     {
-        if (Volatile.Read(ref _disposed) != 0 || _lifetime.IsCancellationRequested) return;
+        if (Volatile.Read(ref _disposed) != 0 || _lifetime.IsCancellationRequested || Volatile.Read(ref _started) == 0) return;
         _ = Task.Run(async () =>
         {
             try { await RefreshCoreAsync(_lifetime.Token).ConfigureAwait(false); }
@@ -169,7 +209,7 @@ internal sealed class AppSearchProvider : IDisposable
 
     private void ScheduleRefresh()
     {
-        if (Volatile.Read(ref _disposed) != 0) return;
+        if (Volatile.Read(ref _disposed) != 0 || Volatile.Read(ref _started) == 0) return;
         try { _refreshDebounce.Change(TimeSpan.FromMilliseconds(750), Timeout.InfiniteTimeSpan); } catch { }
     }
 

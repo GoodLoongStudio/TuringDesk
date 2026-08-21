@@ -21,11 +21,13 @@ public partial class MainWindow
     private DesktopSearchBarWindow? _desktopSearchBar;
     private DispatcherTimer? _enhancementDisplayTimer;
     private HwndSource? _enhancementSource;
+    private CancellationTokenSource? _enhancementStartupCancellation;
     private string _enhancementDisplaySignature = string.Empty;
     private uint _taskbarCreatedMessage;
     private bool _wtsRegistered;
     private bool _enhancementRefreshQueued;
     private bool _enhancementForceReattachPending;
+    private bool _enhancementEngineStarted;
     private string _enhancementRefreshReason = "periodic";
 
     internal void EnableEnhancementMode()
@@ -53,23 +55,71 @@ public partial class MainWindow
 
     private void EnhancementMode_Loaded(object sender, RoutedEventArgs e)
     {
-        if (!ShellSession.IsEnhancementMode || _enhancementWallpapers.Count > 0) return;
+        if (!ShellSession.IsEnhancementMode || _desktopSearchBar is not null) return;
 
         Dispatcher.BeginInvoke(new Action(() =>
         {
-            if (!ShellSession.IsEnhancementMode || _enhancementWallpapers.Count > 0) return;
+            if (!ShellSession.IsEnhancementMode || _desktopSearchBar is not null) return;
 
+            DesktopDiagnostics.Info("startup.enhancement", "phase=interactive-shell-begin");
             InstallEnhancementSystemHooks();
-            ReconcileEnhancementMonitors(force: true, forceExplorerReattach: true, reason: "startup");
 
-            // Keep a low-frequency safety net for display drivers that fail to
-            // broadcast a topology message. Normal changes are event-driven.
-            _enhancementDisplayTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(3) };
+            // First-run setup is the one intentional startup modal. On established
+            // installations, the first user-visible surface is the lightweight search bar.
+            var onboarding = new OnboardingStateStore();
+            if (!onboarding.IsCompleted())
+            {
+                DesktopDiagnostics.Info("startup.enhancement", "phase=onboarding");
+                var setup = new FirstRunSetupWindow(_modelStore);
+                setup.ShowDialog();
+            }
+
+            _desktopSearchBar = new DesktopSearchBarWindow(this);
+            _desktopSearchBar.Show();
+            _desktopSearchBar.RefreshPosition();
+            Hide();
+
+            DesktopDiagnostics.Info("startup.enhancement", "phase=interactive-shell-ready");
+            ShellNotificationService.Publish(
+                "TuringDesk AI Desktop 已就绪",
+                "直接使用屏幕上方搜索框，或按 Alt+Space 聚焦。右侧设置按钮进入桌面库与综合设置。",
+                "shell");
+
+            _enhancementStartupCancellation?.Cancel();
+            _enhancementStartupCancellation = new CancellationTokenSource();
+            _ = StartEnhancementEngineDeferredAsync(_enhancementStartupCancellation.Token);
+        }), DispatcherPriority.ApplicationIdle);
+    }
+
+    private async Task StartEnhancementEngineDeferredAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            // Give WPF first paint, input/hotkey registration and Explorer a clean
+            // startup slice before allocating monitor renderers and GPU scene state.
+            await Task.Delay(700, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!ShellSession.IsEnhancementMode) return;
+
+            DesktopDiagnostics.Info("startup.enhancement", "phase=desktop-engine-begin");
+            _enhancementEngineStarted = true;
+            ReconcileEnhancementMonitors(force: true, forceExplorerReattach: true, reason: "deferred-startup");
+
+            // Topology changes are event-driven. This long interval is only a safety
+            // net for display drivers that fail to broadcast a topology message.
+            _enhancementDisplayTimer = new DispatcherTimer(DispatcherPriority.ContextIdle)
+            {
+                Interval = TimeSpan.FromSeconds(15)
+            };
             _enhancementDisplayTimer.Tick += (_, _) =>
                 ReconcileEnhancementMonitors(force: false, forceExplorerReattach: false, reason: "periodic");
             _enhancementDisplayTimer.Start();
 
             var attached = _enhancementWallpapers.Count(window => window.IsAttached);
+            DesktopDiagnostics.Info(
+                "startup.enhancement",
+                $"phase=desktop-engine-ready attached={attached} total={_enhancementWallpapers.Count}");
+
             if (attached > 0)
             {
                 SceneEngineTrace.Info(
@@ -83,25 +133,19 @@ public partial class MainWindow
                     "Windows 桌面不受影响；顶部 AI 搜索和语音仍可正常使用。",
                     "warning");
             }
-
-            var onboarding = new OnboardingStateStore();
-            if (!onboarding.IsCompleted())
-            {
-                var setup = new FirstRunSetupWindow(_modelStore);
-                setup.ShowDialog();
-            }
-
-            _desktopSearchBar = new DesktopSearchBarWindow(this);
-            _desktopSearchBar.Show();
-            _desktopSearchBar.RefreshPosition();
-
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+        catch (Exception error)
+        {
+            _enhancementEngineStarted = false;
+            DesktopDiagnostics.Error("startup.desktop-engine", "Deferred desktop engine startup failed; search remains available.", error);
             ShellNotificationService.Publish(
-                "TuringDesk AI Desktop 已就绪",
-                "直接使用屏幕上方搜索框，或按 Alt+Space 聚焦。右侧设置按钮进入桌面库与综合设置。",
-                "shell");
-
-            Hide();
-        }), DispatcherPriority.ApplicationIdle);
+                "桌面引擎启动失败",
+                "顶部搜索仍可使用；详细错误已写入 desktop.log。",
+                "warning");
+        }
     }
 
     private void InstallEnhancementSystemHooks()
@@ -144,8 +188,6 @@ public partial class MainWindow
                 QueueEnhancementRefresh(forceExplorerReattach: true, "WM_DEVICECHANGE");
                 break;
             case WmSettingChange:
-                // Work-area and wallpaper transitions are both delivered through
-                // WM_SETTINGCHANGE on different Windows builds.
                 QueueEnhancementRefresh(forceExplorerReattach: true, "WM_SETTINGCHANGE");
                 break;
             case WmWtsSessionChange when wParam.ToInt32() == WtsSessionUnlock:
@@ -161,6 +203,10 @@ public partial class MainWindow
     {
         _enhancementForceReattachPending |= forceExplorerReattach;
         _enhancementRefreshReason = reason;
+
+        // Do not let early WM_SETTINGCHANGE / display broadcasts defeat staged
+        // startup by constructing the wallpaper engine before its deferred phase.
+        if (!_enhancementEngineStarted) return;
         if (_enhancementRefreshQueued) return;
         _enhancementRefreshQueued = true;
 
@@ -195,8 +241,6 @@ public partial class MainWindow
 
         var byId = monitors.ToDictionary(monitor => monitor.Id, StringComparer.OrdinalIgnoreCase);
 
-        // Remove only displays that actually disappeared. Do not destroy every GPU,
-        // WebView and audio surface merely because one monitor's DPI changed.
         foreach (var wallpaper in _enhancementWallpapers.ToArray())
         {
             if (byId.ContainsKey(wallpaper.MonitorId)) continue;
@@ -232,6 +276,10 @@ public partial class MainWindow
     private void EnhancementMode_Closed(object? sender, EventArgs e)
     {
         ShellSession.IsEnhancementMode = false;
+        _enhancementEngineStarted = false;
+        _enhancementStartupCancellation?.Cancel();
+        _enhancementStartupCancellation?.Dispose();
+        _enhancementStartupCancellation = null;
         _enhancementDisplayTimer?.Stop();
         _enhancementDisplayTimer = null;
 

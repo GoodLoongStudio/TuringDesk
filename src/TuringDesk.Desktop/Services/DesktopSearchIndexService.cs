@@ -27,43 +27,57 @@ public sealed record DesktopSearchResult(
 /// L1 delegates application discovery/ranking to AppSearchProvider.
 /// L2 delegates global filename/path indexing and querying to Everything.
 /// The coordinator never crawls disks and never starts Node/Harness.
+///
+/// Heavy discovery is not part of the window-construction critical path. App
+/// discovery is warmed after first paint and desktop-engine attach (or on first
+/// query), and Everything stays fully demand-driven until a real file query is issued.
 /// </summary>
 public sealed class DesktopSearchIndexService : IDisposable
 {
     private readonly AppSearchProvider _apps = new();
     private readonly EverythingFileSearchProvider _everything = new();
+    private readonly Timer _appWarmupTimer;
     private int _disposed;
 
     public DesktopSearchIndexService()
-        : this(initializeFileSearch: true)
+        : this(initializeFileSearch: false)
     {
     }
 
     internal DesktopSearchIndexService(bool initializeFileSearch)
     {
+        _appWarmupTimer = new Timer(
+            _ => _apps.WarmUp(),
+            null,
+            TimeSpan.FromSeconds(3),
+            Timeout.InfiniteTimeSpan);
+
         if (initializeFileSearch)
             _ = _everything.InitializeAsync();
     }
 
-    public bool IsInitialIndexComplete => _apps.InitializationCompleted && _everything.InitializationCompleted;
+    public bool IsInitialIndexComplete => _apps.InitializationCompleted;
+    public bool AppSearchInitializationComplete => _apps.InitializationCompleted;
     public bool AppSearchReady => _apps.IsReady;
     public bool UsesEverything => _everything.IsReady;
     public bool FileSearchReady => _everything.IsReady;
     public string AppSearchStatus => _apps.Status;
     public string FileSearchProviderName => _everything.ProviderName;
-    public string FileSearchStatus => _everything.Status;
+    public string FileSearchStatus => _everything.IsReady
+        ? _everything.Status
+        : _everything.InitializationCompleted
+            ? _everything.Status
+            : "Everything 文件搜索按需启动";
     public int AppCount => _apps.Count;
     internal Task AppSearchInitialization => _apps.Initialization;
 
-    // Compatibility property retained for the existing status UI. TuringDesk owns
-    // no filename database; Everything owns the file index.
     public int IndexedFileCount => 0;
 
-    /// <summary>
-    /// Level 1: RAM-only application ranking over the immutable app snapshot.
-    /// Do not resolve Shell icons here: this method runs synchronously for every
-    /// keystroke and must never touch disk, registry, COM, IPC or Explorer.
-    /// </summary>
+    public void WarmUpApplications() => _apps.WarmUp();
+
+    public Task WarmUpFileSearchAsync(CancellationToken cancellationToken = default) =>
+        _everything.InitializeAsync(cancellationToken);
+
     public IReadOnlyList<DesktopSearchResult> SearchApps(string query, int limit = 5)
     {
         return _apps.Search(query, limit)
@@ -101,12 +115,6 @@ public sealed class DesktopSearchIndexService : IDisposable
         }, cancellationToken);
     }
 
-    /// <summary>
-    /// Level 2: bounded Everything query. Everything maintains the global filename
-    /// index; TuringDesk only asks for the small number of rows visible in the UI.
-    /// Single-character queries stay on the RAM-only app tier to avoid turning
-    /// every first keystroke into IPC and UI churn.
-    /// </summary>
     public async Task<IReadOnlyList<DesktopSearchResult>> SearchFilesAsync(
         string query,
         int limit = 6,
@@ -236,6 +244,7 @@ public sealed class DesktopSearchIndexService : IDisposable
     public void Dispose()
     {
         if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
+        try { _appWarmupTimer.Dispose(); } catch { }
         _apps.Dispose();
         _everything.Dispose();
     }
