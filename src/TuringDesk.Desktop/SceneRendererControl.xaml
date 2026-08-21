@@ -2,6 +2,7 @@
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:local="clr-namespace:TuringDesk.Desktop"
+             xmlns:wv2="clr-namespace:Microsoft.Web.WebView2.Wpf;assembly=Microsoft.Web.WebView2.Wpf"
              Background="#080A10"
              Loaded="Renderer_Loaded"
              Unloaded="Renderer_Unloaded">
@@ -95,8 +96,6 @@
                       MediaEnded="VideoPlayer_MediaEnded"
                       MediaFailed="VideoPlayer_MediaFailed"/>
 
-        <!-- WebView2 is intentionally created in code only when a Web scene is
-             actually loaded. Built-in/image/video scenes pay zero WebView2 startup cost. -->
-        <Grid x:Name="WebPlayerHost" Visibility="Collapsed"/>
+        <wv2:WebView2 x:Name="WebPlayer" Visibility="Collapsed"/>
     </Grid>
 </UserControl>
