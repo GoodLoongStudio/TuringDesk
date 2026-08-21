@@ -12,6 +12,23 @@ public partial class MainWindow : Window
     {
         ShellThemeService.Apply(new ShellSettingsStore().Load().Appearance);
         InitializeComponent();
+
+        UnifiedModelConfigurationService.ConfigurationChanged += OnModelConfigurationChanged;
+        Closed += (_, _) => UnifiedModelConfigurationService.ConfigurationChanged -= OnModelConfigurationChanged;
+    }
+
+    private void OnModelConfigurationChanged(ModelSettings settings)
+    {
+        if (!Dispatcher.CheckAccess())
+        {
+            _ = Dispatcher.BeginInvoke(new Action(() => OnModelConfigurationChanged(settings)));
+            return;
+        }
+
+        DesktopDiagnostics.Info(
+            "model.configuration-changed",
+            $"provider={settings.ProviderId} model={settings.Model}");
+        _desktopSearchBar?.ReloadModelChoicesFromConfiguration();
     }
 
     private void TitleBar_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
