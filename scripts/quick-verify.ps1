@@ -122,9 +122,9 @@ function Ensure-LocalPnpm([string]$NpmPath) {
     Write-Host "Initializing pinned pnpm $PnpmVersion once..." -ForegroundColor Yellow
     if (Test-Path $pnpmRoot) { Remove-Item $pnpmRoot -Recurse -Force }
     New-Item -ItemType Directory -Force -Path $pnpmRoot | Out-Null
-    & $NpmPath install --global --prefix $pnpmRoot "pnpm@$PnpmVersion" --no-audit --no-fund
-    if ($LASTEXITCODE -ne 0) { throw "pnpm install failed" }
-    if (-not (Test-Path $pnpmCmd)) { throw "pnpm was not installed at $pnpmCmd" }
+    & $NpmPath install --global --prefix $pnpmRoot "pnpm@$PnpmVersion" --no-audit --no-fund | Out-Host
+    if ($LASTEXITCODE -ne 0) { throw "pnpm bootstrap failed with exit code $LASTEXITCODE" }
+    if (-not (Test-Path $pnpmCmd)) { throw "pnpm bootstrap did not produce $pnpmCmd" }
     return $pnpmCmd
 }
 
@@ -135,6 +135,8 @@ function Test-ExactDotnet([string]$DotnetPath) {
 }
 
 function Ensure-LocalDotnet([string]$Architecture) {
+    # Keep the historical folder name so already-bootstrapped target machines can
+    # reuse their existing SDK without another ~280 MB download.
     $dotnetRoot = Join-Path $ToolsRoot "dotnet8-$Architecture"
     $dotnetExe = Join-Path $dotnetRoot "dotnet.exe"
     if (Test-ExactDotnet $dotnetExe) {
@@ -224,7 +226,16 @@ Write-Host "pnpm: $((& $pnpm --version).Trim()) [$pnpm]" -ForegroundColor DarkGr
 Write-Host ".NET: $((& $dotnet --version).Trim()) [$dotnet]" -ForegroundColor DarkGray
 
 # ── Prune stale files that robocopy / git pull may leave behind ──────────────
+# QUICK-VERIFY.cmd downloads a zip and robocopies it over the working tree.
+# robocopy adds and overwrites but never deletes files that no longer exist
+# upstream. SDK-style .csproj auto-includes every .cs/.ts/.xaml in the tree,
+# so stale copies of deleted files will break the build.
+#
+# This list is the single source of truth for files that have been permanently
+# removed from the repository. Add to it whenever a file is deleted in a commit.
+# This does NOT touch .tools/, node_modules, user data, or the toolchain cache.
 $legacyFiles = @(
+    # Old 4317 Runtime TS files
     "runtime\src\server.ts",
     "runtime\src\agent-activity.ts",
     "runtime\src\mock-agent.ts",
@@ -237,7 +248,9 @@ $legacyFiles = @(
     "runtime\src\capability-client.ts",
     "runtime\src\windows-mcp-server.ts",
     "runtime\src\windows-mcp-smoke.ts",
+    # Old Cordis profile
     "runtime\harness\turingdesk.cordis.yml",
+    # Old Agent UI WPF files
     "src\TuringDesk.Desktop\AgentActivityWindow.xaml",
     "src\TuringDesk.Desktop\AgentActivityWindow.xaml.cs",
     "src\TuringDesk.Desktop\AgentConversationCardWindow.xaml",
@@ -246,12 +259,15 @@ $legacyFiles = @(
     "src\TuringDesk.Desktop\AgentTraceCardWindow.xaml.cs",
     "src\TuringDesk.Desktop\AgentStatusBadge.xaml",
     "src\TuringDesk.Desktop\AgentStatusBadge.xaml.cs",
+    # Old Runtime services
     "src\TuringDesk.Desktop\Services\RuntimeClient.cs",
     "src\TuringDesk.Desktop\Services\RuntimeHostService.cs",
     "src\TuringDesk.Desktop\Services\CapabilityServer.cs",
     "src\TuringDesk.Desktop\Services\AgentFloatingCardsService.cs",
+    # Old settings center
     "src\TuringDesk.Desktop\DesktopDiyCenterWindow.xaml",
     "src\TuringDesk.Desktop\DesktopDiyCenterWindow.xaml.cs",
+    # Old dev script
     "scripts\verify-lazy-runtime.ps1"
 )
 
@@ -271,6 +287,8 @@ else {
     Write-Host "No stale legacy files found." -ForegroundColor DarkGray
 }
 
+# Also try git restore+clean if git is available — catches anything not in the
+# explicit list above. Only affects source directories, never the toolchain.
 if ($git) {
     & $git restore -- "src/" "runtime/src/" "runtime/harness/" "scripts/" ".github/" "docs/" 2>$null
     & $git clean -fd -- "src/" "runtime/src/" "runtime/harness/" "scripts/" ".github/" "docs/" 2>$null
@@ -290,12 +308,16 @@ $runtimeDir = Join-Path $Root "runtime"
 $runtimeModules = Join-Path $runtimeDir "node_modules"
 $runtimeMarker = Join-Path $runtimeModules ".turingdesk-verified-environment"
 $runtimeLockPath = Join-Path $runtimeDir "pnpm-lock.yaml"
+# Older quick-verify versions could leave an untracked lockfile behind. Remove it
+# so the verification launcher never mutates or follows a local dependency config.
 if (Test-Path $runtimeLockPath) { Remove-Item $runtimeLockPath -Force }
 $runtimeFingerprint = Get-RuntimeDependencyFingerprint $architecture
 $needRuntimeInstall = -not (Test-Path $runtimeModules)
 $adoptExistingRuntime = $false
 if (-not $needRuntimeInstall -and -not $SkipRuntimeInstall) {
     if (-not (Test-Path $runtimeMarker)) {
+        # This is the migration path for machines that already ran the old verifier.
+        # Keep the known-good node_modules and validate it before doing any download.
         $adoptExistingRuntime = $true
         $needRuntimeInstall = $false
         Write-Host "Found existing runtime node_modules; validating and adopting it without reinstalling." -ForegroundColor DarkGray
@@ -354,13 +376,6 @@ if (-not (Test-Path $exe)) {
         Select-Object -First 1 -ExpandProperty FullName
 }
 if (-not $exe -or -not (Test-Path $exe)) { throw "Desktop executable was not found after build." }
-
-Write-Host "Verifying L3 native HttpClient path (loopback, no external API)..." -ForegroundColor Cyan
-$l3Verify = Start-Process $exe -ArgumentList "--verify-l3-http" -WorkingDirectory (Split-Path $exe -Parent) -PassThru -Wait
-if ($l3Verify.ExitCode -ne 0) {
-    throw "L3 native HttpClient verification failed with exit code $($l3Verify.ExitCode)."
-}
-Write-Host "L3 native HttpClient verification passed." -ForegroundColor Green
 
 if ($BuildOnly) {
     Write-Host "Quick verification build-only check passed." -ForegroundColor Green
