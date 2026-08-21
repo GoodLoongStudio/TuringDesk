@@ -45,13 +45,16 @@ public partial class DesktopSearchBarWindow
     {
         if (!_busy || e.Key != Key.Escape) return;
 
-        // SearchBox is disabled while a request is running, so handling Escape on
-        // the Window is required for cancellation to remain reachable during L3.
+        // Keep the request serialized until the provider has actually unwound its
+        // cancellation. Releasing _busy here would allow a second Enter/request to
+        // start while the first HttpClient stream is still completing callbacks.
         e.Handled = true;
         _activeRequest?.Cancel();
-        RestoreIdleState(clearText: false);
-        SearchBox.Focus();
-        Keyboard.Focus(SearchBox);
+        ReplyTitle.Text = "CLI · 正在取消";
+        ReplyText.Text = "正在停止当前回答…";
+        ReplyDot.Fill = new SolidColorBrush(Color.FromRgb(148, 163, 184));
+        SetL3ActionState(retry: false, deep: false);
+        _l3StreamRenderTimer?.Stop();
     }
 
     private void OnL3PartialResponseUpdated(string partial)
@@ -68,7 +71,7 @@ public partial class DesktopSearchBarWindow
         _ = Dispatcher.BeginInvoke(new Action(() =>
         {
             Interlocked.Exchange(ref _l3StreamStartScheduled, 0);
-            if (!_busy || !IsVisible) return;
+            if (!_busy || !IsVisible || _activeRequest?.IsCancellationRequested == true) return;
 
             RenderPendingL3Partial();
             _l3StreamRenderTimer?.Start();
@@ -77,7 +80,7 @@ public partial class DesktopSearchBarWindow
 
     private void L3StreamRenderTimer_Tick(object? sender, EventArgs e)
     {
-        if (!_busy || !IsVisible)
+        if (!_busy || !IsVisible || _activeRequest?.IsCancellationRequested == true)
         {
             _l3StreamRenderTimer?.Stop();
             return;
@@ -99,7 +102,7 @@ public partial class DesktopSearchBarWindow
         ReplyTitle.Text = "CLI · 回答中";
         ReplyText.Text = partial;
         ReplyDot.Fill = new SolidColorBrush(Color.FromRgb(127, 143, 255));
-        DeepProcessButton.Visibility = Visibility.Collapsed;
+        SetL3ActionState(retry: false, deep: false);
         CollapseSearchResults();
         ExpandReply(CalculateStreamingReplyHeight(partial));
     }
