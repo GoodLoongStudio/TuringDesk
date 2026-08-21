@@ -191,21 +191,37 @@
                                         <ColumnDefinition Width="50"/>
                                         <ColumnDefinition Width="*"/>
                                     </Grid.ColumnDefinitions>
-                                    <Border Grid.Column="0"
-                                            Width="40" Height="24"
-                                            HorizontalAlignment="Left"
-                                            VerticalAlignment="Center"
-                                            CornerRadius="7"
-                                            Background="#E8F0FF"
-                                            BorderBrush="#C8D8FF"
-                                            BorderThickness="1">
-                                        <TextBlock Text="{Binding KindLabel}"
-                                                   HorizontalAlignment="Center"
-                                                   VerticalAlignment="Center"
-                                                   Foreground="#1D4ED8"
-                                                   FontSize="10.5"
-                                                   FontWeight="SemiBold"/>
-                                    </Border>
+                                    <Grid Grid.Column="0" Width="40" Height="32" HorizontalAlignment="Left" VerticalAlignment="Center">
+                                        <Image Source="{Binding Icon}"
+                                               Width="28" Height="28"
+                                               HorizontalAlignment="Left"
+                                               VerticalAlignment="Center"
+                                               Stretch="Uniform"/>
+                                        <Border Width="40" Height="24"
+                                                HorizontalAlignment="Left"
+                                                VerticalAlignment="Center"
+                                                CornerRadius="7"
+                                                Background="#E8F0FF"
+                                                BorderBrush="#C8D8FF"
+                                                BorderThickness="1">
+                                            <Border.Style>
+                                                <Style TargetType="Border">
+                                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding Icon}" Value="{x:Null}">
+                                                            <Setter Property="Visibility" Value="Visible"/>
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </Border.Style>
+                                            <TextBlock Text="{Binding KindLabel}"
+                                                       HorizontalAlignment="Center"
+                                                       VerticalAlignment="Center"
+                                                       Foreground="#1D4ED8"
+                                                       FontSize="10.5"
+                                                       FontWeight="SemiBold"/>
+                                        </Border>
+                                    </Grid>
                                     <StackPanel Grid.Column="1">
                                         <TextBlock Text="{Binding Name}"
                                                    Foreground="#111827"
