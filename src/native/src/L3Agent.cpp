@@ -980,6 +980,10 @@ void L3Agent::RunRequest(std::wstring prompt, DeltaCallback onDelta, DoneCallbac
         onDone(detail);
         return;
     }
+    if (!done) {
+        onDone(L"模型流式响应未收到完整结束标记，本次可能已截断；内容未写入 L3 会话，可直接重试。");
+        return;
+    }
 
     if (!emitted) {
         const auto content = anthropic
