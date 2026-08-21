@@ -11,15 +11,9 @@ public static class HarnessWebUiService
     private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromMilliseconds(700) };
     private static readonly object Gate = new();
     private static readonly object LogGate = new();
-    private static readonly TimeSpan IdleTimeout = TimeSpan.FromMinutes(2);
-    private static readonly TimeSpan IdlePollInterval = TimeSpan.FromSeconds(15);
 
     private static Process? _process;
     private static Task<Uri>? _startupTask;
-    private static Timer? _idleTimer;
-    private static DateTime _lastUseUtc = DateTime.UtcNow;
-    private static int _activeConsoles;
-    private static int _idleCheckRunning;
     private static bool _shutdownHookRegistered;
     private static string _stderrTail = string.Empty;
 
@@ -34,7 +28,6 @@ public static class HarnessWebUiService
 
         lock (Gate)
         {
-            TouchNoLock();
             if (_process is { HasExited: false } && _startupTask is not null)
                 return _startupTask;
 
@@ -45,7 +38,6 @@ public static class HarnessWebUiService
                 RegisterShutdownHook();
             }
 
-            EnsureIdleTimerNoLock();
             _startupTask = WaitUntilReadyAsync(CancellationToken.None);
             return _startupTask;
         }
@@ -53,13 +45,11 @@ public static class HarnessWebUiService
 
     public static async Task<Uri> EnsureRunningAsync(CancellationToken cancellationToken = default)
     {
-        Touch();
         if (await IsReadyAsync(cancellationToken).ConfigureAwait(false)) return WebUri;
 
         Task<Uri> startup;
         lock (Gate)
         {
-            TouchNoLock();
             if (_process is { HasExited: false } && _startupTask is not null)
                 startup = _startupTask;
             else
@@ -71,21 +61,19 @@ public static class HarnessWebUiService
             : await startup.ConfigureAwait(false);
     }
 
+    // Console visibility is intentionally not tied to process lifetime. Official
+    // Harness tasks can keep running after every TuringDesk workbench window is
+    // closed, and the current Harness WebUI does not expose a stable task-idle API
+    // that TuringDesk can safely use to decide when background work is finished.
+    // Once started on demand, the owned process therefore stays alive until the
+    // TuringDesk process exits. The process-exit hook below still kills the entire
+    // owned process tree, so this does not leave orphaned dsh/node processes.
     public static void NotifyConsoleOpened()
     {
-        Interlocked.Increment(ref _activeConsoles);
-        lock (Gate)
-        {
-            TouchNoLock();
-            EnsureIdleTimerNoLock();
-        }
     }
 
     public static void NotifyConsoleClosed()
     {
-        var remaining = Interlocked.Decrement(ref _activeConsoles);
-        if (remaining < 0) Interlocked.Exchange(ref _activeConsoles, 0);
-        Touch();
     }
 
     public static async Task ApplyModelSettingsAsync(
@@ -95,10 +83,7 @@ public static class HarnessWebUiService
     {
         HarnessModelBridgeService.Synchronize(settings, apiKey);
         if (await IsReadyAsync(cancellationToken).ConfigureAwait(false))
-        {
-            Touch();
             await Task.Delay(180, cancellationToken).ConfigureAwait(false);
-        }
     }
 
     private static Task<Uri> StartEarlyOutsideGate()
@@ -108,7 +93,6 @@ public static class HarnessWebUiService
         var apiKey = modelStore.LoadApiKey();
         HarnessModelBridgeService.Synchronize(model, apiKey);
 
-        TouchNoLock();
         if (_process is null || _process.HasExited)
         {
             _process?.Dispose();
@@ -116,7 +100,6 @@ public static class HarnessWebUiService
             RegisterShutdownHook();
         }
 
-        EnsureIdleTimerNoLock();
         _startupTask = WaitUntilReadyAsync(CancellationToken.None);
         return _startupTask;
     }
@@ -131,10 +114,7 @@ public static class HarnessWebUiService
             try
             {
                 if (await IsReadyAsync(cancellationToken).ConfigureAwait(false))
-                {
-                    Touch();
                     return WebUri;
-                }
             }
             catch (Exception error)
             {
@@ -216,31 +196,6 @@ public static class HarnessWebUiService
             return string.IsNullOrWhiteSpace(_stderrTail) ? string.Empty : $" Harness stderr: {_stderrTail}";
     }
 
-    private static void Touch() { lock (Gate) TouchNoLock(); }
-    private static void TouchNoLock() => _lastUseUtc = DateTime.UtcNow;
-
-    private static void EnsureIdleTimerNoLock()
-    {
-        _idleTimer ??= new Timer(static _ => _ = CheckIdleAsync(), null, IdlePollInterval, IdlePollInterval);
-    }
-
-    private static Task CheckIdleAsync()
-    {
-        if (Interlocked.Exchange(ref _idleCheckRunning, 1) != 0) return Task.CompletedTask;
-        try
-        {
-            lock (Gate)
-            {
-                if (_process is null || _process.HasExited) return Task.CompletedTask;
-                if (Volatile.Read(ref _activeConsoles) > 0) return Task.CompletedTask;
-                if (DateTime.UtcNow - _lastUseUtc < IdleTimeout) return Task.CompletedTask;
-                StopOwnedProcessNoLock();
-            }
-        }
-        finally { Volatile.Write(ref _idleCheckRunning, 0); }
-        return Task.CompletedTask;
-    }
-
     private static void RegisterShutdownHook()
     {
         if (_shutdownHookRegistered) return;
@@ -252,8 +207,6 @@ public static class HarnessWebUiService
 
     private static void StopOwnedProcessNoLock()
     {
-        _idleTimer?.Dispose();
-        _idleTimer = null;
         if (_process is null) return;
         try { if (!_process.HasExited) _process.Kill(entireProcessTree: true); }
         catch { }
