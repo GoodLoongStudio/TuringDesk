@@ -7,19 +7,23 @@ namespace turingdesk {
 namespace {
 
 constexpr wchar_t kSettingsClass[] = L"TuringDesk.Native.ModelSettingsWindow";
+constexpr wchar_t kSavedKeyMask[] = L"********";
 constexpr int kBaseUrlEditId = 2101;
 constexpr int kModelEditId = 2102;
 constexpr int kApiKeyEditId = 2103;
 constexpr int kClearKeyButtonId = 2104;
 constexpr int kStatusLabelId = 2105;
+constexpr int kEndpointEditId = 2106;
 
 struct SettingsState {
     L3Agent* agent{};
     HWND window{};
     HWND baseUrlEdit{};
     HWND modelEdit{};
+    HWND endpointEdit{};
     HWND apiKeyEdit{};
     HWND statusLabel{};
+    bool hadExistingKey{};
     bool saved{};
 };
 
@@ -43,20 +47,29 @@ void SetControlFont(HWND control, HFONT font) {
 }
 
 void RefreshKeyStatus(SettingsState& state) {
-    const std::wstring text = state.agent->HasApiKey()
+    state.hadExistingKey = state.agent->HasApiKey();
+    const std::wstring text = state.hadExistingKey
         ? L"API Key：已安全保存到 Windows Credential Manager"
         : L"API Key：未配置";
     SetWindowTextW(state.statusLabel, text.c_str());
+    SetWindowTextW(state.apiKeyEdit, state.hadExistingKey ? kSavedKeyMask : L"");
 }
 
 bool SaveSettings(SettingsState& state) {
     const auto baseUrl = Trim(ReadText(state.baseUrlEdit));
     const auto model = Trim(ReadText(state.modelEdit));
+    const auto endpoint = Trim(ReadText(state.endpointEdit));
     const auto apiKey = Trim(ReadText(state.apiKeyEdit));
 
     if ((!baseUrl.starts_with(L"https://") && !baseUrl.starts_with(L"http://")) || model.empty()) {
         MessageBoxW(state.window,
                     L"请填写有效的 Base URL（http:// 或 https://）和模型 ID。",
+                    L"TuringDesk AI 设置", MB_OK | MB_ICONWARNING);
+        return false;
+    }
+
+    if (!endpoint.empty() && endpoint.find_first_of(L" \t\r\n") != std::wstring::npos) {
+        MessageBoxW(state.window, L"Endpoint 不能包含空格。示例：/v1/chat/completions",
                     L"TuringDesk AI 设置", MB_OK | MB_ICONWARNING);
         return false;
     }
@@ -71,17 +84,27 @@ bool SaveSettings(SettingsState& state) {
         return false;
     }
 
-    if (!apiKey.empty()) {
+    reply.clear();
+    consumedSecret = false;
+    const std::wstring endpointCommand = endpoint.empty() ? L"/endpoint -" : L"/endpoint " + endpoint;
+    if (!state.agent->TryHandleLocal(endpointCommand, reply, consumedSecret) ||
+        reply.find(L"失败") != std::wstring::npos) {
+        MessageBoxW(state.window, reply.empty() ? L"Endpoint 保存失败。" : reply.c_str(),
+                    L"TuringDesk AI 设置", MB_OK | MB_ICONERROR);
+        return false;
+    }
+
+    const bool isSavedMask = state.hadExistingKey && apiKey == kSavedKeyMask;
+    if (!apiKey.empty() && !isSavedMask) {
         reply.clear();
         consumedSecret = false;
         if (!state.agent->TryHandleLocal(L"/key " + apiKey, reply, consumedSecret) ||
             reply.find(L"失败") != std::wstring::npos) {
-            SetWindowTextW(state.apiKeyEdit, L"");
+            RefreshKeyStatus(state);
             MessageBoxW(state.window, reply.empty() ? L"API Key 保存失败。" : reply.c_str(),
                         L"TuringDesk AI 设置", MB_OK | MB_ICONERROR);
             return false;
         }
-        SetWindowTextW(state.apiKeyEdit, L"");
     }
 
     state.saved = true;
@@ -101,6 +124,11 @@ LRESULT CALLBACK SettingsProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPa
 
     switch (message) {
     case WM_COMMAND:
+        if (LOWORD(wParam) == kApiKeyEditId && HIWORD(wParam) == EN_SETFOCUS && state->hadExistingKey &&
+            ReadText(state->apiKeyEdit) == kSavedKeyMask) {
+            SendMessageW(state->apiKeyEdit, EM_SETSEL, 0, -1);
+            return 0;
+        }
         switch (LOWORD(wParam)) {
         case IDOK:
             if (SaveSettings(*state)) DestroyWindow(hwnd);
@@ -112,7 +140,6 @@ LRESULT CALLBACK SettingsProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPa
             std::wstring reply;
             bool consumedSecret = false;
             state->agent->TryHandleLocal(L"/clear-key", reply, consumedSecret);
-            SetWindowTextW(state->apiKeyEdit, L"");
             RefreshKeyStatus(*state);
             return 0;
         }
@@ -141,11 +168,11 @@ bool ShowModelSettingsWindow(HINSTANCE instance, HWND owner, L3Agent& agent) {
     state.agent = &agent;
 
     constexpr int width = 560;
-    constexpr int height = 300;
+    constexpr int height = 370;
     RECT ownerRect{};
     GetWindowRect(owner, &ownerRect);
     const int x = ownerRect.left + ((ownerRect.right - ownerRect.left) - width) / 2;
-    const int y = ownerRect.top + 70;
+    const int y = ownerRect.top + 45;
 
     HWND window = CreateWindowExW(WS_EX_DLGMODALFRAME | WS_EX_TOOLWINDOW,
                                   kSettingsClass, L"TuringDesk AI 设置",
@@ -156,38 +183,47 @@ bool ShowModelSettingsWindow(HINSTANCE instance, HWND owner, L3Agent& agent) {
     HFONT font = reinterpret_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
 
     HWND labelBase = CreateWindowExW(0, L"STATIC", L"Base URL", WS_CHILD | WS_VISIBLE,
-                                     24, 24, 500, 20, window, nullptr, instance, nullptr);
+                                     24, 20, 500, 20, window, nullptr, instance, nullptr);
     state.baseUrlEdit = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", agent.Config().baseUrl.c_str(),
                                         WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
-                                        24, 46, 500, 28, window, reinterpret_cast<HMENU>(kBaseUrlEditId), instance, nullptr);
+                                        24, 42, 500, 28, window, reinterpret_cast<HMENU>(kBaseUrlEditId), instance, nullptr);
 
     HWND labelModel = CreateWindowExW(0, L"STATIC", L"Model", WS_CHILD | WS_VISIBLE,
-                                      24, 88, 500, 20, window, nullptr, instance, nullptr);
+                                      24, 80, 500, 20, window, nullptr, instance, nullptr);
     state.modelEdit = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", agent.Config().model.c_str(),
                                       WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
-                                      24, 110, 500, 28, window, reinterpret_cast<HMENU>(kModelEditId), instance, nullptr);
+                                      24, 102, 500, 28, window, reinterpret_cast<HMENU>(kModelEditId), instance, nullptr);
 
-    HWND labelKey = CreateWindowExW(0, L"STATIC", L"API Key（留空表示保留现有 Key）", WS_CHILD | WS_VISIBLE,
-                                    24, 152, 500, 20, window, nullptr, instance, nullptr);
+    HWND labelEndpoint = CreateWindowExW(0, L"STATIC", L"Endpoint（例如 /v1/chat/completions；留空则直接使用 Base URL 的路径）",
+                                         WS_CHILD | WS_VISIBLE,
+                                         24, 140, 500, 20, window, nullptr, instance, nullptr);
+    state.endpointEdit = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", agent.Config().endpoint.c_str(),
+                                         WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
+                                         24, 162, 500, 28, window, reinterpret_cast<HMENU>(kEndpointEditId), instance, nullptr);
+
+    HWND labelKey = CreateWindowExW(0, L"STATIC", L"API Key（已有 Key 显示为 ********；输入新值即可覆盖）",
+                                    WS_CHILD | WS_VISIBLE,
+                                    24, 200, 500, 20, window, nullptr, instance, nullptr);
     state.apiKeyEdit = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"",
                                        WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL | ES_PASSWORD,
-                                       24, 174, 500, 28, window, reinterpret_cast<HMENU>(kApiKeyEditId), instance, nullptr);
+                                       24, 222, 500, 28, window, reinterpret_cast<HMENU>(kApiKeyEditId), instance, nullptr);
 
     state.statusLabel = CreateWindowExW(0, L"STATIC", L"", WS_CHILD | WS_VISIBLE,
-                                        24, 208, 500, 20, window, reinterpret_cast<HMENU>(kStatusLabelId), instance, nullptr);
+                                        24, 258, 500, 20, window, reinterpret_cast<HMENU>(kStatusLabelId), instance, nullptr);
 
     HWND saveButton = CreateWindowExW(0, L"BUTTON", L"保存", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON,
-                                      292, 236, 72, 28, window, reinterpret_cast<HMENU>(IDOK), instance, nullptr);
+                                      292, 294, 72, 28, window, reinterpret_cast<HMENU>(IDOK), instance, nullptr);
     HWND clearButton = CreateWindowExW(0, L"BUTTON", L"清除 Key", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
-                                       372, 236, 72, 28, window, reinterpret_cast<HMENU>(kClearKeyButtonId), instance, nullptr);
+                                       372, 294, 72, 28, window, reinterpret_cast<HMENU>(kClearKeyButtonId), instance, nullptr);
     HWND cancelButton = CreateWindowExW(0, L"BUTTON", L"取消", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
-                                        452, 236, 72, 28, window, reinterpret_cast<HMENU>(IDCANCEL), instance, nullptr);
+                                        452, 294, 72, 28, window, reinterpret_cast<HMENU>(IDCANCEL), instance, nullptr);
 
-    for (HWND control : {labelBase, state.baseUrlEdit, labelModel, state.modelEdit, labelKey,
-                         state.apiKeyEdit, state.statusLabel, saveButton, clearButton, cancelButton}) {
+    for (HWND control : {labelBase, state.baseUrlEdit, labelModel, state.modelEdit, labelEndpoint,
+                         state.endpointEdit, labelKey, state.apiKeyEdit, state.statusLabel,
+                         saveButton, clearButton, cancelButton}) {
         SetControlFont(control, font);
     }
-    SendMessageW(state.apiKeyEdit, EM_SETPASSWORDCHAR, static_cast<WPARAM>(L'●'), 0);
+    SendMessageW(state.apiKeyEdit, EM_SETPASSWORDCHAR, static_cast<WPARAM>(L'*'), 0);
     RefreshKeyStatus(state);
 
     EnableWindow(owner, FALSE);
