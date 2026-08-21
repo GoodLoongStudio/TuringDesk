@@ -20,7 +20,11 @@ public partial class SceneRendererControl
         HookNativeProperties();
     }
 
-    private void NativeProperties_Loaded(object sender, RoutedEventArgs e) => HookNativeProperties();
+    private void NativeProperties_Loaded(object sender, RoutedEventArgs e)
+    {
+        HookNativeProperties();
+        Dispatcher.BeginInvoke(new Action(ApplyNativeSceneProperties));
+    }
 
     private void NativeProperties_Unloaded(object sender, RoutedEventArgs e) => UnhookNativeProperties();
 
