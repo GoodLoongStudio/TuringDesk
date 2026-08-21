@@ -2,6 +2,8 @@
 #include <dwmapi.h>
 #include <shellapi.h>
 #include <algorithm>
+#include <atomic>
+#include <cstdint>
 #include <memory>
 
 namespace turingdesk {
@@ -12,6 +14,22 @@ constexpr UINT kL3DeltaMessage = WM_APP + 10;
 constexpr UINT kL3DoneMessage = WM_APP + 11;
 constexpr int kWindowWidth = 760;
 constexpr int kWindowHeight = 420;
+
+struct L3UiMessage {
+    std::uint64_t generation{};
+    std::wstring text;
+};
+
+std::atomic_uint64_t gL3Generation{0};
+
+void PostL3Message(HWND hwnd, UINT message, std::uint64_t generation, std::wstring text) {
+    auto payload = std::make_unique<L3UiMessage>();
+    payload->generation = generation;
+    payload->text = std::move(text);
+    if (PostMessageW(hwnd, message, 0, reinterpret_cast<LPARAM>(payload.get()))) {
+        payload.release();
+    }
+}
 
 const wchar_t* KindLabel(ResultKind kind) {
     switch (kind) {
@@ -29,6 +47,7 @@ const wchar_t* KindLabel(ResultKind kind) {
 SearchWindow::SearchWindow(HINSTANCE instance) : instance_(instance) {}
 
 SearchWindow::~SearchWindow() {
+    gL3Generation.fetch_add(1, std::memory_order_relaxed);
     l3_.Stop();
     if (hwnd_) UnregisterHotKey(hwnd_, kHotkeyId);
 }
@@ -143,8 +162,10 @@ LRESULT CALLBACK SearchWindow::EditProc(HWND hwnd, UINT message, WPARAM wParam, 
         }
         if (wParam == VK_ESCAPE) {
             if (self->l3_.Busy()) {
+                gL3Generation.fetch_add(1, std::memory_order_relaxed);
                 self->l3_.Stop();
-                self->SetStatus(L"正在停止 L3…", L"再次按 Esc 可隐藏搜索框");
+                self->streamingText_.clear();
+                self->SetStatus(L"已取消 L3 请求", L"再次按 Esc 可隐藏搜索框");
             } else {
                 ShowWindow(self->hwnd_, SW_HIDE);
             }
@@ -172,8 +193,9 @@ LRESULT SearchWindow::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) 
         break;
     }
     case kL3DeltaMessage: {
-        std::unique_ptr<std::wstring> delta(reinterpret_cast<std::wstring*>(lParam));
-        if (delta) streamingText_ += *delta;
+        std::unique_ptr<L3UiMessage> delta(reinterpret_cast<L3UiMessage*>(lParam));
+        if (!delta || delta->generation != gL3Generation.load(std::memory_order_relaxed)) return 0;
+        streamingText_ += delta->text;
         results_.clear();
         results_.push_back({ResultKind::Answer, streamingText_.empty() ? L"…" : streamingText_, L"L3 · WinHTTP streaming", L"", 0});
         selected_ = -1;
@@ -181,10 +203,11 @@ LRESULT SearchWindow::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) 
         return 0;
     }
     case kL3DoneMessage: {
-        std::unique_ptr<std::wstring> done(reinterpret_cast<std::wstring*>(lParam));
-        if (done && !done->empty()) {
-            if (streamingText_.empty()) streamingText_ = *done;
-            else streamingText_ += L"\n" + *done;
+        std::unique_ptr<L3UiMessage> done(reinterpret_cast<L3UiMessage*>(lParam));
+        if (!done || done->generation != gL3Generation.load(std::memory_order_relaxed)) return 0;
+        if (!done->text.empty()) {
+            if (streamingText_.empty()) streamingText_ = done->text;
+            else streamingText_ += L"\n" + done->text;
         }
         if (!streamingText_.empty()) {
             results_.clear();
@@ -207,6 +230,8 @@ LRESULT SearchWindow::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) 
     case WM_ERASEBKGND:
         return 1;
     case WM_DESTROY:
+        gL3Generation.fetch_add(1, std::memory_order_relaxed);
+        l3_.Stop();
         UnregisterHotKey(hwnd_, kHotkeyId);
         PostQuitMessage(0);
         return 0;
@@ -219,6 +244,12 @@ void SearchWindow::OnQueryChanged() {
     std::wstring query(static_cast<std::size_t>(len) + 1, L'\0');
     if (len > 0) GetWindowTextW(edit_, query.data(), len + 1);
     query.resize(static_cast<std::size_t>(len));
+
+    if (l3_.Busy()) {
+        gL3Generation.fetch_add(1, std::memory_order_relaxed);
+        l3_.Stop();
+    }
+
     currentQuery_ = query;
     streamingText_.clear();
     appResults_.clear();
@@ -269,6 +300,9 @@ void SearchWindow::ExecuteSelected(bool forceL3) {
 }
 
 void SearchWindow::StartL3(const std::wstring& prompt) {
+    const auto generation = gL3Generation.fetch_add(1, std::memory_order_relaxed) + 1;
+    if (l3_.Busy()) l3_.Stop();
+
     std::wstring localReply;
     bool consumedSecret = false;
     if (l3_.TryHandleLocal(prompt, localReply, consumedSecret)) {
@@ -280,11 +314,11 @@ void SearchWindow::StartL3(const std::wstring& prompt) {
     streamingText_.clear();
     SetStatus(L"正在连接模型…", l3_.Config().model + L" · WinHTTP · 不经过 Harness");
     l3_.AskAsync(prompt,
-        [hwnd = hwnd_](std::wstring delta) {
-            PostMessageW(hwnd, kL3DeltaMessage, 0, reinterpret_cast<LPARAM>(new std::wstring(std::move(delta))));
+        [hwnd = hwnd_, generation](std::wstring delta) {
+            PostL3Message(hwnd, kL3DeltaMessage, generation, std::move(delta));
         },
-        [hwnd = hwnd_](std::wstring done) {
-            PostMessageW(hwnd, kL3DoneMessage, 0, reinterpret_cast<LPARAM>(new std::wstring(std::move(done))));
+        [hwnd = hwnd_, generation](std::wstring done) {
+            PostL3Message(hwnd, kL3DoneMessage, generation, std::move(done));
         });
 }
 
