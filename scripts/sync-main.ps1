@@ -1,11 +1,7 @@
-param(
-    [Parameter(Mandatory = $true)]
-    [string]$Destination
-)
-
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 
+$Destination = (Get-Location).Path
 $RepoZip = "https://github.com/GoodLoongStudio/TuringDesk/archive/refs/heads/main.zip"
 $TempRoot = Join-Path $env:TEMP ("TuringDesk-sync-" + [guid]::NewGuid().ToString("N"))
 $ZipPath = Join-Path $TempRoot "main.zip"
@@ -16,7 +12,10 @@ function Step([string]$Text) {
 }
 
 try {
-    $Destination = [System.IO.Path]::GetFullPath($Destination)
+    if (-not (Test-Path $Destination)) {
+        throw "Destination does not exist: $Destination"
+    }
+
     New-Item -ItemType Directory -Force -Path $TempRoot | Out-Null
     New-Item -ItemType Directory -Force -Path $ExtractPath | Out-Null
 
@@ -34,7 +33,7 @@ try {
     Step "Syncing files to $Destination"
     Write-Host "Preserved local paths: .git, build, .vs, SYNC-MAIN.cmd" -ForegroundColor DarkGray
 
-    $Args = @(
+    $RoboArgs = @(
         $Source,
         $Destination,
         "/MIR",
@@ -46,22 +45,23 @@ try {
         "/NJS",
         "/NP",
         "/XD",
-        (Join-Path $Destination ".git"),
-        (Join-Path $Destination "build"),
-        (Join-Path $Destination ".vs"),
+        ".git",
+        "build",
+        ".vs",
         "/XF",
         "SYNC-MAIN.cmd"
     )
 
-    & robocopy @Args
+    & robocopy @RoboArgs
     $Code = $LASTEXITCODE
     if ($Code -ge 8) {
         throw "robocopy failed with exit code $Code"
     }
 
     Step "Sync complete"
-    Write-Host "Local source now matches GitHub main." -ForegroundColor Green
-    Write-Host "Next: run DEPLOY-NATIVE-ARM64.cmd to test the latest ARM64 build."
+    Write-Host "Local source now mirrors GitHub main." -ForegroundColor Green
+    Write-Host "Remote deletions are deleted locally except preserved paths."
+    Write-Host "Next: run DEPLOY-NATIVE-ARM64.cmd"
     exit 0
 }
 finally {
