@@ -225,13 +225,17 @@ LRESULT SearchWindow::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) 
     case kL3DoneMessage: {
         std::unique_ptr<L3UiMessage> done(reinterpret_cast<L3UiMessage*>(lParam));
         if (!done || done->generation != gL3Generation.load(std::memory_order_relaxed)) return 0;
-        if (!done->text.empty()) {
+        const bool failed = !done->text.empty();
+        if (failed) {
             if (streamingText_.empty()) streamingText_ = done->text;
             else streamingText_ += L"\n" + done->text;
         }
         if (!streamingText_.empty()) {
             results_.clear();
-            results_.push_back({ResultKind::Answer, streamingText_, L"L3 · 完成", L"", 0});
+            results_.push_back({ResultKind::Answer,
+                                streamingText_,
+                                failed ? L"L3 · 失败 · 输入 /retry 重试" : L"L3 · 完成",
+                                L"", 0});
         }
         InvalidateRect(hwnd_, nullptr, FALSE);
         return 0;
@@ -355,9 +359,18 @@ void SearchWindow::StartL3(const std::wstring& prompt) {
     const auto generation = gL3Generation.fetch_add(1, std::memory_order_relaxed) + 1;
     if (l3_.Busy()) l3_.Stop();
 
+    std::wstring actualPrompt = prompt;
+    if (prompt == L"/retry") {
+        if (lastL3Prompt_.empty()) {
+            SetStatus(L"没有可重试的 L3 请求", L"先提交一次模型请求后才能使用 /retry。");
+            return;
+        }
+        actualPrompt = lastL3Prompt_;
+    }
+
     std::wstring localReply;
     bool consumedSecret = false;
-    if (l3_.TryHandleLocal(prompt, localReply, consumedSecret)) {
+    if (l3_.TryHandleLocal(actualPrompt, localReply, consumedSecret)) {
         if (consumedSecret) SetWindowTextW(edit_, L"");
         SetStatus(localReply, L"L3 · Native Tool Router");
         return;
@@ -369,9 +382,11 @@ void SearchWindow::StartL3(const std::wstring& prompt) {
         return;
     }
 
+    lastL3Prompt_ = actualPrompt;
     streamingText_.clear();
-    SetStatus(L"正在连接模型…", l3_.Config().model + L" · WinHTTP · 不经过 Harness");
-    l3_.AskAsync(prompt,
+    SetStatus(prompt == L"/retry" ? L"正在重试模型请求…" : L"正在连接模型…",
+              l3_.Config().model + L" · WinHTTP · 不经过 Harness");
+    l3_.AskAsync(actualPrompt,
         [hwnd = hwnd_, generation](std::wstring delta) {
             PostL3Message(hwnd, kL3DeltaMessage, generation, std::move(delta));
         },
