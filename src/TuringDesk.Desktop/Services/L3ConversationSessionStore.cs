@@ -11,6 +11,7 @@ public sealed class L3ConversationSessionStore
 
     private readonly object _gate = new();
     private readonly string _path;
+    private string? _activeModelKey;
 
     public L3ConversationSessionStore()
     {
@@ -25,6 +26,7 @@ public sealed class L3ConversationSessionStore
     {
         lock (_gate)
         {
+            _activeModelKey = modelKey;
             try
             {
                 var sessions = ReadSessionsNoLock();
@@ -44,6 +46,7 @@ public sealed class L3ConversationSessionStore
     {
         lock (_gate)
         {
+            _activeModelKey = modelKey;
             try
             {
                 var sessions = ReadSessionsNoLock();
@@ -72,12 +75,26 @@ public sealed class L3ConversationSessionStore
     {
         lock (_gate)
         {
+            var modelKey = _activeModelKey;
+            _activeModelKey = null;
+            if (string.IsNullOrWhiteSpace(modelKey)) return;
+
             try
             {
-                if (File.Exists(_path)) File.Delete(_path);
+                var sessions = ReadSessionsNoLock();
+                if (!sessions.Remove(modelKey)) return;
+
+                if (sessions.Count == 0)
+                {
+                    if (File.Exists(_path)) File.Delete(_path);
+                    return;
+                }
+
+                WriteSessionsNoLock(sessions);
             }
             catch
             {
+                // Clearing one conversation must not disturb other model sessions.
             }
         }
     }
