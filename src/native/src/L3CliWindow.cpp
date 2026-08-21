@@ -1,5 +1,6 @@
 #include "turingdesk/L3CliWindow.h"
 #include "turingdesk/ModelSettingsWindow.h"
+#include <CommCtrl.h>
 #include <algorithm>
 #include <atomic>
 #include <cstdint>

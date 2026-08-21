@@ -125,7 +125,11 @@ function Start-And-WaitForRun([string]$Sha) {
     $RunId = [long]$Run.databaseId
     Step "Waiting for GitHub Actions run $RunId"
     & gh run watch $RunId --repo $Repo --exit-status | Out-Host
-    if ($LASTEXITCODE -ne 0) { throw "GitHub Actions build failed" }
+    if ($LASTEXITCODE -ne 0) {
+        Step "Failed GitHub Actions log for run $RunId"
+        & gh run view $RunId --repo $Repo --log-failed | Out-Host
+        throw "GitHub Actions build failed (run $RunId)"
+    }
     return [long]$RunId
 }
 

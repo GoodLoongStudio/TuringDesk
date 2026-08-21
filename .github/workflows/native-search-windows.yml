@@ -16,7 +16,7 @@ jobs:
   build-x64:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Configure x64
         run: cmake -S . -B build -A x64
       - name: Build x64
@@ -42,7 +42,7 @@ jobs:
   build-arm64:
     runs-on: windows-11-arm
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Configure ARM64
         run: cmake -S . -B build -A ARM64
       - name: Build ARM64
