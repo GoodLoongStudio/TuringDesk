@@ -21,6 +21,10 @@ bool RunNativeSelfTest() {
     bool consumedSecret = false;
     if (!l3.TryHandleLocal(L"/time", reply, consumedSecret) || reply.empty() || consumedSecret) return false;
 
+    reply.clear();
+    consumedSecret = false;
+    if (!l3.TryHandleLocal(L"/new", reply, consumedSecret) || reply.empty() || consumedSecret) return false;
+
     return true;
 }
 
