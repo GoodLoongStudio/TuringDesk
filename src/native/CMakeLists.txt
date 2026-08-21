@@ -22,6 +22,8 @@ target_compile_definitions(TuringDesk PRIVATE
     WINVER=0x0A00 _WIN32_WINNT=0x0A00
 )
 
+target_include_directories(TuringDeskWallpaper PRIVATE include)
+target_precompile_headers(TuringDeskWallpaper PRIVATE include/turingdesk/WallpaperCompat.h)
 target_compile_features(TuringDeskWallpaper PRIVATE cxx_std_23)
 target_compile_definitions(TuringDeskWallpaper PRIVATE
     UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN
