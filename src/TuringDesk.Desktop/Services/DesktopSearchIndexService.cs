@@ -46,9 +46,6 @@ public sealed class DesktopSearchIndexService : IDisposable
 
     internal DesktopSearchIndexService(bool initializeFileSearch)
     {
-        // Stagger CPU-heavy discovery behind the interactive shell and initial scene
-        // attach. If the user searches sooner, SearchApps starts discovery immediately
-        // and this timer becomes a no-op.
         _appWarmupTimer = new Timer(
             _ => _apps.WarmUp(),
             null,
@@ -59,13 +56,18 @@ public sealed class DesktopSearchIndexService : IDisposable
             _ = _everything.InitializeAsync();
     }
 
-    public bool IsInitialIndexComplete => _apps.InitializationCompleted && _everything.InitializationCompleted;
+    public bool IsInitialIndexComplete => _apps.InitializationCompleted;
+    public bool AppSearchInitializationComplete => _apps.InitializationCompleted;
     public bool AppSearchReady => _apps.IsReady;
     public bool UsesEverything => _everything.IsReady;
     public bool FileSearchReady => _everything.IsReady;
     public string AppSearchStatus => _apps.Status;
     public string FileSearchProviderName => _everything.ProviderName;
-    public string FileSearchStatus => _everything.Status;
+    public string FileSearchStatus => _everything.IsReady
+        ? _everything.Status
+        : _everything.InitializationCompleted
+            ? _everything.Status
+            : "Everything 文件搜索按需启动";
     public int AppCount => _apps.Count;
     internal Task AppSearchInitialization => _apps.Initialization;
 
