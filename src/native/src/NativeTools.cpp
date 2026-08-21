@@ -350,7 +350,6 @@ NativeToolResult CreatePowerPoint(std::string_view arguments) {
     CLSID clsid{};
     HRESULT hr = CLSIDFromProgID(L"PowerPoint.Application", &clsid);
     if (FAILED(hr)) {
-        if (uninitialize) CoUninitialize();
         return {false, L"没有检测到 Microsoft PowerPoint。当前 ppt.create V1 需要本机安装 PowerPoint。"};
     }
 
@@ -358,7 +357,6 @@ NativeToolResult CreatePowerPoint(std::string_view arguments) {
     hr = CoCreateInstance(clsid, nullptr, CLSCTX_LOCAL_SERVER, IID_IDispatch, reinterpret_cast<void**>(&rawApp));
     DispatchPtr app(rawApp);
     if (FAILED(hr) || !app) {
-        if (uninitialize) CoUninitialize();
         return {false, L"启动 PowerPoint 失败：" + HResultText(hr)};
     }
 
@@ -368,7 +366,6 @@ NativeToolResult CreatePowerPoint(std::string_view arguments) {
     if (SUCCEEDED(hr)) hr = CallDispatch(presentations.get(), L"Add", nullptr, 0, presentation);
     if (FAILED(hr)) {
         Invoke(app.get(), L"Quit", DISPATCH_METHOD, nullptr, 0, nullptr);
-        if (uninitialize) CoUninitialize();
         return {false, L"创建 PowerPoint 演示文稿失败：" + HResultText(hr)};
     }
 
@@ -423,7 +420,6 @@ NativeToolResult CreatePowerPoint(std::string_view arguments) {
     }
 
     Invoke(app.get(), L"Quit", DISPATCH_METHOD, nullptr, 0, nullptr);
-    if (uninitialize) CoUninitialize();
 
     if (FAILED(hr)) return {false, L"生成 PPT 失败：" + HResultText(hr)};
     if (openAfter) ShellExecuteW(nullptr, L"open", output.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
