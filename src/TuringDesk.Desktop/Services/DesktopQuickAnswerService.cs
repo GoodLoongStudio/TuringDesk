@@ -16,9 +16,10 @@ public sealed record DesktopQuickAnswerResult(
     string Message);
 
 /// <summary>
-/// Level 3 of the desktop search stack: persistent, tool-free CLI-style chat.
-/// Provider transport lives in L3ChatProviderClient; this layer owns intent,
-/// session memory, context trimming and the explicit L3 -> L4 boundary.
+/// Level 3 of the desktop search stack: TuringDesk's persistent local CLI / light
+/// Agent layer. Bounded native tools are attempted first; ordinary language work
+/// then falls back to the configured model. L3 never starts Node/Harness and the
+/// explicit L3 -> L4 boundary remains owned by this service.
 /// </summary>
 public sealed class DesktopQuickAnswerService
 {
@@ -35,12 +36,17 @@ public sealed class DesktopQuickAnswerService
     private readonly List<L3ChatMessage> _history = new();
     private readonly L3ChatProviderClient _provider = new();
     private readonly L3ConversationSessionStore _sessionStore = new();
+    private readonly L3NativeToolService _nativeTools;
     private string? _conversationModelKey;
 
+    public DesktopQuickAnswerService(DesktopSearchIndexService searchIndex)
+    {
+        _nativeTools = new L3NativeToolService(searchIndex);
+    }
+
     /// <summary>
-    /// Raised as the current assistant reply grows. Consumers must marshal to
-    /// their UI thread. This event keeps the existing TryAnswerAsync call shape
-    /// working while allowing the search bar to render true CLI-style streaming.
+    /// Raised as the current model reply grows. Native CLI tool replies complete
+    /// immediately and do not use this event.
     /// </summary>
     public event Action<string>? PartialResponseUpdated;
 
@@ -52,10 +58,10 @@ public sealed class DesktopQuickAnswerService
     {
         var text = query.Trim();
         if (string.IsNullOrWhiteSpace(text))
-            return new(DesktopQuickAnswerDisposition.Answered, "CLI 对话", "请输入你想搜索或询问的内容。");
+            return new(DesktopQuickAnswerDisposition.Answered, "CLI", "请输入你想搜索、查询、打开或询问的内容。输入 /help 可查看本地能力。");
 
         if (TryCalculate(text, out var calculation))
-            return new(DesktopQuickAnswerDisposition.Answered, "本地计算", calculation);
+            return new(DesktopQuickAnswerDisposition.Answered, "CLI · 本地计算", calculation);
 
         if (text.Length > MaxDirectQuestionLength)
             return new(
@@ -63,18 +69,29 @@ public sealed class DesktopQuickAnswerService
                 "CLI 输入过长",
                 "这段内容超过常驻 CLI 的单次输入范围。需要更大工作上下文时再升级到 Harness。");
 
+        var native = await _nativeTools.TryHandleAsync(text, cancellationToken).ConfigureAwait(false);
+        if (native is not null)
+        {
+            return new(
+                native.RequiresDeepProcessing
+                    ? DesktopQuickAnswerDisposition.RequiresDeepProcessing
+                    : DesktopQuickAnswerDisposition.Answered,
+                native.Title,
+                native.Message);
+        }
+
         if (model is null || !model.IsAvailable || model.Settings is null)
             return new(
                 DesktopQuickAnswerDisposition.RequiresModel,
-                "CLI 需要 AI 模型",
-                "请先配置一个可用模型。应用搜索、文件搜索和本地计算仍然可以使用。");
+                "CLI · 需要 AI 模型",
+                "当前请求不是已支持的本地 CLI 指令，请先配置一个可用模型。/status、/time、/apps、/files、/open 和 /open-file 等本地能力仍然可用。");
 
         var settings = model.Settings;
         if (string.IsNullOrWhiteSpace(settings.BaseUrl) || string.IsNullOrWhiteSpace(settings.Model))
             return new(
                 DesktopQuickAnswerDisposition.RequiresModel,
                 "模型配置不完整",
-                "请检查 Base URL 和模型 ID。普通对话不会因此自动启动 Harness。");
+                "请检查 Base URL 和模型 ID。本地 CLI 能力不受影响，模型错误也不会自动启动 Harness。");
 
         var modelKey = $"{settings.ProviderId}|{settings.BaseUrl.Trim()}|{settings.Model.Trim()}";
         EnsureConversationModel(modelKey);
@@ -102,7 +119,7 @@ public sealed class DesktopQuickAnswerService
             if (TryExtractHarnessEscalation(reply, out var reason))
                 return new(
                     DesktopQuickAnswerDisposition.RequiresDeepProcessing,
-                    "CLI 需要更高权限的 Agent 能力",
+                    "CLI · 超出本地能力边界",
                     reason);
 
             AppendTurn(text, reply);
@@ -125,7 +142,7 @@ public sealed class DesktopQuickAnswerService
             return new(
                 DesktopQuickAnswerDisposition.Answered,
                 "CLI 连接失败",
-                $"{error.Message} 请检查当前模型配置或稍后重试。不会自动启动 Harness。");
+                $"{error.Message} 请检查当前模型配置或稍后重试。本地 CLI 工具仍可继续使用，不会自动启动 Harness。");
         }
     }
 
@@ -149,11 +166,13 @@ public sealed class DesktopQuickAnswerService
         };
 
         return $"""
-You are TuringDesk CLI, the persistent Level-3 conversational assistant inside the desktop search bar.
+You are the language layer inside TuringDesk Level-3 CLI / light Agent.
 {task}
-You have conversational memory from prior turns, but you have NO local tools and must not claim you changed the computer.
-Do not escalate ordinary questions, explanations, writing, translation, coding advice, or model/network errors.
-Only when the user's requested outcome truly requires operating Windows, inspecting local files not provided in chat, running commands, controlling applications, or multi-step Agent/tool execution, respond with this marker as the FIRST line:
+TuringDesk has a separate bounded native tool controller for safe local operations such as status inspection, app/file search and explicit app/file opening. If this model call is reached, those deterministic tools did not handle the request.
+You do NOT have raw PowerShell, CMD, filesystem, process-control, administrator or arbitrary Windows access inside this model call, so never claim that you changed the computer.
+Do not escalate ordinary questions, explanations, writing, translation, coding advice, calculations, or model/network errors.
+Do not request L4 merely because the user mentions a local app or file. For a simple supported local action, tell the user they can use /help or the corresponding L3 command if appropriate.
+Only when the requested outcome genuinely needs capabilities outside bounded L3 — for example arbitrary shell execution, destructive/privileged changes, workspace/skills/jobs, broad local inspection, or complex multi-step autonomous tool execution — respond with this marker as the FIRST line:
 {HarnessMarker}
 Then briefly explain why Level 4 Harness is required.
 Otherwise answer normally and never mention Harness.
@@ -223,7 +242,7 @@ Otherwise answer normally and never mention Harness.
         if (!reply.StartsWith(HarnessMarker, StringComparison.Ordinal)) return false;
         reason = reply[HarnessMarker.Length..].TrimStart('\r', '\n', ' ', ':', '：').Trim();
         if (string.IsNullOrWhiteSpace(reason))
-            reason = "这个请求需要操作本机、调用工具或执行多步骤 Agent 工作流。";
+            reason = "这个请求需要超出 L3 白名单的本机能力、工作区能力或复杂多步骤 Agent 工作流。";
         return true;
     }
 
