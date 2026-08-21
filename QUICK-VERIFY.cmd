@@ -1,10 +1,12 @@
 @echo off
 setlocal EnableExtensions
+set "QV_STAGE=bootstrap"
 
 if /I "%~1"=="--local" goto :verify
 if /I "%~1"=="--refresh" goto :refresh
 
 set "TARGET=%~dp0"
+set "QV_STAGE=refresh-bootstrap"
 set "BOOTSTRAP=%TEMP%\TuringDesk-quick-verify-bootstrap-%RANDOM%-%RANDOM%.cmd"
 copy /y "%~f0" "%BOOTSTRAP%" >nul
 if errorlevel 1 goto :failed
@@ -16,6 +18,7 @@ exit /b %RC%
 
 :refresh
 set "TARGET=%~2"
+set "QV_STAGE=refresh-main"
 if not defined TARGET goto :failed
 set "TURINGDESK_TARGET_DIR=%TARGET%"
 
@@ -24,16 +27,24 @@ echo   %TARGET%
 powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; [Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; $target=$env:TURINGDESK_TARGET_DIR; $work=Join-Path $env:TEMP ('TuringDesk-main-'+[guid]::NewGuid().ToString('N')); $zip=$work+'.zip'; try { Invoke-WebRequest -UseBasicParsing -Uri 'https://github.com/GoodLoongStudio/TuringDesk/archive/refs/heads/main.zip' -OutFile $zip; New-Item -ItemType Directory -Force -Path $work | Out-Null; Expand-Archive -LiteralPath $zip -DestinationPath $work -Force; $src=Join-Path $work 'TuringDesk-main'; if (-not (Test-Path -LiteralPath $src)) { throw 'Downloaded archive did not contain TuringDesk-main.' }; Write-Host 'Updating current script directory from GitHub main...' -ForegroundColor Cyan; & robocopy.exe $src $target /E /COPY:DAT /DCOPY:DAT /R:2 /W:1 /NFL /NDL /NJH /NJS /NP | Out-Host; $rc=$LASTEXITCODE; if ($rc -gt 7) { throw ('robocopy failed with exit code '+$rc) }; Write-Host 'TuringDesk main is up to date.' -ForegroundColor Green } finally { Remove-Item -LiteralPath $zip -Force -ErrorAction SilentlyContinue; Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue }"
 if errorlevel 1 goto :failed
 
+set "QV_STAGE=local-verification"
 call "%TARGET%QUICK-VERIFY.cmd" --local
 exit /b %ERRORLEVEL%
 
 :verify
 cd /d "%~dp0"
+set "TURINGDESK_QUICK_VERIFY=1"
 
+rem Keep every run diagnostically independent. Archived crash files remain local,
+rem but the live report and log start clean so a new failure cannot publish stale data.
+powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -Command "$root=Join-Path $env:LOCALAPPDATA 'TuringDesk\logs'; Remove-Item (Join-Path $root 'desktop.log'),(Join-Path $root 'desktop-crash-latest.json') -Force -ErrorAction SilentlyContinue"
+
+set "QV_STAGE=bootstrap-everything"
 echo Preparing pinned Everything file search backend...
 powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\bootstrap-everything.ps1"
 if errorlevel 1 goto :failed
 
+set "QV_STAGE=adopt-dotnet"
 echo Checking .NET SDK and Windows Desktop Runtime...
 powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\adopt-installed-dotnet.ps1"
 if errorlevel 1 goto :failed
@@ -48,22 +59,40 @@ if /I "%PROCESSOR_ARCHITECTURE%"=="ARM64" (
 set "DOTNET_ROOT=%TURINGDESK_DOTNET_ROOT%"
 set "PATH=%TURINGDESK_DOTNET_ROOT%;%PATH%"
 
+set "QV_STAGE=desktop-quick-verify"
 powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\quick-verify.ps1" -SkipPull
 if errorlevel 1 goto :failed
 
+set "QV_STAGE=app-search-verification"
 powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\verify-app-search.ps1"
 if errorlevel 1 goto :failed
 
 goto :done
 
 :failed
+set "RC=%ERRORLEVEL%"
+if "%RC%"=="0" set "RC=1"
 echo.
-echo TuringDesk quick verification failed. See the error above.
+echo TuringDesk quick verification failed at stage: %QV_STAGE%
+
+set "REPORT_BASE=%~dp0"
+if defined TARGET set "REPORT_BASE=%TARGET%"
+if exist "%REPORT_BASE%scripts\report-quick-verify-failure.ps1" (
+    echo Collecting diagnostics and attempting GitHub report...
+    powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%REPORT_BASE%scripts\report-quick-verify-failure.ps1" -Stage "%QV_STAGE%" -ExitCode %RC%
+) else (
+    echo Diagnostic reporter is not available in this checkout yet.
+)
+
+echo.
+echo See the error above and the local diagnostic report under .tools\quick-verify\reports.
 pause
-exit /b 1
+exit /b %RC%
 
 :done
 echo.
 echo TuringDesk quick verification completed successfully.
+echo Desktop diagnostics: %LOCALAPPDATA%\TuringDesk\logs\desktop.log
+echo Set TURINGDESK_DISABLE_GITHUB_REPORT=1 to disable automatic GitHub issue reporting on this machine.
 endlocal
 exit /b 0
