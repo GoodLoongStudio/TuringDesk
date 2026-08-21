@@ -51,9 +51,12 @@ public partial class App : Application
             DesktopDiagnostics.Info("startup.window-shown", "main-window-show-returned");
 
             // Native tray icon: no WinForms dependency and no background worker.
+            // Double-click focuses search; the right-click menu exposes the three
+            // application-level actions users need while TuringDesk runs headless.
             _tray = new SystemTrayService(
                 Dispatcher,
                 window.ShowDesktopSearchFromTray,
+                window.ShowHarnessConsoleFromTray,
                 window.ShowDesktopLibrary,
                 window.RequestApplicationExit);
         }
