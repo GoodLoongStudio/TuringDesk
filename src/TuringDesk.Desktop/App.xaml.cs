@@ -24,6 +24,14 @@ public partial class App : Application
                 return;
             }
 
+            if (e.Args.Any(arg => string.Equals(arg, "--verify-l3-http", StringComparison.OrdinalIgnoreCase)))
+            {
+                DesktopDiagnostics.Info("startup.mode", "verify-l3-http");
+                ShutdownMode = ShutdownMode.OnExplicitShutdown;
+                Dispatcher.BeginInvoke(new Action(RunL3HttpVerification));
+                return;
+            }
+
             CompactToolWindowService.Install();
             DesktopDiagnostics.Info("startup.phase", "compact-tool-window-service-installed");
 
@@ -87,6 +95,28 @@ public partial class App : Application
         catch (Exception error)
         {
             DesktopDiagnostics.Error("verify.app-search", "verification failed", error);
+            exitCode = 3;
+        }
+        finally
+        {
+            Shutdown(exitCode);
+        }
+    }
+
+    private async void RunL3HttpVerification()
+    {
+        var exitCode = 1;
+        try
+        {
+            var result = await L3HttpVerification.RunAsync();
+            exitCode = result.Success ? 0 : 2;
+            DesktopDiagnostics.Info(
+                "verify.l3-http",
+                $"success={result.Success} exitCode={exitCode} detail={result.Detail}");
+        }
+        catch (Exception error)
+        {
+            DesktopDiagnostics.Error("verify.l3-http", "verification failed", error);
             exitCode = 3;
         }
         finally
