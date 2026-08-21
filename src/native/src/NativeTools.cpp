@@ -5,8 +5,11 @@
 #include <oleauto.h>
 #include <algorithm>
 #include <cctype>
+#include <cwchar>
+#include <cwctype>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -174,6 +177,17 @@ std::wstring HResultText(HRESULT hr) {
     return code;
 }
 
+class ComApartment {
+public:
+    ComApartment() : hr_(CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED)), uninitialize_(SUCCEEDED(hr_)) {}
+    ~ComApartment() { if (uninitialize_) CoUninitialize(); }
+    HRESULT Result() const { return hr_; }
+    bool Ready() const { return SUCCEEDED(hr_) || hr_ == RPC_E_CHANGED_MODE; }
+private:
+    HRESULT hr_{};
+    bool uninitialize_{};
+};
+
 class DispatchPtr {
 public:
     DispatchPtr() = default;
@@ -330,9 +344,8 @@ NativeToolResult CreatePowerPoint(std::string_view arguments) {
     if (fileName.size() < 5 || _wcsicmp(fileName.c_str() + fileName.size() - 5, L".pptx") != 0) fileName += L".pptx";
     const auto output = desktop / fileName;
 
-    const HRESULT init = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
-    const bool uninitialize = SUCCEEDED(init);
-    if (FAILED(init) && init != RPC_E_CHANGED_MODE) return {false, L"初始化 Office COM 失败：" + HResultText(init)};
+    ComApartment apartment;
+    if (!apartment.Ready()) return {false, L"初始化 Office COM 失败：" + HResultText(apartment.Result())};
 
     CLSID clsid{};
     HRESULT hr = CLSIDFromProgID(L"PowerPoint.Application", &clsid);
@@ -457,8 +470,9 @@ NativeToolResult ListFolder(std::string_view arguments) {
 NativeToolResult OpenFile(std::string_view arguments) {
     auto folder = ResolveLocation(Utf8ToWide(ExtractJsonString(arguments, "location")));
     if (folder.empty()) return {false, L"只允许从 desktop / documents / downloads 打开文件。"};
-    const auto name = SanitizeFileName(Utf8ToWide(ExtractJsonString(arguments, "file_name")), L"");
-    if (name.empty()) return {false, L"缺少 file_name。"};
+    const auto rawName = Utf8ToWide(ExtractJsonString(arguments, "file_name"));
+    if (rawName.empty()) return {false, L"缺少 file_name。"};
+    const auto name = SanitizeFileName(rawName, L"");
     const auto path = folder / name;
     std::error_code ec;
     if (!fs::exists(path, ec)) return {false, L"文件不存在：" + path.wstring()};

@@ -1,4 +1,5 @@
 #include "turingdesk/CodexRuntime.h"
+#include "turingdesk/NativeTools.h"
 #include <wincred.h>
 #include <algorithm>
 #include <cstdio>
@@ -177,6 +178,27 @@ bool HasResponseId(std::string_view json, long long id) {
     }
     if (negative) value = -value;
     return any && value == id;
+}
+
+bool TryReadRequestId(std::string_view json, long long& id) {
+    auto pos = json.find("\"id\"");
+    if (pos == std::string_view::npos) return false;
+    pos = json.find(':', pos + 4);
+    if (pos == std::string_view::npos) return false;
+    ++pos;
+    while (pos < json.size() && (json[pos] == ' ' || json[pos] == '\t')) ++pos;
+    bool negative = false;
+    if (pos < json.size() && json[pos] == '-') { negative = true; ++pos; }
+    long long value = 0;
+    bool any = false;
+    while (pos < json.size() && json[pos] >= '0' && json[pos] <= '9') {
+        any = true;
+        value = value * 10 + (json[pos] - '0');
+        ++pos;
+    }
+    if (!any) return false;
+    id = negative ? -value : value;
+    return true;
 }
 
 std::wstring TomlEscape(const std::wstring& value) {
@@ -478,7 +500,7 @@ bool CodexRuntime::LaunchProcess(const ProviderSetup& setup, std::wstring& error
     const long long initializeId = nextRequestId_++;
     const std::string initialize =
         "{\"id\":" + std::to_string(initializeId) +
-        ",\"method\":\"initialize\",\"params\":{\"clientInfo\":{\"name\":\"turingdesk\",\"title\":\"TuringDesk L3\",\"version\":\"0.1\"},\"capabilities\":{\"experimentalApi\":false}}}";
+        ",\"method\":\"initialize\",\"params\":{\"clientInfo\":{\"name\":\"turingdesk\",\"title\":\"TuringDesk L3\",\"version\":\"0.1\"},\"capabilities\":{\"experimentalApi\":true}}}";
     if (!WriteLine(initialize)) {
         error = L"Codex initialize 写入失败";
         CleanupProcess();
@@ -496,11 +518,17 @@ bool CodexRuntime::LaunchProcess(const ProviderSetup& setup, std::wstring& error
     }
 
     const long long threadIdRequest = nextRequestId_++;
+    const std::wstring developerInstructions =
+        L"You are TuringDesk Native Agent. Use the provided native dynamic tools when the user asks to create, open, or inspect supported desktop artifacts. "
+        L"Do not claim you cannot access the desktop when a matching tool exists. Never report an action as successful until its tool result reports success. "
+        L"Prefer native tools over shell commands for supported tasks.";
     const std::string threadStart =
         "{\"id\":" + std::to_string(threadIdRequest) +
         ",\"method\":\"thread/start\",\"params\":{\"model\":\"" + EscapeJson(setup.model) +
         "\",\"modelProvider\":\"turingdesk\",\"cwd\":\"" + EscapeJson(DesktopDirectory()) +
-        "\",\"ephemeral\":true}}";
+        "\",\"developerInstructions\":\"" + EscapeJson(developerInstructions) +
+        "\",\"dynamicTools\":" + NativeToolDefinitionsJson() +
+        ",\"ephemeral\":true}}";
     if (!WriteLine(threadStart) || !WaitForResponse(threadIdRequest, response, error)) {
         CleanupProcess();
         return false;
@@ -635,6 +663,30 @@ void CodexRuntime::RunTurn(ProviderSetup setup, std::wstring prompt, DeltaCallba
             continue;
         }
         const auto method = ExtractJsonString(line, "\"method\"");
+        if (method == "item/tool/call") {
+            long long serverRequestId = 0;
+            const auto tool = ExtractJsonString(line, "\"tool\"");
+            NativeToolResult result;
+            if (!TryReadRequestId(line, serverRequestId)) {
+                result = {false, L"TuringDesk 无法解析 Codex tool request id。"};
+            } else if (tool.empty()) {
+                result = {false, L"Codex tool request 缺少 tool 名称。"};
+            } else {
+                result = ExecuteNativeTool(tool, line);
+            }
+            if (serverRequestId != 0) {
+                const std::string reply =
+                    "{\"id\":" + std::to_string(serverRequestId) +
+                    ",\"result\":{\"contentItems\":[{\"type\":\"inputText\",\"text\":\"" + EscapeJson(result.message) +
+                    "\"}],\"success\":" + (result.success ? "true" : "false") + "}}";
+                if (!WriteLine(reply)) {
+                    if (onDone) onDone(L"Codex Native Tool 结果回传失败");
+                    CleanupProcess();
+                    return;
+                }
+            }
+            continue;
+        }
         if (method == "item/agentMessage/delta") {
             const auto delta = ExtractJsonString(line, "\"delta\"");
             if (!delta.empty() && onDelta) onDelta(Utf8ToWide(delta));
