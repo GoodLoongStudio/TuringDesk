@@ -29,13 +29,14 @@ public sealed record DesktopSearchResult(
 /// The coordinator never crawls disks and never starts Node/Harness.
 ///
 /// Heavy discovery is not part of the window-construction critical path. App
-/// discovery is warmed after the shell becomes responsive (or on first query), and
-/// Everything stays fully demand-driven until a real file query is issued.
+/// discovery is warmed shortly after first paint (or on first query), and Everything
+/// stays fully demand-driven until a real file query is issued.
 /// </summary>
 public sealed class DesktopSearchIndexService : IDisposable
 {
     private readonly AppSearchProvider _apps = new();
     private readonly EverythingFileSearchProvider _everything = new();
+    private readonly Timer _appWarmupTimer;
     private int _disposed;
 
     public DesktopSearchIndexService()
@@ -45,6 +46,14 @@ public sealed class DesktopSearchIndexService : IDisposable
 
     internal DesktopSearchIndexService(bool initializeFileSearch)
     {
+        // Give WPF/Explorer/scene-host startup the CPU first. If the user searches
+        // sooner, SearchApps starts discovery immediately and this timer becomes a no-op.
+        _appWarmupTimer = new Timer(
+            _ => _apps.WarmUp(),
+            null,
+            TimeSpan.FromMilliseconds(1250),
+            Timeout.InfiniteTimeSpan);
+
         if (initializeFileSearch)
             _ = _everything.InitializeAsync();
     }
@@ -247,6 +256,7 @@ public sealed class DesktopSearchIndexService : IDisposable
     public void Dispose()
     {
         if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
+        try { _appWarmupTimer.Dispose(); } catch { }
         _apps.Dispose();
         _everything.Dispose();
     }
