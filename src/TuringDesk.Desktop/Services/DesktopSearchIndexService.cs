@@ -61,7 +61,9 @@ public sealed class DesktopSearchIndexService : IDisposable
 
     /// <summary>
     /// Level 1: RAM-only application search. Discovery is performed asynchronously
-    /// and results come from an immutable snapshot.
+    /// and results come from an immutable snapshot. Native icons are resolved only
+    /// for the small ranked result set and cached by ShellIconService, so discovery
+    /// still avoids decoding hundreds of shell images at startup.
     /// </summary>
     public IReadOnlyList<DesktopSearchResult> SearchApps(string query, int limit = 5)
     {
@@ -71,7 +73,7 @@ public sealed class DesktopSearchIndexService : IDisposable
                 hit.Target,
                 DesktopSearchResultKind.App,
                 BuildAppSubtitle(hit.Category, hit.Source),
-                null,
+                ShellIconService.GetApplicationIcon(hit.Target, large: false),
                 hit.Score,
                 Level: 1))
             .ToArray();
