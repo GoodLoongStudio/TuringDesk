@@ -9,6 +9,7 @@ $DeployDir = Join-Path $env:LOCALAPPDATA "TuringDesk\NativeTest"
 $ArtifactName = "TuringDesk-Native-Search-ARM64"
 $Workflow = "native-search-windows.yml"
 $ExeName = "TuringDesk.exe"
+$WallpaperExeName = "TuringDeskWallpaper.exe"
 $CodexRepo = "openai/codex"
 $CodexRelease = "rust-v0.146.0"
 $CodexAsset = "codex-app-server-aarch64-pc-windows-msvc.exe.zip"
@@ -17,12 +18,10 @@ function Step([string]$Text) {
     Write-Host "`n==> $Text" -ForegroundColor Cyan
 }
 
-function Stop-BundledEverything {
-    $BundledPath = Join-Path $DeployDir "Everything\Everything.exe"
-    if (-not (Test-Path $BundledPath)) { return }
-
-    $Expected = [System.IO.Path]::GetFullPath($BundledPath)
-    foreach ($Process in @(Get-Process -Name "Everything" -ErrorAction SilentlyContinue)) {
+function Stop-ProcessAtPath([string]$ProcessName, [string]$ExpectedPath) {
+    if ([string]::IsNullOrWhiteSpace($ExpectedPath)) { return }
+    $Expected = [System.IO.Path]::GetFullPath($ExpectedPath)
+    foreach ($Process in @(Get-Process -Name $ProcessName -ErrorAction SilentlyContinue)) {
         try {
             if ($Process.Path -and ([System.IO.Path]::GetFullPath($Process.Path) -eq $Expected)) {
                 Stop-Process -Id $Process.Id -Force -ErrorAction SilentlyContinue
@@ -30,68 +29,36 @@ function Stop-BundledEverything {
         }
         catch { }
     }
-    Start-Sleep -Milliseconds 200
-}
-
-function Stop-CodexRuntime {
-    $BundledPath = Join-Path $DeployDir "Codex\codex-app-server.exe"
-    if (-not (Test-Path $BundledPath)) { return }
-
-    $Expected = [System.IO.Path]::GetFullPath($BundledPath)
-    foreach ($Process in @(Get-Process -Name "codex-app-server" -ErrorAction SilentlyContinue)) {
-        try {
-            if ($Process.Path -and ([System.IO.Path]::GetFullPath($Process.Path) -eq $Expected)) {
-                Stop-Process -Id $Process.Id -Force -ErrorAction SilentlyContinue
-            }
-        }
-        catch { }
-    }
-    Start-Sleep -Milliseconds 100
 }
 
 function Stop-DeployedInstance {
-    Step "Stopping previous TuringDesk instance"
+    Step "Stopping previous TuringDesk processes"
+
     foreach ($Process in @(Get-Process -Name "TuringDesk" -ErrorAction SilentlyContinue)) {
-        try { Stop-Process -Id $Process.Id -Force -ErrorAction Stop }
-        catch { Write-Host "Stop-Process did not terminate PID $($Process.Id); retrying." -ForegroundColor DarkGray }
+        try { Stop-Process -Id $Process.Id -Force -ErrorAction SilentlyContinue } catch { }
+    }
+    foreach ($Process in @(Get-Process -Name "TuringDeskWallpaper" -ErrorAction SilentlyContinue)) {
+        try { Stop-Process -Id $Process.Id -Force -ErrorAction SilentlyContinue } catch { }
     }
 
-    for ($i = 0; $i -lt 30; $i++) {
-        $Remaining = @(Get-Process -Name "TuringDesk" -ErrorAction SilentlyContinue)
-        if ($Remaining.Count -eq 0) { break }
-        foreach ($Process in $Remaining) {
-            Stop-Process -Id $Process.Id -Force -ErrorAction SilentlyContinue
-        }
-        Start-Sleep -Milliseconds 100
-    }
-
-    if (@(Get-Process -Name "TuringDesk" -ErrorAction SilentlyContinue).Count -gt 0) {
-        & taskkill.exe /F /IM TuringDesk.exe 2>$null | Out-Null
-    }
-    Start-Sleep -Milliseconds 200
-    Stop-CodexRuntime
-    Stop-BundledEverything
+    Stop-ProcessAtPath -ProcessName "codex-app-server" -ExpectedPath (Join-Path $DeployDir "Codex\codex-app-server.exe")
+    Stop-ProcessAtPath -ProcessName "Everything" -ExpectedPath (Join-Path $DeployDir "Everything\Everything.exe")
+    Start-Sleep -Milliseconds 250
 }
 
-function Copy-DeployedBinary([string]$Source, [string]$Destination) {
+function Copy-WithRetry([string]$Source, [string]$Destination) {
     $LastError = $null
     for ($i = 1; $i -le 25; $i++) {
         try {
             Copy-Item $Source $Destination -Force -ErrorAction Stop
             return
         }
-        catch [System.IO.IOException] {
-            $LastError = $_
-            Get-Process -Name "TuringDesk" -ErrorAction SilentlyContinue |
-                Stop-Process -Force -ErrorAction SilentlyContinue
-            Start-Sleep -Milliseconds 200
-        }
         catch {
             $LastError = $_
-            break
+            Start-Sleep -Milliseconds 200
         }
     }
-    throw "Unable to replace deployed TuringDesk.exe after retries: $($LastError.Exception.Message)"
+    throw "Unable to replace $Destination after retries: $($LastError.Exception.Message)"
 }
 
 function Test-Binary([string]$Exe) {
@@ -123,7 +90,6 @@ function Get-RunForCommit([string]$Sha, [switch]$SuccessfulOnly) {
 
     $Json = & gh @Args
     if ($LASTEXITCODE -ne 0) { throw "Unable to query GitHub Actions runs" }
-
     $Runs = @($Json | ConvertFrom-Json)
     if ($Runs.Count -eq 0) { return $null }
     return $Runs[0]
@@ -164,15 +130,21 @@ function Download-Artifact([long]$RunId) {
         throw "Unable to download ARM64 artifact"
     }
 
-    $Found = Get-ChildItem -Path $Temp -Filter $ExeName -Recurse | Select-Object -First 1
-    if (-not $Found) {
+    $SearchExe = Get-ChildItem -Path $Temp -Filter $ExeName -Recurse | Select-Object -First 1
+    $WallpaperExe = Get-ChildItem -Path $Temp -Filter $WallpaperExeName -Recurse | Select-Object -First 1
+    if (-not $SearchExe) {
         Remove-Item $Temp -Recurse -Force -ErrorAction SilentlyContinue
         throw "$ExeName was not found in ARM64 artifact"
     }
+    if (-not $WallpaperExe) {
+        Remove-Item $Temp -Recurse -Force -ErrorAction SilentlyContinue
+        throw "$WallpaperExeName was not found in ARM64 artifact"
+    }
 
     return @{
-        Exe = $Found.FullName
-        Root = $Found.Directory.FullName
+        Exe = $SearchExe.FullName
+        WallpaperExe = $WallpaperExe.FullName
+        Root = $SearchExe.Directory.FullName
         Temp = $Temp
     }
 }
@@ -226,7 +198,6 @@ function Ensure-EverythingService([string]$EverythingExe) {
     }
 
     Write-Host "Bundled Everything is configured for background use with no tray icon." -ForegroundColor DarkGray
-    Write-Host "TuringDesk will start and stop the client automatically." -ForegroundColor DarkGray
 }
 
 function Ensure-CodexRuntime {
@@ -305,16 +276,23 @@ try {
     Step "Deploying to $DeployDir"
     Stop-DeployedInstance
     New-Item -ItemType Directory -Force -Path $DeployDir | Out-Null
+
     $DeployedExe = Join-Path $DeployDir $ExeName
-    Copy-DeployedBinary -Source $Downloaded.Exe -Destination $DeployedExe
+    $DeployedWallpaper = Join-Path $DeployDir $WallpaperExeName
+    Copy-WithRetry -Source $Downloaded.Exe -Destination $DeployedExe
+    Copy-WithRetry -Source $Downloaded.WallpaperExe -Destination $DeployedWallpaper
 
     $EverythingExe = Deploy-BundledEverything -ArtifactRoot $Downloaded.Root
     Ensure-EverythingService -EverythingExe $EverythingExe
     Ensure-CodexRuntime | Out-Null
 
+    Step "Starting TuringDesk Wallpaper"
+    Start-Process $DeployedWallpaper
+
     Step "Starting TuringDesk Native Search"
     Start-Process $DeployedExe
     Write-Host "`nDeployment complete. Press Alt+Space to open Search." -ForegroundColor Green
+    Write-Host "Wallpaper settings: $DeployedWallpaper --settings" -ForegroundColor DarkGray
     Write-Host "Path: $DeployDir"
 }
 finally {
