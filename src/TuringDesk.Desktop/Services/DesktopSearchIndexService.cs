@@ -27,6 +27,10 @@ public sealed record DesktopSearchResult(
 /// L1 delegates application discovery/ranking to AppSearchProvider.
 /// L2 delegates global filename/path indexing and querying to Everything.
 /// The coordinator never crawls disks and never starts Node/Harness.
+///
+/// Heavy discovery is not part of the window-construction critical path. App
+/// discovery is warmed after the shell becomes responsive (or on first query), and
+/// Everything stays fully demand-driven until a real file query is issued.
 /// </summary>
 public sealed class DesktopSearchIndexService : IDisposable
 {
@@ -35,7 +39,7 @@ public sealed class DesktopSearchIndexService : IDisposable
     private int _disposed;
 
     public DesktopSearchIndexService()
-        : this(initializeFileSearch: true)
+        : this(initializeFileSearch: false)
     {
     }
 
@@ -59,10 +63,17 @@ public sealed class DesktopSearchIndexService : IDisposable
     // no filename database; Everything owns the file index.
     public int IndexedFileCount => 0;
 
+    public void WarmUpApplications() => _apps.WarmUp();
+
+    public Task WarmUpFileSearchAsync(CancellationToken cancellationToken = default) =>
+        _everything.InitializeAsync(cancellationToken);
+
     /// <summary>
     /// Level 1: RAM-only application ranking over the immutable app snapshot.
     /// Do not resolve Shell icons here: this method runs synchronously for every
-    /// keystroke and must never touch disk, registry, COM, IPC or Explorer.
+    /// keystroke and must never touch disk, registry, COM, IPC or Explorer after the
+    /// background snapshot has been built. A first query can kick off discovery but
+    /// returns immediately from the current snapshot.
     /// </summary>
     public IReadOnlyList<DesktopSearchResult> SearchApps(string query, int limit = 5)
     {
@@ -104,8 +115,8 @@ public sealed class DesktopSearchIndexService : IDisposable
     /// <summary>
     /// Level 2: bounded Everything query. Everything maintains the global filename
     /// index; TuringDesk only asks for the small number of rows visible in the UI.
-    /// Single-character queries stay on the RAM-only app tier to avoid turning
-    /// every first keystroke into IPC and UI churn.
+    /// The Everything process/service is started on first real file query instead of
+    /// during TuringDesk startup. Single-character queries remain RAM-only.
     /// </summary>
     public async Task<IReadOnlyList<DesktopSearchResult>> SearchFilesAsync(
         string query,
