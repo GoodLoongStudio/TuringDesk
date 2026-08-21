@@ -14,6 +14,7 @@ public partial class DesktopSearchBarWindow
     private bool _indexReadyNotified;
     private bool _indexFailureNotified;
     private bool _lastAppSearchReady;
+    private bool _lastFileSearchReady;
 
     protected override void OnContentRendered(EventArgs e)
     {
@@ -21,6 +22,7 @@ public partial class DesktopSearchBarWindow
         if (_indexStatusStarted) return;
         _indexStatusStarted = true;
         _lastAppSearchReady = _searchIndex.AppSearchReady;
+        _lastFileSearchReady = _searchIndex.FileSearchReady;
 
         _indexStatusTimer.Tick += IndexStatusTimer_Tick;
         RefreshIndexStatus();
@@ -52,7 +54,9 @@ public partial class DesktopSearchBarWindow
         var appReady = _searchIndex.AppSearchReady;
         var fileReady = _searchIndex.FileSearchReady;
         var appJustBecameReady = !_lastAppSearchReady && appReady;
+        var fileJustBecameReady = !_lastFileSearchReady && fileReady;
         _lastAppSearchReady = appReady;
+        _lastFileSearchReady = fileReady;
 
         if (appReady && fileReady)
         {
@@ -63,9 +67,16 @@ public partial class DesktopSearchBarWindow
         else if (_searchIndex.IsInitialIndexComplete)
         {
             PlaceholderText.Text = appReady
-                ? "应用搜索已就绪 · Everything 文件搜索未就绪 · AI 仍可使用"
-                : "应用索引未就绪 · Everything 文件搜索可用 · AI 仍可使用";
-            _indexStatusTimer.Stop();
+                ? $"应用搜索已就绪 · {_searchIndex.FileSearchStatus} · AI 仍可使用"
+                : $"{_searchIndex.AppSearchStatus} · Everything 文件搜索可用 · AI 仍可使用";
+
+            // Everything can be started, restarted or finish its own indexing after
+            // TuringDesk's first probe completed. Keep a low-frequency status poll so
+            // the search bar can recover automatically instead of remaining stuck on
+            // "未就绪" for the rest of the desktop session.
+            _indexStatusTimer.Interval = TimeSpan.FromSeconds(2);
+            if (!_indexStatusTimer.IsEnabled)
+                _indexStatusTimer.Start();
 
             if (!_indexFailureNotified)
             {
@@ -78,6 +89,7 @@ public partial class DesktopSearchBarWindow
         }
         else
         {
+            _indexStatusTimer.Interval = TimeSpan.FromMilliseconds(400);
             PlaceholderText.Text = $"{_searchIndex.AppSearchStatus} · {_searchIndex.FileSearchStatus}";
         }
 
@@ -85,7 +97,7 @@ public partial class DesktopSearchBarWindow
             ? Visibility.Visible
             : Visibility.Collapsed;
 
-        if (appJustBecameReady && !string.IsNullOrWhiteSpace(SearchBox.Text))
+        if ((appJustBecameReady || fileJustBecameReady) && !string.IsNullOrWhiteSpace(SearchBox.Text))
             RefreshCurrentQueryAfterIndexReady();
     }
 
