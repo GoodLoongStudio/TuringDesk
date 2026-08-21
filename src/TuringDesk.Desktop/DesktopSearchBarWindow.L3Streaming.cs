@@ -1,4 +1,3 @@
-using System.Windows;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
@@ -27,8 +26,6 @@ public partial class DesktopSearchBarWindow
 
         _quickAnswer.PartialResponseUpdated += OnL3PartialResponseUpdated;
         PreviewKeyDown += L3Window_PreviewKeyDown;
-        if (_retryButton is not null)
-            _retryButton.Click += L3RetryButton_Click;
         Closed += L3Streaming_Closed;
     }
 
@@ -36,8 +33,6 @@ public partial class DesktopSearchBarWindow
     {
         _quickAnswer.PartialResponseUpdated -= OnL3PartialResponseUpdated;
         PreviewKeyDown -= L3Window_PreviewKeyDown;
-        if (_retryButton is not null)
-            _retryButton.Click -= L3RetryButton_Click;
         Interlocked.Increment(ref _l3TimeoutWatchdogGeneration);
 
         if (_l3StreamRenderTimer is not null)
@@ -50,15 +45,6 @@ public partial class DesktopSearchBarWindow
 
     private void L3Window_PreviewKeyDown(object sender, KeyEventArgs e)
     {
-        if (!_busy &&
-            e.Key == Key.Enter &&
-            !Keyboard.Modifiers.HasFlag(ModifierKeys.Shift) &&
-            !Keyboard.Modifiers.HasFlag(ModifierKeys.Control) &&
-            SearchResultsList.SelectedItem is null)
-        {
-            StartL3TimeoutWatchdog(SearchBox.Text.Trim());
-        }
-
         if (!_busy || e.Key != Key.Escape) return;
 
         // Keep the request serialized until the provider has actually unwound its
@@ -73,12 +59,6 @@ public partial class DesktopSearchBarWindow
         ReplyDot.Fill = new SolidColorBrush(Color.FromRgb(148, 163, 184));
         SetL3ActionState(retry: false, deep: false);
         _l3StreamRenderTimer?.Stop();
-    }
-
-    private void L3RetryButton_Click(object sender, RoutedEventArgs e)
-    {
-        if (!_busy) return;
-        StartL3TimeoutWatchdog(SearchBox.Text.Trim());
     }
 
     private void StartL3TimeoutWatchdog(string prompt)
@@ -96,10 +76,10 @@ public partial class DesktopSearchBarWindow
         if (!IsVisible || generation != Volatile.Read(ref _l3TimeoutWatchdogGeneration)) return;
         if (_l3UserCancellationRequested || !string.Equals(SearchBox.Text.Trim(), prompt, StringComparison.Ordinal)) return;
 
-        // SubmitQuickAsync currently owns the timeout CTS. When that CTS fires it can
-        // unwind through the same OperationCanceledException path as a user Escape.
-        // Preserve the explicit timeout failure/retry state after that unwind instead
-        // of silently collapsing the answer panel back to idle.
+        // SubmitQuickAsync owns the timeout CTS. When that CTS fires it can unwind
+        // through the same OperationCanceledException path as a user Escape. Preserve
+        // the explicit timeout failure/retry state after that unwind instead of
+        // silently collapsing the answer panel back to idle.
         if (!_busy && !string.Equals(ReplyTitle.Text, "图灵", StringComparison.Ordinal)) return;
 
         _activeRequest?.Cancel();
