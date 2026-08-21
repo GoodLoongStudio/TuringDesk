@@ -5,6 +5,8 @@ namespace TuringDesk.Desktop;
 
 public partial class MainWindow
 {
+    private ModelSettingsWindow? _modelSettingsWindow;
+
     internal IReadOnlyList<DesktopAiModelChoice> LoadDesktopSearchModelChoices() =>
         new DesktopAiModelChoiceService(_modelStore).LoadChoices();
 
@@ -19,9 +21,24 @@ public partial class MainWindow
             return;
         }
 
+        if (_modelSettingsWindow is { IsVisible: true } existing)
+        {
+            if (existing.WindowState == WindowState.Minimized)
+                existing.WindowState = WindowState.Normal;
+            existing.Activate();
+            existing.Focus();
+            return;
+        }
+
         var current = _modelStore.Load();
         var apiKey = _modelStore.LoadApiKey();
         var window = new ModelSettingsWindow(_modelStore, current, apiKey);
+        _modelSettingsWindow = window;
+        window.Closed += (_, _) =>
+        {
+            if (ReferenceEquals(_modelSettingsWindow, window))
+                _modelSettingsWindow = null;
+        };
         window.Show();
         window.Activate();
     }
