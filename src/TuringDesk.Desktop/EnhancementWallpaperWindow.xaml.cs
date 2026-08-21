@@ -54,16 +54,12 @@ public partial class EnhancementWallpaperWindow : Window
         SourceInitialized += OnSourceInitialized;
         Closed += OnClosed;
 
-        // Explorer/display topology changes are event-driven. This is only a slow
-        // recovery safety-net for drivers/shell restarts that fail to broadcast one.
         _hostHealthTimer = new DispatcherTimer(DispatcherPriority.ContextIdle)
         {
             Interval = TimeSpan.FromSeconds(12)
         };
         _hostHealthTimer.Tick += (_, _) => MaintainDesktopHost();
 
-        // Foreground/fullscreen policy must remain responsive, but it uses cached
-        // settings and does not touch JSON files. Keep it independent from host health.
         _policyTimer = new DispatcherTimer(DispatcherPriority.Background)
         {
             Interval = TimeSpan.FromMilliseconds(1500)
@@ -372,7 +368,19 @@ public partial class EnhancementWallpaperWindow : Window
 
     private async Task LoadSceneByIdAsync(string? sceneId, bool force)
     {
-        var scene = _sceneCatalog.Find(sceneId) ?? _sceneCatalog.Find("builtin:aurora");
+        var requestedSceneId = string.IsNullOrWhiteSpace(sceneId) ? "builtin:aurora" : sceneId.Trim();
+
+        // This check must happen before SceneCatalog.Find(). Find() enumerates user
+        // scene directories and parses manifests, so doing it on every 1.5 s policy
+        // tick created needless disk/CPU work on every monitor even when nothing changed.
+        if (!force &&
+            string.Equals(_loadedSceneId, requestedSceneId, StringComparison.OrdinalIgnoreCase) &&
+            !Renderer.IsStopped)
+        {
+            return;
+        }
+
+        var scene = _sceneCatalog.Find(requestedSceneId) ?? _sceneCatalog.Find("builtin:aurora");
         if (scene is null) return;
         if (!force && string.Equals(_loadedSceneId, scene.Id, StringComparison.OrdinalIgnoreCase) && !Renderer.IsStopped)
             return;
