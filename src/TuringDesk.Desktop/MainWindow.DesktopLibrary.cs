@@ -2,6 +2,8 @@ namespace TuringDesk.Desktop;
 
 public partial class MainWindow
 {
+    private DesktopLibraryWindow? _desktopLibraryWindow;
+
     internal void ShowDesktopLibrary()
     {
         if (!Dispatcher.CheckAccess())
@@ -10,10 +12,22 @@ public partial class MainWindow
             return;
         }
 
-        var window = new DesktopLibraryWindow(_modelStore)
+        if (_desktopLibraryWindow is { IsVisible: true } existing)
         {
-            Owner = IsVisible ? this : null
+            if (existing.WindowState == System.Windows.WindowState.Minimized)
+                existing.WindowState = System.Windows.WindowState.Normal;
+            existing.Activate();
+            return;
+        }
+
+        var window = new DesktopLibraryWindow(_modelStore);
+        _desktopLibraryWindow = window;
+        window.Closed += (_, _) =>
+        {
+            if (ReferenceEquals(_desktopLibraryWindow, window))
+                _desktopLibraryWindow = null;
         };
-        window.ShowDialog();
+        window.Show();
+        window.Activate();
     }
 }
