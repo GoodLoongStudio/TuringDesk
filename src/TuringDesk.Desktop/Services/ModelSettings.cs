@@ -19,18 +19,21 @@ public sealed record ModelSettings(
     string Model,
     bool HasApiKey)
 {
-    public static ModelSettings Default => new("mock", "mock", string.Empty, string.Empty, false);
+    public static ModelSettings Default => new("unconfigured", "direct", string.Empty, string.Empty, false);
+
+    public bool IsConfigured =>
+        !ProviderId.Equals("unconfigured", StringComparison.OrdinalIgnoreCase) &&
+        !string.IsNullOrWhiteSpace(Model);
 }
 
 public static class ModelProviderPresets
 {
     public static readonly ModelProviderPreset[] All =
     {
-        new("mock", "Mock（无需模型）", "mock", string.Empty, string.Empty, false, "无需 API Key，用于安全测试桌面能力。真实模型全部由内置 DeepSeek Harness 驱动。"),
-        new("deepseek", "DeepSeek API", "harness", "https://api.deepseek.com", "deepseek-v4-flash", true, "推荐。粘贴 DeepSeek API Key 一次，TuringDesk 与 Harness Models 页面会共用同一份凭据。"),
-        new("ollama", "Ollama 本地模型", "harness", "http://127.0.0.1:11434/v1", string.Empty, false, "本机 Ollama OpenAI 兼容入口；只需填写模型 ID，通常无需 API Key。TuringDesk 与 Harness 共用这份配置。"),
-        new("lmstudio", "LM Studio 本地模型", "harness", "http://127.0.0.1:1234/v1", string.Empty, false, "本机 LM Studio OpenAI 兼容服务；填写模型 ID，通常无需 API Key。TuringDesk 与 Harness 共用这份配置。"),
-        new("openai-compatible", "OpenAI 兼容 API / 中转站", "harness", string.Empty, string.Empty, false, "填写 Base URL、模型 ID，按服务要求粘贴 API Key。保存后同步到 Harness 通用模型适配层。")
+        new("deepseek", "DeepSeek API", "direct", "https://api.deepseek.com", "deepseek-v4-flash", true, "TuringDesk L3 由原生 HttpClient 直接调用 DeepSeek；保存后同一份配置与凭据同步给 DeepSeek Harness。"),
+        new("ollama", "Ollama 本地模型", "direct", "http://127.0.0.1:11434/v1", string.Empty, false, "TuringDesk L3 直接调用本机 Ollama 的 OpenAI 兼容接口；通常无需 API Key。"),
+        new("lmstudio", "LM Studio 本地模型", "direct", "http://127.0.0.1:1234/v1", string.Empty, false, "TuringDesk L3 直接调用本机 LM Studio 的 OpenAI 兼容接口；通常无需 API Key。"),
+        new("openai-compatible", "OpenAI 兼容 API / 中转站", "direct", string.Empty, string.Empty, false, "填写 Base URL、模型 ID 和服务要求的 API Key。L3 直接调用；保存后同步给 Harness。")
     };
 
     public static ModelProviderPreset Find(string? id) =>
@@ -56,7 +59,8 @@ public sealed class ModelSettingsStore
         try
         {
             if (!File.Exists(_settingsPath)) return ModelSettings.Default;
-            return JsonSerializer.Deserialize<ModelSettings>(File.ReadAllText(_settingsPath)) ?? ModelSettings.Default;
+            var loaded = JsonSerializer.Deserialize<ModelSettings>(File.ReadAllText(_settingsPath)) ?? ModelSettings.Default;
+            return Normalize(loaded);
         }
         catch
         {
@@ -70,7 +74,8 @@ public sealed class ModelSettingsStore
         {
             if (!File.Exists(_settingsPath)) return ModelSettings.Default;
             await using var stream = File.OpenRead(_settingsPath);
-            return await JsonSerializer.DeserializeAsync<ModelSettings>(stream) ?? ModelSettings.Default;
+            var loaded = await JsonSerializer.DeserializeAsync<ModelSettings>(stream) ?? ModelSettings.Default;
+            return Normalize(loaded);
         }
         catch
         {
@@ -81,19 +86,20 @@ public sealed class ModelSettingsStore
     public string? LoadApiKey()
     {
         var settings = Load();
+        if (!settings.IsConfigured) return null;
+
         var shared = HarnessModelBridgeService.LoadCredential(settings);
         if (!string.IsNullOrWhiteSpace(shared)) return shared;
 
-        // Migration/fallback for installations created before v0.14.2. Once a
-        // model is saved again, this copy is mirrored into Harness's official
-        // credential store and both UIs use that shared state.
+        // Migration/recovery copy for installations that predate the shared Harness
+        // credential store, and a Windows-native fallback if Harness state is absent.
         return _credentials.Load();
     }
 
     public async Task SaveAsync(ModelSettings settings, string? apiKey)
     {
         var normalizedKey = apiKey?.Trim();
-        var normalized = settings with { HasApiKey = !string.IsNullOrWhiteSpace(normalizedKey) };
+        var normalized = Normalize(settings) with { HasApiKey = !string.IsNullOrWhiteSpace(normalizedKey) };
         await using (var stream = File.Create(_settingsPath))
         {
             await JsonSerializer.SerializeAsync(stream, normalized, new JsonSerializerOptions { WriteIndented = true });
@@ -101,10 +107,25 @@ public sealed class ModelSettingsStore
 
         if (string.IsNullOrWhiteSpace(normalizedKey)) _credentials.Delete();
         else _credentials.Save(normalizedKey);
+    }
 
-        // Synchronize both official Harness settings and its writable credential
-        // provider. Do not inject the key through the Harness process environment;
-        // that source is read-only and would shadow the Models page.
-        HarnessModelBridgeService.Synchronize(normalized, normalizedKey);
+    private static ModelSettings Normalize(ModelSettings settings)
+    {
+        if (settings.ProviderId.Equals("mock", StringComparison.OrdinalIgnoreCase) ||
+            settings.Mode.Equals("mock", StringComparison.OrdinalIgnoreCase))
+            return ModelSettings.Default;
+
+        if (settings.ProviderId.Equals("unconfigured", StringComparison.OrdinalIgnoreCase) ||
+            string.IsNullOrWhiteSpace(settings.ProviderId))
+            return ModelSettings.Default;
+
+        // Older builds incorrectly described real providers as "harness" mode even
+        // though L3 is meant to call them directly. Migrate those files in memory so
+        // existing users do not have to re-enter their configuration.
+        var mode = settings.Mode.Equals("harness", StringComparison.OrdinalIgnoreCase)
+            ? "direct"
+            : string.IsNullOrWhiteSpace(settings.Mode) ? "direct" : settings.Mode;
+
+        return settings with { Mode = mode };
     }
 }
