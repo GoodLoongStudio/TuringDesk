@@ -6,9 +6,9 @@ using System.Text.Json;
 namespace TuringDesk.Desktop.Services;
 
 /// <summary>
-/// Lightweight provider connectivity probe used by settings. This path stays
-/// independent from HarnessWebUiService so testing a model never wakes the
-/// full 4319 workbench.
+/// Lightweight direct-provider connectivity probe used by the shared model
+/// configuration center. It never wakes Harness; the request goes straight from
+/// TuringDesk to the selected model endpoint using the same endpoint semantics as L3.
 /// </summary>
 public sealed class ModelConnectionProbeService
 {
@@ -22,17 +22,15 @@ public sealed class ModelConnectionProbeService
         string? apiKey,
         CancellationToken cancellationToken = default)
     {
-        if (settings.ProviderId.Equals("mock", StringComparison.OrdinalIgnoreCase) ||
-            settings.Mode.Equals("mock", StringComparison.OrdinalIgnoreCase))
-        {
-            return "Mock 模式无需网络连接。";
-        }
-
+        if (!settings.IsConfigured)
+            throw new InvalidOperationException("模型尚未配置。");
         if (string.IsNullOrWhiteSpace(settings.BaseUrl))
             throw new InvalidOperationException("Base URL 为空。");
         if (string.IsNullOrWhiteSpace(settings.Model))
             throw new InvalidOperationException("模型 ID 为空。");
-        if (string.IsNullOrWhiteSpace(apiKey) && settings.ProviderId is not "ollama" and not "lmstudio")
+
+        var preset = ModelProviderPresets.Find(settings.ProviderId);
+        if (preset.RequiresApiKey && string.IsNullOrWhiteSpace(apiKey))
             throw new InvalidOperationException("API Key 为空。这个提供商需要凭据。");
 
         var endpoint = L3ChatProviderClient.ResolveChatCompletionsEndpoint(settings);
@@ -111,10 +109,10 @@ public sealed class ModelConnectionProbeService
                 choices.ValueKind != JsonValueKind.Array ||
                 choices.GetArrayLength() == 0)
             {
-                throw new InvalidOperationException("返回格式不兼容：模型接口已连接，但没有返回 OpenAI-compatible choices。请检查 Base URL 和模型类型。");
+                throw new InvalidOperationException("返回格式不兼容：接口已连接，但没有返回 OpenAI-compatible choices。请检查 Base URL 和模型类型。");
             }
 
-            return $"{settings.Model} 可用";
+            return $"{settings.Model} 可用 · L3 直连成功";
         }
     }
 
