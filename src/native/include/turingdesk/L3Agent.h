@@ -1,8 +1,10 @@
 #pragma once
 #include <atomic>
 #include <functional>
+#include <mutex>
 #include <string>
 #include <thread>
+#include <vector>
 #include <windows.h>
 #include <winhttp.h>
 
@@ -30,16 +32,24 @@ public:
     bool HasApiKey() const;
 
 private:
+    struct ChatTurn {
+        std::wstring user;
+        std::wstring assistant;
+    };
+
     ModelConfig LoadConfig() const;
     bool SaveConfig(const ModelConfig& config) const;
     std::wstring LoadApiKey() const;
     bool SaveApiKey(const std::wstring& key) const;
     void RunRequest(std::wstring prompt, DeltaCallback onDelta, DoneCallback onDone, std::stop_token stopToken);
+    void ClearConversation();
 
     ModelConfig config_;
     std::jthread worker_;
     std::atomic_bool busy_{false};
     std::atomic<HINTERNET> activeRequest_{nullptr};
+    std::mutex conversationMutex_;
+    std::vector<ChatTurn> conversation_;
 };
 
 } // namespace turingdesk
