@@ -18,6 +18,7 @@ public partial class EnhancementWallpaperWindow : Window
     private readonly DesktopPlaybackSettingsStore _playbackStore = new();
     private readonly DesktopPlaybackRuleEngine _ruleEngine = new();
     private readonly DispatcherTimer _hostHealthTimer;
+    private readonly DispatcherTimer _policyTimer;
     private readonly SemaphoreSlim _sceneLoadGate = new(1, 1);
 
     private ShellSettings _settings;
@@ -26,6 +27,7 @@ public partial class EnhancementWallpaperWindow : Window
     private IntPtr _windowHandle;
     private bool _attached;
     private bool _maintenanceRunning;
+    private bool _policyEvaluationRunning;
     private string? _loadedSceneId;
     private ApplicationRuleAction _lastPolicyAction = ApplicationRuleAction.KeepRunning;
     private string? _lastPolicyTarget;
@@ -52,8 +54,21 @@ public partial class EnhancementWallpaperWindow : Window
         SourceInitialized += OnSourceInitialized;
         Closed += OnClosed;
 
-        _hostHealthTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
-        _hostHealthTimer.Tick += async (_, _) => await MaintainDesktopEngineAsync();
+        // Explorer/display topology changes are event-driven. This is only a slow
+        // recovery safety-net for drivers/shell restarts that fail to broadcast one.
+        _hostHealthTimer = new DispatcherTimer(DispatcherPriority.ContextIdle)
+        {
+            Interval = TimeSpan.FromSeconds(12)
+        };
+        _hostHealthTimer.Tick += (_, _) => MaintainDesktopHost();
+
+        // Foreground/fullscreen policy must remain responsive, but it uses cached
+        // settings and does not touch JSON files. Keep it independent from host health.
+        _policyTimer = new DispatcherTimer(DispatcherPriority.Background)
+        {
+            Interval = TimeSpan.FromMilliseconds(1500)
+        };
+        _policyTimer.Tick += async (_, _) => await EvaluatePlaybackPolicyAsync();
     }
 
     public bool IsAttached => _attached;
@@ -104,6 +119,7 @@ public partial class EnhancementWallpaperWindow : Window
         _source = HwndSource.FromHwnd(_windowHandle);
         _source?.AddHook(WndProc);
         ShellSettingsStore.SettingsChanged += OnShellSettingsChanged;
+        DesktopPlaybackSettingsStore.SettingsChanged += OnPlaybackSettingsChanged;
 
         DisplayManager.PositionWindow(this, _monitor);
         _attached = ExplorerDesktopHost.TryAttach(
@@ -118,13 +134,16 @@ public partial class EnhancementWallpaperWindow : Window
 
         ReportProbe();
         _ = RefreshBaseSceneAsync(force: true);
+        _policyTimer.Start();
         _hostHealthTimer.Start();
     }
 
     private void OnClosed(object? sender, EventArgs e)
     {
         _hostHealthTimer.Stop();
+        _policyTimer.Stop();
         ShellSettingsStore.SettingsChanged -= OnShellSettingsChanged;
+        DesktopPlaybackSettingsStore.SettingsChanged -= OnPlaybackSettingsChanged;
         _sceneLoadVersion++;
         var activeLoad = Interlocked.Exchange(ref _sceneLoadCancellation, null);
         try { activeLoad?.Cancel(); } catch (ObjectDisposedException) { }
@@ -176,13 +195,23 @@ public partial class EnhancementWallpaperWindow : Window
     {
         Dispatcher.BeginInvoke(new Action(() =>
         {
-            _settings = _settingsStore.Load();
+            var latestSettings = _settingsStore.Load();
+            var appearanceChanged = AppearanceRequiresReload(_settings.Appearance, latestSettings.Appearance);
+            _settings = latestSettings;
+            _ = ApplyPlaybackPolicyAsync(forceProfileRefresh: appearanceChanged);
+        }), DispatcherPriority.Background);
+    }
+
+    private void OnPlaybackSettingsChanged()
+    {
+        Dispatcher.BeginInvoke(new Action(() =>
+        {
             _playbackSettings = _playbackStore.Load();
             _ = ApplyPlaybackPolicyAsync(forceProfileRefresh: true);
         }), DispatcherPriority.Background);
     }
 
-    private async Task MaintainDesktopEngineAsync()
+    private void MaintainDesktopHost()
     {
         if (_maintenanceRunning) return;
         _maintenanceRunning = true;
@@ -193,16 +222,32 @@ public partial class EnhancementWallpaperWindow : Window
                 UpdateMonitor(freshMonitor);
 
             MaintainExplorerAttachment();
-
-            var latestSettings = _settingsStore.Load();
-            var appearanceChanged = AppearanceRequiresReload(_settings.Appearance, latestSettings.Appearance);
-            _settings = latestSettings;
-            _playbackSettings = _playbackStore.Load();
-            await ApplyPlaybackPolicyAsync(forceProfileRefresh: appearanceChanged);
+        }
+        catch (Exception error)
+        {
+            SceneEngineTrace.Error("desktop.health", $"monitor={MonitorId}", error);
         }
         finally
         {
             _maintenanceRunning = false;
+        }
+    }
+
+    private async Task EvaluatePlaybackPolicyAsync()
+    {
+        if (_policyEvaluationRunning) return;
+        _policyEvaluationRunning = true;
+        try
+        {
+            await ApplyPlaybackPolicyAsync(forceProfileRefresh: false);
+        }
+        catch (Exception error)
+        {
+            SceneEngineTrace.Error("desktop.policy", $"monitor={MonitorId}", error);
+        }
+        finally
+        {
+            _policyEvaluationRunning = false;
         }
     }
 
@@ -340,9 +385,6 @@ public partial class EnhancementWallpaperWindow : Window
         var gateEntered = false;
         try
         {
-            // Renderer.LoadAsync mutates one shared WebView/GPU/MediaElement graph.
-            // Serialize mutations so a cancelled old load always completes its Stop()
-            // before the replacement load begins touching the renderer.
             await _sceneLoadGate.WaitAsync(cancellation.Token);
             gateEntered = true;
             cancellation.Token.ThrowIfCancellationRequested();
@@ -361,8 +403,6 @@ public partial class EnhancementWallpaperWindow : Window
         }
         catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
         {
-            // Superseded scene load. The replacement waits on _sceneLoadGate until
-            // this operation has completely unwound its renderer cleanup.
         }
         catch (Exception error)
         {
