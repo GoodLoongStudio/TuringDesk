@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <cwctype>
 #include <memory>
+#include <utility>
 
 namespace turingdesk {
 namespace {
@@ -41,8 +42,8 @@ struct CliState {
     HWND close{};
     WNDPROC oldInputProc{};
     L3Agent* agent{};
-    std::unique_ptr<CodexRuntime> codex;
-    std::unique_ptr<DirectToolRuntime> directTools;
+    CodexRuntime* codex{};
+    DirectToolRuntime* directTools{};
     HBRUSH backgroundBrush{};
     HFONT monoFont{};
     HFONT uiFont{};
@@ -56,6 +57,8 @@ struct CliState {
 };
 
 std::atomic_uint64_t gCliGeneration{0};
+CodexRuntime gCodexRuntime;
+DirectToolRuntime gDirectToolRuntime;
 
 std::wstring Trim(std::wstring value) {
     const auto notSpace = [](wchar_t ch) { return !std::iswspace(ch); };
@@ -99,7 +102,7 @@ void AppendCompleted(CliState& state, const std::wstring& user, const std::wstri
     RenderTranscript(state);
 }
 
-std::wstring RuntimeName(const CliState& state, ActiveRuntime runtime) {
+std::wstring RuntimeName(const CliState&, ActiveRuntime runtime) {
     switch (runtime) {
     case ActiveRuntime::Codex: return L"Codex Agent Runtime";
     case ActiveRuntime::DirectTools: return L"Direct Agent Tool Runtime";
@@ -258,6 +261,7 @@ LRESULT CALLBACK CliProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) 
             if (ShowModelSettingsWindow(state->instance, hwnd, *state->agent)) {
                 state->codex->ResetSession();
                 state->directTools->ResetSession();
+                state->lastPrompt.clear();
                 state->transcriptPrefix += L"[配置] " + state->agent->Config().model + L" 已保存\r\n";
                 state->transcriptPrefix += L"[Runtime] " + RuntimeStatusText(*state) + L"\r\n\r\n";
                 RenderTranscript(*state);
@@ -286,6 +290,7 @@ LRESULT CALLBACK CliProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) 
         if (!payload->text.empty()) {
             if (state->streaming.empty()) state->streaming = payload->text;
             else state->streaming += L"\r\n" + payload->text;
+            if (!state->lastPrompt.empty()) state->streaming += L"\r\n[可输入 /retry 重试上一请求]";
         }
         if (state->streaming.empty()) state->streaming = L"[完成，无可显示内容]";
         state->transcriptPrefix += state->streaming + L"\r\n\r\n";
@@ -317,8 +322,8 @@ LRESULT CALLBACK CliProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) 
     case WM_DESTROY:
         gCliGeneration.fetch_add(1, std::memory_order_relaxed);
         state->agent->Stop();
-        state->directTools->ResetSession();
-        state->codex->ResetSession();
+        state->directTools->Stop();
+        state->codex->Stop();
         return 0;
     }
     return DefWindowProcW(hwnd, message, wParam, lParam);
@@ -340,8 +345,8 @@ bool ShowL3CliWindow(HINSTANCE instance, HWND owner, L3Agent& agent, const std::
     state.instance = instance;
     state.owner = owner;
     state.agent = &agent;
-    state.codex = std::make_unique<CodexRuntime>();
-    state.directTools = std::make_unique<DirectToolRuntime>();
+    state.codex = &gCodexRuntime;
+    state.directTools = &gDirectToolRuntime;
     state.backgroundBrush = CreateSolidBrush(RGB(24, 26, 31));
     state.monoFont = CreateFontW(-17, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
                                  OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
@@ -395,13 +400,7 @@ bool ShowL3CliWindow(HINSTANCE instance, HWND owner, L3Agent& agent, const std::
     SendMessageW(state.transcript, WM_SETFONT, reinterpret_cast<WPARAM>(state.monoFont), TRUE);
     SendMessageW(state.input, WM_SETFONT, reinterpret_cast<WPARAM>(state.monoFont), TRUE);
     SendMessageW(state.input, EM_SETCUEBANNER, TRUE,
-                 reinterpret_cast<LPARAM>(L"继续对话… Enter 发送 · /runtime 查看运行时 · Esc 返回"));
-
-    std::wstring ignored;
-    bool secret = false;
-    agent.TryHandleLocal(L"/new", ignored, secret);
-    state.directTools->ResetSession();
-    state.codex->ResetSession();
+                 reinterpret_cast<LPARAM>(L"继续对话… Enter 发送 · /retry 重试 · /runtime 查看运行时 · Esc 返回"));
 
     ShowWindow(window, SW_SHOWNORMAL);
     SetForegroundWindow(window);
