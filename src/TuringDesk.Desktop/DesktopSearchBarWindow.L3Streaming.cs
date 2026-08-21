@@ -50,8 +50,14 @@ public partial class DesktopSearchBarWindow
 
     private void L3Window_PreviewKeyDown(object sender, KeyEventArgs e)
     {
-        if (!_busy && e.Key == Key.Enter && !Keyboard.Modifiers.HasFlag(ModifierKeys.Shift))
+        if (!_busy &&
+            e.Key == Key.Enter &&
+            !Keyboard.Modifiers.HasFlag(ModifierKeys.Shift) &&
+            !Keyboard.Modifiers.HasFlag(ModifierKeys.Control) &&
+            SearchResultsList.SelectedItem is null)
+        {
             StartL3TimeoutWatchdog(SearchBox.Text.Trim());
+        }
 
         if (!_busy || e.Key != Key.Escape) return;
 
