@@ -66,7 +66,7 @@
                                            VerticalAlignment="Center"/>
                             </Border>
                             <StackPanel Grid.Column="1" Margin="3,3,6,2">
-                                <TextBlock Text="AI 模型"
+                                <TextBlock Text="L3 模型"
                                            Foreground="#64748B"
                                            FontSize="9.5"
                                            LineHeight="11"/>
@@ -81,7 +81,7 @@
                                           FontSize="11.5"
                                           FontWeight="SemiBold"
                                           DisplayMemberPath="DisplayName"
-                                          ToolTip="选择轻量翻译/解释使用的模型；复杂任务只在点击深度处理后启动 Harness"
+                                          ToolTip="L3 本地工具无需模型；问答、翻译和解释使用这里选择的模型。复杂 Agent 任务只有显式深度处理才启动 Harness"
                                           SelectionChanged="ModelSelector_SelectionChanged"/>
                             </StackPanel>
                         </Grid>
@@ -106,7 +106,7 @@
                                  KeyDown="SearchBox_KeyDown"
                                  TextChanged="SearchBox_TextChanged"/>
                         <TextBlock x:Name="PlaceholderText"
-                                   Text="搜索应用、文件，计算/翻译，或交给 AI…"
+                                   Text="搜索应用/文件，问 AI，或输入 /help 使用本地 CLI…"
                                    Foreground="#7B8798"
                                    FontSize="14.5"
                                    VerticalAlignment="Center"
@@ -279,7 +279,7 @@
                                 BorderThickness="1"
                                 FontSize="11.5"
                                 FontWeight="SemiBold"
-                                Content="深度处理 · 打开 Harness"/>
+                                Content="深度处理 · 打开 AI 工作台"/>
                     </Grid>
                 </Border>
             </Grid>
