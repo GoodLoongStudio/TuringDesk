@@ -12,7 +12,7 @@ add_executable(TuringDesk WIN32
 )
 
 add_executable(TuringDeskWallpaper WIN32
-    src/WallpaperMain.cpp
+    src/WallpaperEngine.cpp
 )
 
 target_include_directories(TuringDesk PRIVATE include)
@@ -23,7 +23,6 @@ target_compile_definitions(TuringDesk PRIVATE
 )
 
 target_include_directories(TuringDeskWallpaper PRIVATE include)
-target_precompile_headers(TuringDeskWallpaper PRIVATE include/turingdesk/WallpaperCompat.h)
 target_compile_features(TuringDeskWallpaper PRIVATE cxx_std_23)
 target_compile_definitions(TuringDeskWallpaper PRIVATE
     UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN
