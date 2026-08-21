@@ -23,13 +23,14 @@ jobs:
         run: cmake --build build --config Release --parallel
       - name: Native Search self-test
         run: .\build\src\native\Release\TuringDesk.exe --self-test
-      - name: Package x64 with Everything
+      - name: Package x64 with Everything and Wallpaper
         shell: pwsh
         run: |
           $package = "build/package"
           $everything = Join-Path $package "Everything"
           New-Item -ItemType Directory -Force -Path $everything | Out-Null
           Copy-Item "build/src/native/Release/TuringDesk.exe" (Join-Path $package "TuringDesk.exe") -Force
+          Copy-Item "build/src/native/Release/TuringDeskWallpaper.exe" (Join-Path $package "TuringDeskWallpaper.exe") -Force
           $zip = Join-Path $env:RUNNER_TEMP "Everything-x64.zip"
           Invoke-WebRequest "https://www.voidtools.com/Everything-$env:EVERYTHING_VERSION.x64.zip" -OutFile $zip
           Expand-Archive $zip -DestinationPath $everything -Force
@@ -49,13 +50,14 @@ jobs:
         run: cmake --build build --config Release --parallel
       - name: Native Search self-test
         run: .\build\src\native\Release\TuringDesk.exe --self-test
-      - name: Package ARM64 with Everything
+      - name: Package ARM64 with Everything and Wallpaper
         shell: pwsh
         run: |
           $package = "build/package"
           $everything = Join-Path $package "Everything"
           New-Item -ItemType Directory -Force -Path $everything | Out-Null
           Copy-Item "build/src/native/Release/TuringDesk.exe" (Join-Path $package "TuringDesk.exe") -Force
+          Copy-Item "build/src/native/Release/TuringDeskWallpaper.exe" (Join-Path $package "TuringDeskWallpaper.exe") -Force
           $zip = Join-Path $env:RUNNER_TEMP "Everything-ARM64.zip"
           Invoke-WebRequest "https://www.voidtools.com/Everything-$env:EVERYTHING_VERSION.ARM64.zip" -OutFile $zip
           Expand-Archive $zip -DestinationPath $everything -Force
