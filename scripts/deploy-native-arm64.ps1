@@ -5,8 +5,6 @@ param(
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 
-$Root = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
-$BuildDir = Join-Path $Root "build\arm64-local"
 $DeployDir = Join-Path $env:LOCALAPPDATA "TuringDesk\NativeTest"
 $ArtifactName = "TuringDesk-Native-Search-ARM64"
 $Workflow = "native-search-windows.yml"
@@ -31,34 +29,28 @@ function Test-Binary([string]$Exe) {
     }
 }
 
-function Try-LocalBuild {
-    if (-not (Get-Command cmake -ErrorAction SilentlyContinue)) {
-        return $null
+function Get-MainSha {
+    $Sha = (& gh api "repos/$Repo/commits/main" --jq ".sha").Trim()
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($Sha)) {
+        throw "Unable to resolve main commit SHA"
     }
-
-    try {
-        Step "CMake found; trying local ARM64 incremental build"
-        & cmake -S $Root -B $BuildDir -A ARM64
-        if ($LASTEXITCODE -ne 0) { throw "CMake configure failed" }
-
-        & cmake --build $BuildDir --config Release --parallel
-        if ($LASTEXITCODE -ne 0) { throw "CMake build failed" }
-
-        $Exe = Join-Path $BuildDir "src\native\Release\$ExeName"
-        if (-not (Test-Path $Exe)) {
-            throw "Build succeeded but $ExeName was not found"
-        }
-        return $Exe
-    }
-    catch {
-        Write-Warning "Local ARM64 build unavailable: $($_.Exception.Message)"
-        Write-Host "Falling back to GitHub Actions ARM64 artifact." -ForegroundColor Yellow
-        return $null
-    }
+    return $Sha
 }
 
-function Get-LatestSuccessfulRunId {
-    $Json = & gh run list --repo $Repo --workflow $Workflow --branch main --status success --limit 1 --json databaseId
+function Get-RunForCommit([string]$Sha, [switch]$SuccessfulOnly) {
+    $Args = @(
+        "run", "list",
+        "--repo", $Repo,
+        "--workflow", $Workflow,
+        "--commit", $Sha,
+        "--limit", "1",
+        "--json", "databaseId,headSha,status,conclusion"
+    )
+    if ($SuccessfulOnly) {
+        $Args += @("--status", "success")
+    }
+
+    $Json = & gh @Args
     if ($LASTEXITCODE -ne 0) {
         throw "Unable to query GitHub Actions runs"
     }
@@ -67,132 +59,102 @@ function Get-LatestSuccessfulRunId {
     if ($Runs.Count -eq 0) {
         return $null
     }
-    return $Runs[0].databaseId
+    return $Runs[0]
 }
 
-function Start-And-WaitForCiRun {
-    Step "No usable artifact found; starting GitHub Actions build"
+function Start-And-WaitForRun([string]$Sha) {
+    Step "No successful ARM64 package for current main; starting CI"
     & gh workflow run $Workflow --repo $Repo --ref main
     if ($LASTEXITCODE -ne 0) {
         throw "Unable to start GitHub Actions workflow"
     }
 
-    Start-Sleep -Seconds 4
-    $Json = & gh run list --repo $Repo --workflow $Workflow --branch main --limit 1 --json databaseId,status,conclusion
-    if ($LASTEXITCODE -ne 0) {
-        throw "Unable to find newly started workflow run"
+    $Run = $null
+    for ($i = 0; $i -lt 30; $i++) {
+        Start-Sleep -Seconds 2
+        $Run = Get-RunForCommit $Sha
+        if ($Run) { break }
     }
 
-    $Runs = @($Json | ConvertFrom-Json)
-    if ($Runs.Count -eq 0) {
-        throw "Workflow was started but no run was found"
+    if (-not $Run) {
+        throw "Workflow was started but its run could not be found"
     }
 
-    $RunId = $Runs[0].databaseId
-    Step "Waiting for GitHub Actions run $RunId"
-    & gh run watch $RunId --repo $Repo --exit-status
+    Step "Waiting for GitHub Actions run $($Run.databaseId)"
+    & gh run watch $Run.databaseId --repo $Repo --exit-status
     if ($LASTEXITCODE -ne 0) {
-        throw "GitHub Actions ARM64 build failed"
+        throw "GitHub Actions build failed"
     }
-    return $RunId
+
+    return [long]$Run.databaseId
 }
 
-function Download-ArtifactFromRun([long]$RunId) {
+function Download-Artifact([long]$RunId) {
     $Temp = Join-Path $env:TEMP ("TuringDesk-ARM64-" + [guid]::NewGuid().ToString("N"))
     New-Item -ItemType Directory -Force -Path $Temp | Out-Null
 
-    try {
-        Step "Downloading ARM64 artifact from run $RunId"
-        & gh run download $RunId --repo $Repo --name $ArtifactName --dir $Temp
-        if ($LASTEXITCODE -ne 0) {
-            return $null
-        }
-
-        $Found = Get-ChildItem -Path $Temp -Filter $ExeName -Recurse | Select-Object -First 1
-        if (-not $Found) {
-            return $null
-        }
-
-        $Cache = Join-Path $Root "build\arm64-artifact"
-        Remove-Item $Cache -Recurse -Force -ErrorAction SilentlyContinue
-        New-Item -ItemType Directory -Force -Path $Cache | Out-Null
-        $CachedExe = Join-Path $Cache $ExeName
-        Copy-Item $Found.FullName $CachedExe -Force
-        return $CachedExe
-    }
-    finally {
-        Remove-Item $Temp -Recurse -Force -ErrorAction SilentlyContinue
-    }
-}
-
-function Download-LatestArtifact {
-    if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
-        throw "GitHub CLI (gh) was not found in PATH"
-    }
-
-    Step "Checking GitHub CLI authentication"
-    & gh auth status 2>$null
+    Step "Downloading ARM64 artifact from run $RunId"
+    & gh run download $RunId --repo $Repo --name $ArtifactName --dir $Temp
     if ($LASTEXITCODE -ne 0) {
-        throw "GitHub CLI is not authenticated. Run: gh auth login"
+        Remove-Item $Temp -Recurse -Force -ErrorAction SilentlyContinue
+        throw "Unable to download ARM64 artifact"
     }
 
-    $RunId = Get-LatestSuccessfulRunId
-    if ($RunId) {
-        $Exe = Download-ArtifactFromRun $RunId
-        if ($Exe) {
-            return $Exe
-        }
-        Write-Host "Latest successful run has no usable ARM64 artifact." -ForegroundColor Yellow
+    $Found = Get-ChildItem -Path $Temp -Filter $ExeName -Recurse | Select-Object -First 1
+    if (-not $Found) {
+        Remove-Item $Temp -Recurse -Force -ErrorAction SilentlyContinue
+        throw "$ExeName was not found in ARM64 artifact"
     }
 
-    $RunId = Start-And-WaitForCiRun
-    $Exe = Download-ArtifactFromRun $RunId
-    if (-not $Exe) {
-        throw "ARM64 artifact could not be downloaded after successful CI"
+    return @{
+        Exe = $Found.FullName
+        Temp = $Temp
     }
-    return $Exe
 }
 
-Step "Preparing source tree"
-$GitDir = Join-Path $Root ".git"
-if ((Test-Path $GitDir) -and (Get-Command git -ErrorAction SilentlyContinue)) {
-    & git -C $Root fetch origin main
-    if ($LASTEXITCODE -ne 0) { throw "git fetch failed" }
+if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
+    throw "GitHub CLI (gh) was not found in PATH"
+}
 
-    $Branch = (& git -C $Root branch --show-current).Trim()
-    if ($Branch -eq "main") {
-        & git -C $Root pull --ff-only origin main
-        if ($LASTEXITCODE -ne 0) {
-            throw "git pull --ff-only failed; resolve local changes first"
-        }
-    }
-    else {
-        Write-Host "Current branch is $Branch; building current working tree." -ForegroundColor Yellow
-    }
+Step "Checking GitHub CLI authentication"
+& gh auth status 2>$null
+if ($LASTEXITCODE -ne 0) {
+    throw "GitHub CLI is not authenticated. Run: gh auth login"
+}
+
+Step "Resolving current main commit"
+$MainSha = Get-MainSha
+Write-Host "main: $MainSha" -ForegroundColor DarkGray
+
+$Run = Get-RunForCommit $MainSha -SuccessfulOnly
+if ($Run) {
+    $RunId = [long]$Run.databaseId
+    Step "Found successful build for current main: run $RunId"
 }
 else {
-    Write-Host "Git checkout not detected; using current extracted files." -ForegroundColor DarkGray
+    $RunId = Start-And-WaitForRun $MainSha
 }
 
-$Exe = Try-LocalBuild
-if (-not $Exe) {
-    $Exe = Download-LatestArtifact
+$Downloaded = Download-Artifact $RunId
+try {
+    Test-Binary $Downloaded.Exe
+
+    Step "Deploying to $DeployDir"
+    Stop-DeployedInstance
+    New-Item -ItemType Directory -Force -Path $DeployDir | Out-Null
+    $DeployedExe = Join-Path $DeployDir $ExeName
+    Copy-Item $Downloaded.Exe $DeployedExe -Force
+
+    $Everything = Get-Process Everything -ErrorAction SilentlyContinue
+    if (-not $Everything) {
+        Write-Host "NOTE: Everything is not running. L2 file search is unavailable; L1 and L3 still work." -ForegroundColor Yellow
+    }
+
+    Step "Starting TuringDesk Native Search"
+    Start-Process $DeployedExe
+    Write-Host "`nDeployment complete. Press Alt+Space to open Search." -ForegroundColor Green
+    Write-Host "Path: $DeployDir"
 }
-
-Test-Binary $Exe
-
-Step "Deploying to $DeployDir"
-Stop-DeployedInstance
-New-Item -ItemType Directory -Force -Path $DeployDir | Out-Null
-$DeployedExe = Join-Path $DeployDir $ExeName
-Copy-Item $Exe $DeployedExe -Force
-
-$Everything = Get-Process Everything -ErrorAction SilentlyContinue
-if (-not $Everything) {
-    Write-Host "NOTE: Everything is not running. L2 file search will be unavailable; L1 and L3 still work." -ForegroundColor Yellow
+finally {
+    Remove-Item $Downloaded.Temp -Recurse -Force -ErrorAction SilentlyContinue
 }
-
-Step "Starting TuringDesk Native Search"
-Start-Process $DeployedExe
-Write-Host "`nDeployment complete. Press Alt+Space to open Search." -ForegroundColor Green
-Write-Host "Path: $DeployDir"
