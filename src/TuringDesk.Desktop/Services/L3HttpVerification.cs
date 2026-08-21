@@ -87,21 +87,8 @@ public static class L3HttpVerification
         using var client = await listener.AcceptTcpClientAsync(cancellationToken);
         await using var network = client.GetStream();
 
-        var headerBytes = new List<byte>(2048);
-        var window = new Queue<byte>(4);
-        while (true)
-        {
-            var buffer = new byte[1];
-            var read = await network.ReadAsync(buffer, cancellationToken);
-            if (read == 0) throw new InvalidOperationException("loopback client closed before HTTP headers completed");
-            headerBytes.Add(buffer[0]);
-            window.Enqueue(buffer[0]);
-            while (window.Count > 4) window.Dequeue();
-            if (window.Count == 4 && window.SequenceEqual(new byte[] { 13, 10, 13, 10 })) break;
-            if (headerBytes.Count > 64 * 1024) throw new InvalidOperationException("loopback HTTP headers were unexpectedly large");
-        }
-
-        var headerText = Encoding.ASCII.GetString(headerBytes.ToArray());
+        var headerBytes = await ReadHeadersAsync(network, cancellationToken);
+        var headerText = Encoding.ASCII.GetString(headerBytes);
         var lines = headerText.Split(new[] { "\r\n" }, StringSplitOptions.RemoveEmptyEntries);
         var requestParts = lines[0].Split(' ', StringSplitOptions.RemoveEmptyEntries);
         var path = requestParts.Length >= 2 ? requestParts[1] : string.Empty;
@@ -113,17 +100,7 @@ public static class L3HttpVerification
             headers[line[..colon].Trim()] = line[(colon + 1)..].Trim();
         }
 
-        var contentLength = headers.TryGetValue("Content-Length", out var lengthText) && int.TryParse(lengthText, out var parsedLength)
-            ? parsedLength
-            : 0;
-        var bodyBytes = new byte[contentLength];
-        var offset = 0;
-        while (offset < bodyBytes.Length)
-        {
-            var read = await network.ReadAsync(bodyBytes.AsMemory(offset), cancellationToken);
-            if (read == 0) throw new InvalidOperationException("loopback client closed before HTTP body completed");
-            offset += read;
-        }
+        var bodyBytes = await ReadBodyAsync(network, headers, cancellationToken);
 
         const string sse = "data: {\"choices\":[{\"delta\":{\"content\":\"你\"}}]}\n\n" +
                            "data: {\"choices\":[{\"delta\":{\"content\":\"好\"}}]}\n\n" +
@@ -143,6 +120,101 @@ public static class L3HttpVerification
             path,
             headers.TryGetValue("Authorization", out var authorization) ? authorization : string.Empty,
             Encoding.UTF8.GetString(bodyBytes));
+    }
+
+    private static async Task<byte[]> ReadHeadersAsync(Stream network, CancellationToken cancellationToken)
+    {
+        var bytes = new List<byte>(2048);
+        var tail = new Queue<byte>(4);
+        while (true)
+        {
+            var buffer = new byte[1];
+            var read = await network.ReadAsync(buffer, cancellationToken);
+            if (read == 0) throw new InvalidOperationException("loopback client closed before HTTP headers completed");
+            bytes.Add(buffer[0]);
+            tail.Enqueue(buffer[0]);
+            while (tail.Count > 4) tail.Dequeue();
+            if (tail.Count == 4 && tail.SequenceEqual(new byte[] { 13, 10, 13, 10 })) break;
+            if (bytes.Count > 64 * 1024) throw new InvalidOperationException("loopback HTTP headers were unexpectedly large");
+        }
+        return bytes.ToArray();
+    }
+
+    private static async Task<byte[]> ReadBodyAsync(
+        Stream network,
+        IReadOnlyDictionary<string, string> headers,
+        CancellationToken cancellationToken)
+    {
+        if (headers.TryGetValue("Content-Length", out var lengthText) &&
+            int.TryParse(lengthText, out var contentLength) &&
+            contentLength >= 0)
+        {
+            var body = new byte[contentLength];
+            await ReadExactlyAsync(network, body, cancellationToken);
+            return body;
+        }
+
+        if (headers.TryGetValue("Transfer-Encoding", out var transferEncoding) &&
+            transferEncoding.Contains("chunked", StringComparison.OrdinalIgnoreCase))
+        {
+            using var body = new MemoryStream();
+            while (true)
+            {
+                var sizeLine = await ReadAsciiLineAsync(network, cancellationToken);
+                var semicolon = sizeLine.IndexOf(';');
+                var sizeToken = (semicolon >= 0 ? sizeLine[..semicolon] : sizeLine).Trim();
+                if (!int.TryParse(sizeToken, System.Globalization.NumberStyles.HexNumber, null, out var chunkSize))
+                    throw new InvalidOperationException($"invalid chunk size: {sizeLine}");
+
+                if (chunkSize == 0)
+                {
+                    while (!string.IsNullOrEmpty(await ReadAsciiLineAsync(network, cancellationToken))) { }
+                    break;
+                }
+
+                var chunk = new byte[chunkSize];
+                await ReadExactlyAsync(network, chunk, cancellationToken);
+                await body.WriteAsync(chunk, cancellationToken);
+                var chunkTerminator = new byte[2];
+                await ReadExactlyAsync(network, chunkTerminator, cancellationToken);
+                if (chunkTerminator[0] != 13 || chunkTerminator[1] != 10)
+                    throw new InvalidOperationException("invalid chunk terminator");
+            }
+            return body.ToArray();
+        }
+
+        return Array.Empty<byte>();
+    }
+
+    private static async Task ReadExactlyAsync(Stream stream, byte[] buffer, CancellationToken cancellationToken)
+    {
+        var offset = 0;
+        while (offset < buffer.Length)
+        {
+            var read = await stream.ReadAsync(buffer.AsMemory(offset), cancellationToken);
+            if (read == 0) throw new InvalidOperationException("loopback client closed before HTTP body completed");
+            offset += read;
+        }
+    }
+
+    private static async Task<string> ReadAsciiLineAsync(Stream stream, CancellationToken cancellationToken)
+    {
+        using var line = new MemoryStream();
+        var previous = -1;
+        while (true)
+        {
+            var one = new byte[1];
+            var read = await stream.ReadAsync(one, cancellationToken);
+            if (read == 0) throw new InvalidOperationException("loopback client closed while reading a chunk line");
+            if (previous == 13 && one[0] == 10)
+            {
+                var data = line.ToArray();
+                return Encoding.ASCII.GetString(data, 0, Math.Max(0, data.Length - 1));
+            }
+            line.WriteByte(one[0]);
+            previous = one[0];
+            if (line.Length > 4096) throw new InvalidOperationException("loopback chunk line was unexpectedly large");
+        }
     }
 
     private sealed record ObservedRequest(string Path, string Authorization, string Body);
