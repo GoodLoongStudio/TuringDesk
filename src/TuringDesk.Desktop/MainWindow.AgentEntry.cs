@@ -1,3 +1,4 @@
+using System.Windows;
 using TuringDesk.Desktop.Services;
 
 namespace TuringDesk.Desktop;
@@ -25,12 +26,6 @@ public partial class MainWindow
         window.Activate();
     }
 
-    /// <summary>
-    /// The search bar calls this only after the user explicitly presses
-    /// "深度处理" (or Ctrl+Enter). The query is carried into the official
-    /// DeepSeek Harness WebUI and this is the deliberate boundary where the
-    /// workbench may be started.
-    /// </summary>
     internal void ShowHarnessConsoleFromSearch(string query)
     {
         if (!Dispatcher.CheckAccess())
@@ -47,6 +42,26 @@ public partial class MainWindow
         window.Activate();
     }
 
+    internal void ShowDesktopSearchFromTray()
+    {
+        if (!Dispatcher.CheckAccess())
+        {
+            Dispatcher.BeginInvoke(ShowDesktopSearchFromTray);
+            return;
+        }
+
+        if (_desktopSearchBar is not null)
+        {
+            _desktopSearchBar.FocusSearch();
+            return;
+        }
+
+        ShellNotificationService.Publish(
+            "图灵搜索尚未就绪",
+            "桌面搜索入口仍在初始化，请稍后再试。",
+            "warning");
+    }
+
     internal void RequestApplicationExit()
     {
         if (!Dispatcher.CheckAccess())
@@ -55,7 +70,8 @@ public partial class MainWindow
             return;
         }
 
+        DesktopDiagnostics.Info("shutdown.request", "source=tray-or-ui");
         ShellSession.ExitRequested = true;
-        Close();
+        Application.Current.Shutdown(0);
     }
 }
