@@ -22,7 +22,7 @@ public partial class DesktopSearchBarWindow : Window
 
     private readonly MainWindow _host;
     private readonly DesktopSearchIndexService _searchIndex;
-    private readonly DesktopQuickAnswerService _quickAnswer = new();
+    private readonly DesktopQuickAnswerService _quickAnswer;
     private readonly WindowsSpeechService _speech = new();
     private HwndSource? _source;
     private bool _hotkeyRegistered;
@@ -42,8 +42,9 @@ public partial class DesktopSearchBarWindow : Window
     {
         _host = host;
         InitializeComponent();
-        InitializeL3ReplyActions();
         _searchIndex = new DesktopSearchIndexService();
+        _quickAnswer = new DesktopQuickAnswerService(_searchIndex);
+        InitializeL3ReplyActions();
         _speech.Recognized += OnSpeechRecognized;
 
         SourceInitialized += OnSourceInitialized;
