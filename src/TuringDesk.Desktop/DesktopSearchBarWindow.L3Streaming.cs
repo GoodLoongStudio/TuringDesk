@@ -128,13 +128,33 @@ public partial class DesktopSearchBarWindow
         if (!IsVisible || generation != Volatile.Read(ref _l3TimeoutWatchdogGeneration)) return;
         if (_l3UserCancellationRequested || !string.Equals(SearchBox.Text.Trim(), prompt, StringComparison.Ordinal)) return;
 
-        // SubmitQuickAsync currently owns the timeout CTS. When that CTS fires it can
-        // unwind through the same OperationCanceledException path as a user Escape.
-        // Preserve the explicit timeout failure/retry state after that unwind instead
-        // of silently collapsing the answer panel back to idle.
-        if (!_busy && !string.Equals(ReplyTitle.Text, "图灵", StringComparison.Ordinal)) return;
-
+        // The request owns its timeout CTS and unwinds through the same cancellation
+        // catch as Escape. If we paint the final timeout error while the provider is
+        // still unwinding, that catch can restore idle state afterwards and erase the
+        // retry affordance. Cancel now, keep the request serialized, and publish the
+        // actionable timeout only after the provider has actually released _busy.
         _activeRequest?.Cancel();
+        if (_busy)
+        {
+            ReplyTitle.Text = "CLI 响应超时 · 正在停止";
+            ReplyText.Text = "回答已超过时限，正在安全停止当前请求…";
+            ReplyDot.Fill = new SolidColorBrush(Color.FromRgb(225, 91, 91));
+            SetL3ActionState(retry: false, deep: false);
+            _l3StreamRenderTimer?.Stop();
+            ExpandReply(150);
+        }
+
+        while (_busy &&
+               IsVisible &&
+               generation == Volatile.Read(ref _l3TimeoutWatchdogGeneration) &&
+               !_l3UserCancellationRequested)
+        {
+            await Task.Delay(50);
+        }
+
+        if (!IsVisible || generation != Volatile.Read(ref _l3TimeoutWatchdogGeneration)) return;
+        if (_l3UserCancellationRequested || !string.Equals(SearchBox.Text.Trim(), prompt, StringComparison.Ordinal)) return;
+
         ShowL3Failure(
             prompt,
             "CLI 响应超时",
