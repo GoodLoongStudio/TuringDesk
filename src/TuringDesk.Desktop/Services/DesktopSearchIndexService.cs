@@ -60,10 +60,9 @@ public sealed class DesktopSearchIndexService : IDisposable
     public int IndexedFileCount => 0;
 
     /// <summary>
-    /// Level 1: RAM-only application search. Discovery is performed asynchronously
-    /// and results come from an immutable snapshot. Native icons are resolved only
-    /// for the small ranked result set and cached by ShellIconService, so discovery
-    /// still avoids decoding hundreds of shell images at startup.
+    /// Level 1: application ranking over the immutable in-memory app snapshot.
+    /// Native icon resolution is deliberately a separate asynchronous enrichment
+    /// step so the keystroke hot path can remain free of Shell/COM work.
     /// </summary>
     public IReadOnlyList<DesktopSearchResult> SearchApps(string query, int limit = 5)
     {
@@ -77,6 +76,29 @@ public sealed class DesktopSearchIndexService : IDisposable
                 hit.Score,
                 Level: 1))
             .ToArray();
+    }
+
+    public Task<IReadOnlyList<DesktopSearchResult>> ResolveAppIconsAsync(
+        IReadOnlyList<DesktopSearchResult> results,
+        CancellationToken cancellationToken = default)
+    {
+        if (results.Count == 0)
+            return Task.FromResult<IReadOnlyList<DesktopSearchResult>>(Array.Empty<DesktopSearchResult>());
+
+        var snapshot = results.ToArray();
+        return Task.Run<IReadOnlyList<DesktopSearchResult>>(() =>
+        {
+            var enriched = new DesktopSearchResult[snapshot.Length];
+            for (var index = 0; index < snapshot.Length; index++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var result = snapshot[index];
+                enriched[index] = result.Kind == DesktopSearchResultKind.App && result.Icon is null
+                    ? result with { Icon = ShellIconService.GetApplicationIcon(result.Target, large: false) }
+                    : result;
+            }
+            return enriched;
+        }, cancellationToken);
     }
 
     /// <summary>
