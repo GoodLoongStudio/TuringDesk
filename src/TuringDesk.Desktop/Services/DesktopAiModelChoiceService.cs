@@ -13,9 +13,9 @@ public sealed record DesktopAiModelChoice(
 }
 
 /// <summary>
-/// Resolves the small model picker shown directly on the desktop search bar.
-/// Ordering is intentional: the user's currently configured model wins, then a
-/// working DeepSeek credential is offered as fallback, followed by setup.
+/// Resolves the model picker shown directly on the desktop search bar. The model
+/// configuration center is the single source of truth; no mock/provider surrogate
+/// appears in the product UI.
 /// </summary>
 public sealed class DesktopAiModelChoiceService
 {
@@ -31,7 +31,7 @@ public sealed class DesktopAiModelChoiceService
         var choices = new List<DesktopAiModelChoice>();
         var current = _store.Load();
 
-        if (!current.ProviderId.Equals("mock", StringComparison.OrdinalIgnoreCase))
+        if (current.IsConfigured)
         {
             var currentCredential = _store.LoadApiKey();
             var available = IsUsable(current, currentCredential);
@@ -46,31 +46,12 @@ public sealed class DesktopAiModelChoiceService
                 available));
         }
 
-        var deepSeekSettings = BuildDeepSeekSettings();
-        var deepSeekCredential = HarnessModelBridgeService.LoadCredential(deepSeekSettings);
-        if (string.IsNullOrWhiteSpace(deepSeekCredential) && current.ProviderId.Equals("deepseek", StringComparison.OrdinalIgnoreCase))
-            deepSeekCredential = _store.LoadApiKey();
-
-        var alreadyHasDeepSeek = choices.Any(choice =>
-            choice.Settings?.ProviderId.Equals("deepseek", StringComparison.OrdinalIgnoreCase) == true);
-
-        if (!alreadyHasDeepSeek && !string.IsNullOrWhiteSpace(deepSeekCredential))
-        {
-            choices.Add(new DesktopAiModelChoice(
-                "deepseek-fallback",
-                deepSeekSettings.Model,
-                "DeepSeek · 已配置",
-                deepSeekSettings with { HasApiKey = true },
-                deepSeekCredential,
-                true));
-        }
-
         if (!choices.Any(choice => choice.IsAvailable))
         {
-            choices.Insert(0, new DesktopAiModelChoice(
+            choices.Add(new DesktopAiModelChoice(
                 "no-model",
                 "未配置 AI",
-                "点击这里设置模型或 API Key",
+                "打开模型配置中心，连接 DeepSeek、本地模型或 OpenAI-compatible API",
                 null,
                 null,
                 false,
@@ -79,8 +60,8 @@ public sealed class DesktopAiModelChoiceService
 
         choices.Add(new DesktopAiModelChoice(
             "configure",
-            "配置模型…",
-            "打开 AI 模型设置",
+            "模型配置中心…",
+            "切换 Provider、Base URL、Model 与 API Key",
             null,
             null,
             false,
@@ -91,9 +72,6 @@ public sealed class DesktopAiModelChoiceService
 
     public DesktopAiModelChoice? ResolveDefault(IReadOnlyList<DesktopAiModelChoice> choices)
     {
-        // The first usable entry is always the configured model when that model
-        // is healthy enough to attempt, then DeepSeek. This matches the desktop
-        // UX contract and keeps setup-only entries out of the default path.
         return choices.FirstOrDefault(choice => choice.IsAvailable)
                ?? choices.FirstOrDefault(choice => choice.Id == "no-model")
                ?? choices.FirstOrDefault();
@@ -101,40 +79,21 @@ public sealed class DesktopAiModelChoiceService
 
     private static bool IsUsable(ModelSettings settings, string? credential)
     {
-        if (settings.ProviderId.Equals("mock", StringComparison.OrdinalIgnoreCase)) return false;
-        if (string.IsNullOrWhiteSpace(settings.Model)) return false;
-
-        if (settings.ProviderId.Equals("deepseek", StringComparison.OrdinalIgnoreCase))
-            return !string.IsNullOrWhiteSpace(credential);
-
-        if (settings.ProviderId is "ollama" or "lmstudio" or "openai-compatible")
-            return !string.IsNullOrWhiteSpace(settings.BaseUrl);
+        if (!settings.IsConfigured) return false;
+        if (string.IsNullOrWhiteSpace(settings.BaseUrl)) return false;
 
         var preset = ModelProviderPresets.Find(settings.ProviderId);
         if (preset.RequiresApiKey && string.IsNullOrWhiteSpace(credential)) return false;
-        return !string.IsNullOrWhiteSpace(settings.BaseUrl) || !string.IsNullOrWhiteSpace(preset.BaseUrl);
-    }
-
-    private static ModelSettings BuildDeepSeekSettings()
-    {
-        var preset = ModelProviderPresets.Find("deepseek");
-        return new ModelSettings(
-            preset.Id,
-            preset.Mode,
-            preset.BaseUrl,
-            preset.Model,
-            false);
+        return true;
     }
 
     private static string DisplayNameFor(ModelSettings settings, ModelProviderPreset preset)
     {
         var model = settings.Model.Trim();
-        if (!string.IsNullOrWhiteSpace(model)) return model;
-        return ProviderLabel(preset);
+        return !string.IsNullOrWhiteSpace(model) ? model : ProviderLabel(preset);
     }
 
     private static string ProviderLabel(ModelProviderPreset preset) => preset.Name
         .Replace(" API", string.Empty, StringComparison.OrdinalIgnoreCase)
-        .Replace("（无需模型）", string.Empty, StringComparison.OrdinalIgnoreCase)
         .Trim();
 }
