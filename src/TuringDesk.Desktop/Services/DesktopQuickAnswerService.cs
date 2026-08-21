@@ -50,6 +50,24 @@ public sealed class DesktopQuickAnswerService
     /// </summary>
     public event Action<string>? PartialResponseUpdated;
 
+    public void SelectConversationModel(DesktopAiModelChoice? model)
+    {
+        var settings = model?.Settings;
+        if (settings is null ||
+            string.IsNullOrWhiteSpace(settings.BaseUrl) ||
+            string.IsNullOrWhiteSpace(settings.Model))
+        {
+            lock (_historyGate)
+            {
+                _history.Clear();
+                _conversationModelKey = null;
+            }
+            return;
+        }
+
+        EnsureConversationModel(BuildModelKey(settings));
+    }
+
     public async Task<DesktopQuickAnswerResult> TryAnswerAsync(
         string query,
         DesktopAiModelChoice? model,
@@ -93,7 +111,7 @@ public sealed class DesktopQuickAnswerService
                 "模型配置不完整",
                 "请检查 Base URL 和模型 ID。本地 CLI 能力不受影响，模型错误也不会自动启动 Harness。");
 
-        var modelKey = $"{settings.ProviderId}|{settings.BaseUrl.Trim()}|{settings.Model.Trim()}";
+        var modelKey = BuildModelKey(settings);
         EnsureConversationModel(modelKey);
         var intent = Classify(text);
         var history = SnapshotHistoryForContext();
@@ -156,6 +174,9 @@ public sealed class DesktopQuickAnswerService
         }
     }
 
+    private static string BuildModelKey(ModelSettings settings) =>
+        $"{settings.ProviderId}|{settings.BaseUrl.Trim()}|{settings.Model.Trim()}";
+
     private static string BuildSystemPrompt(QuickIntent intent)
     {
         var task = intent switch
@@ -215,9 +236,6 @@ Otherwise answer normally and never mention Harness.
     {
         lock (_historyGate)
         {
-            // A model switch or New Chat can happen while a network request is in
-            // flight. Never let that stale reply contaminate the newly active model
-            // session; the UI may still decide how to present the completed request.
             if (!string.Equals(_conversationModelKey, expectedModelKey, StringComparison.Ordinal))
                 return;
 
