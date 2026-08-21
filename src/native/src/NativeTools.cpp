@@ -348,16 +348,28 @@ NativeToolResult CreatePowerPoint(std::string_view arguments) {
     if (!apartment.Ready()) return {false, L"初始化 Office COM 失败：" + HResultText(apartment.Result())};
 
     CLSID clsid{};
+    bool wpsBackend = false;
+    std::wstring backendName = L"Microsoft PowerPoint";
     HRESULT hr = CLSIDFromProgID(L"PowerPoint.Application", &clsid);
     if (FAILED(hr)) {
-        return {false, L"没有检测到 Microsoft PowerPoint。当前 ppt.create V1 需要本机安装 PowerPoint。"};
+        for (const wchar_t* progId : {L"KWPP.Application", L"WPP.Application"}) {
+            hr = CLSIDFromProgID(progId, &clsid);
+            if (SUCCEEDED(hr)) {
+                wpsBackend = true;
+                backendName = L"WPS 演示";
+                break;
+            }
+        }
+    }
+    if (FAILED(hr)) {
+        return {false, L"没有检测到可用的 Microsoft PowerPoint 或 WPS 演示 COM 后端。"};
     }
 
     IDispatch* rawApp = nullptr;
     hr = CoCreateInstance(clsid, nullptr, CLSCTX_LOCAL_SERVER, IID_IDispatch, reinterpret_cast<void**>(&rawApp));
     DispatchPtr app(rawApp);
     if (FAILED(hr) || !app) {
-        return {false, L"启动 PowerPoint 失败：" + HResultText(hr)};
+        return {false, L"启动 " + backendName + L" 失败：" + HResultText(hr)};
     }
 
     DispatchPtr presentations;
@@ -366,13 +378,13 @@ NativeToolResult CreatePowerPoint(std::string_view arguments) {
     if (SUCCEEDED(hr)) hr = CallDispatch(presentations.get(), L"Add", nullptr, 0, presentation);
     if (FAILED(hr)) {
         Invoke(app.get(), L"Quit", DISPATCH_METHOD, nullptr, 0, nullptr);
-        return {false, L"创建 PowerPoint 演示文稿失败：" + HResultText(hr)};
+        return {false, L"通过 " + backendName + L" 创建演示文稿失败：" + HResultText(hr)};
     }
 
     DispatchPtr slides;
     hr = GetDispatch(presentation.get(), L"Slides", slides);
     long slideIndex = 1;
-    auto addSlide = [&](long layout, const std::wstring& slideTitle, const std::wstring& body, bool titleSlide) -> HRESULT {
+    auto addSlide = [&](long layout, const std::wstring& slideTitle, const std::wstring& body, bool /*titleSlide*/) -> HRESULT {
         VARIANT args[2];
         VariantInit(&args[0]);
         VariantInit(&args[1]);
@@ -407,23 +419,40 @@ NativeToolResult CreatePowerPoint(std::string_view arguments) {
     }
 
     if (SUCCEEDED(hr)) {
-        VARIANT saveArgs[2];
-        VariantInit(&saveArgs[0]);
-        VariantInit(&saveArgs[1]);
-        saveArgs[0].vt = VT_I4;
-        saveArgs[0].lVal = 24; // ppSaveAsOpenXMLPresentation
-        saveArgs[1].vt = VT_BSTR;
         const auto outputText = output.wstring();
-        saveArgs[1].bstrVal = SysAllocStringLen(outputText.data(), static_cast<UINT>(outputText.size()));
-        hr = Invoke(presentation.get(), L"SaveAs", DISPATCH_METHOD, saveArgs, 2, nullptr);
-        VariantClear(&saveArgs[1]);
+        if (wpsBackend) {
+            VARIANT saveArg;
+            VariantInit(&saveArg);
+            saveArg.vt = VT_BSTR;
+            saveArg.bstrVal = SysAllocStringLen(outputText.data(), static_cast<UINT>(outputText.size()));
+            hr = Invoke(presentation.get(), L"SaveAs", DISPATCH_METHOD, &saveArg, 1, nullptr);
+            VariantClear(&saveArg);
+        } else {
+            VARIANT saveArgs[2];
+            VariantInit(&saveArgs[0]);
+            VariantInit(&saveArgs[1]);
+            saveArgs[0].vt = VT_I4;
+            saveArgs[0].lVal = 24; // Microsoft ppSaveAsOpenXMLPresentation
+            saveArgs[1].vt = VT_BSTR;
+            saveArgs[1].bstrVal = SysAllocStringLen(outputText.data(), static_cast<UINT>(outputText.size()));
+            hr = Invoke(presentation.get(), L"SaveAs", DISPATCH_METHOD, saveArgs, 2, nullptr);
+            VariantClear(&saveArgs[1]);
+            if (FAILED(hr)) {
+                VARIANT saveArg;
+                VariantInit(&saveArg);
+                saveArg.vt = VT_BSTR;
+                saveArg.bstrVal = SysAllocStringLen(outputText.data(), static_cast<UINT>(outputText.size()));
+                hr = Invoke(presentation.get(), L"SaveAs", DISPATCH_METHOD, &saveArg, 1, nullptr);
+                VariantClear(&saveArg);
+            }
+        }
     }
 
     Invoke(app.get(), L"Quit", DISPATCH_METHOD, nullptr, 0, nullptr);
 
-    if (FAILED(hr)) return {false, L"生成 PPT 失败：" + HResultText(hr)};
+    if (FAILED(hr)) return {false, L"通过 " + backendName + L" 生成 PPT 失败：" + HResultText(hr)};
     if (openAfter) ShellExecuteW(nullptr, L"open", output.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
-    return {true, L"PPT 已生成：" + output.wstring()};
+    return {true, L"PPT 已生成（" + backendName + L"）：" + output.wstring()};
 }
 
 NativeToolResult CreateFile(std::string_view arguments) {
