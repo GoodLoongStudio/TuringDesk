@@ -204,13 +204,36 @@ public partial class HarnessConsoleWindow : Window
 
         try
         {
-            _ = await HarnessView.CoreWebView2.ExecuteScriptAsync(script);
+            var result = await HarnessView.CoreWebView2.ExecuteScriptAsync(script);
+            if (!string.Equals(result?.Trim(), "true", StringComparison.OrdinalIgnoreCase))
+                PreserveInitialQueryForManualHandoff();
         }
         catch
         {
-            // WebUI DOM can change between Harness versions. The query was already
-            // passed via URL hash (#prompt=...); DOM injection is a best-effort
-            // fallback and the workbench remains usable even if it misses.
+            // WebUI DOM can change between Harness versions. Never silently lose
+            // the original L3 request: keep it available for manual paste instead.
+            PreserveInitialQueryForManualHandoff();
+        }
+    }
+
+    private void PreserveInitialQueryForManualHandoff()
+    {
+        if (string.IsNullOrWhiteSpace(_initialQuery)) return;
+
+        try
+        {
+            Clipboard.SetText(_initialQuery);
+            ShellNotificationService.Publish(
+                "深度任务已保留",
+                "AI 工作台未识别自动预填入口；原始问题已复制到剪贴板，可直接粘贴后继续。",
+                "warning");
+        }
+        catch
+        {
+            ShellNotificationService.Publish(
+                "深度任务未自动填入",
+                $"请返回搜索栏复制原始问题后重试：{_initialQuery}",
+                "warning");
         }
     }
 
@@ -252,6 +275,7 @@ public partial class HarnessConsoleWindow : Window
 
     private void Refresh_Click(object sender, RoutedEventArgs e)
     {
+        _prefillAttempted = false;
         if (HarnessView.CoreWebView2 is not null)
         {
             HarnessView.CoreWebView2.Reload();
@@ -261,7 +285,11 @@ public partial class HarnessConsoleWindow : Window
         _ = LoadHarnessAsync();
     }
 
-    private async void Retry_Click(object sender, RoutedEventArgs e) => await LoadHarnessAsync();
+    private async void Retry_Click(object sender, RoutedEventArgs e)
+    {
+        _prefillAttempted = false;
+        await LoadHarnessAsync();
+    }
 
     private void Close_Click(object sender, RoutedEventArgs e) => Close();
 
