@@ -27,6 +27,7 @@ jobs:
             "scripts/quick-verify.ps1",
             "scripts/bootstrap-everything.ps1",
             "scripts/verify-app-search.ps1",
+            "scripts/verify-l3-http.ps1",
             "scripts/report-quick-verify-failure.ps1"
           )) {
             $tokens = $null
@@ -85,6 +86,10 @@ jobs:
       - name: Re-run with the existing pinned environment
         shell: powershell
         run: .\scripts\quick-verify.ps1 -SkipPull -BuildOnly
+
+      - name: Verify L3 native HttpClient
+        shell: powershell
+        run: .\scripts\verify-l3-http.ps1
 
       - name: Verify L1 application search
         shell: powershell
