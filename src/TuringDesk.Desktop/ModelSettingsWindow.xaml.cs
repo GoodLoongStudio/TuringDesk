@@ -18,7 +18,9 @@ public partial class ModelSettingsWindow : Window
         _modelConfiguration = new UnifiedModelConfigurationService(store);
 
         ProviderBox.ItemsSource = ModelProviderPresets.All;
-        ProviderBox.SelectedItem = ModelProviderPresets.Find(initial.ProviderId);
+        ProviderBox.SelectedItem = initial.IsConfigured
+            ? ModelProviderPresets.Find(initial.ProviderId)
+            : ModelProviderPresets.All[0];
         BaseUrlBox.Text = initial.IsConfigured ? initial.BaseUrl : ModelProviderPresets.All[0].BaseUrl;
         ModelBox.Text = initial.IsConfigured ? initial.Model : ModelProviderPresets.All[0].Model;
         ApiKeyBox.Password = apiKey ?? string.Empty;
