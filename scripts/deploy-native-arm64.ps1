@@ -23,18 +23,18 @@ function Stop-DeployedInstance {
 
 function Test-Binary([string]$Exe) {
     Step "Running Native Search self-test"
-    & $Exe --self-test
+    & $Exe --self-test | Out-Host
     if ($LASTEXITCODE -ne 0) {
         throw "Self-test failed with exit code $LASTEXITCODE"
     }
 }
 
 function Get-MainSha {
-    $Sha = (& gh api "repos/$Repo/commits/main" --jq ".sha").Trim()
+    $Sha = ((& gh api "repos/$Repo/commits/main" --jq ".sha") | Select-Object -First 1).Trim()
     if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($Sha)) {
         throw "Unable to resolve main commit SHA"
     }
-    return $Sha
+    return [string]$Sha
 }
 
 function Get-RunForCommit([string]$Sha, [switch]$SuccessfulOnly) {
@@ -64,7 +64,7 @@ function Get-RunForCommit([string]$Sha, [switch]$SuccessfulOnly) {
 
 function Start-And-WaitForRun([string]$Sha) {
     Step "No successful ARM64 package for current main; starting CI"
-    & gh workflow run $Workflow --repo $Repo --ref main
+    & gh workflow run $Workflow --repo $Repo --ref main | Out-Host
     if ($LASTEXITCODE -ne 0) {
         throw "Unable to start GitHub Actions workflow"
     }
@@ -80,13 +80,14 @@ function Start-And-WaitForRun([string]$Sha) {
         throw "Workflow was started but its run could not be found"
     }
 
-    Step "Waiting for GitHub Actions run $($Run.databaseId)"
-    & gh run watch $Run.databaseId --repo $Repo --exit-status
+    $RunId = [long]$Run.databaseId
+    Step "Waiting for GitHub Actions run $RunId"
+    & gh run watch $RunId --repo $Repo --exit-status | Out-Host
     if ($LASTEXITCODE -ne 0) {
         throw "GitHub Actions build failed"
     }
 
-    return [long]$Run.databaseId
+    return $RunId
 }
 
 function Download-Artifact([long]$RunId) {
@@ -94,7 +95,7 @@ function Download-Artifact([long]$RunId) {
     New-Item -ItemType Directory -Force -Path $Temp | Out-Null
 
     Step "Downloading ARM64 artifact from run $RunId"
-    & gh run download $RunId --repo $Repo --name $ArtifactName --dir $Temp
+    & gh run download $RunId --repo $Repo --name $ArtifactName --dir $Temp | Out-Host
     if ($LASTEXITCODE -ne 0) {
         Remove-Item $Temp -Recurse -Force -ErrorAction SilentlyContinue
         throw "Unable to download ARM64 artifact"
@@ -117,7 +118,7 @@ if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
 }
 
 Step "Checking GitHub CLI authentication"
-& gh auth status 2>$null
+& gh auth status 2>$null | Out-Host
 if ($LASTEXITCODE -ne 0) {
     throw "GitHub CLI is not authenticated. Run: gh auth login"
 }
@@ -132,10 +133,10 @@ if ($Run) {
     Step "Found successful build for current main: run $RunId"
 }
 else {
-    $RunId = Start-And-WaitForRun $MainSha
+    $RunId = [long](Start-And-WaitForRun $MainSha)
 }
 
-$Downloaded = Download-Artifact $RunId
+$Downloaded = Download-Artifact -RunId $RunId
 try {
     Test-Binary $Downloaded.Exe
 
