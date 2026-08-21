@@ -31,9 +31,8 @@ public sealed class UnifiedModelConfigurationService
 
         await _store.SaveAsync(normalized, normalizedKey);
 
-        // Harness is a sibling consumer, not the L3 transport. Mirror the same state
-        // into its writable stores without launching the workbench.
-        HarnessModelBridgeService.Synchronize(normalized, normalizedKey);
+        // Harness is a sibling consumer, not the L3 transport. This method mirrors
+        // the same state into Harness's writable stores and does not launch it.
         await HarnessWebUiService.ApplyModelSettingsAsync(normalized, normalizedKey);
 
         ConfigurationChanged?.Invoke(normalized);
