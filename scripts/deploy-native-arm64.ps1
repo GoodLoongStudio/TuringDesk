@@ -15,10 +15,65 @@ function Step([string]$Text) {
 }
 
 function Stop-DeployedInstance {
-    $Target = (Join-Path $DeployDir $ExeName).ToLowerInvariant()
-    Get-CimInstance Win32_Process -Filter "Name='TuringDesk.exe'" -ErrorAction SilentlyContinue |
-        Where-Object { $_.ExecutablePath -and $_.ExecutablePath.ToLowerInvariant() -eq $Target } |
-        ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+    Step "Stopping previous TuringDesk instance"
+
+    # Do not depend on Win32_Process.ExecutablePath. Windows can return a null
+    # path for a process that we still own, which previously left the old EXE
+    # running and caused Copy-Item to fail with a sharing violation.
+    $Processes = @(Get-Process -Name "TuringDesk" -ErrorAction SilentlyContinue)
+    foreach ($Process in $Processes) {
+        try {
+            Stop-Process -Id $Process.Id -Force -ErrorAction Stop
+        }
+        catch {
+            Write-Host "Stop-Process did not terminate PID $($Process.Id); retrying." -ForegroundColor DarkGray
+        }
+    }
+
+    # Retry briefly because process teardown and image-file unlock are not
+    # guaranteed to be instantaneous on Windows.
+    for ($i = 0; $i -lt 30; $i++) {
+        $Remaining = @(Get-Process -Name "TuringDesk" -ErrorAction SilentlyContinue)
+        if ($Remaining.Count -eq 0) {
+            Start-Sleep -Milliseconds 150
+            return
+        }
+
+        foreach ($Process in $Remaining) {
+            Stop-Process -Id $Process.Id -Force -ErrorAction SilentlyContinue
+        }
+        Start-Sleep -Milliseconds 100
+    }
+
+    # Last-resort Windows process termination. Ignore taskkill's exit code if
+    # the process disappeared between the check and the command.
+    & taskkill.exe /F /IM TuringDesk.exe 2>$null | Out-Null
+    Start-Sleep -Milliseconds 250
+}
+
+function Copy-DeployedBinary([string]$Source, [string]$Destination) {
+    $LastError = $null
+
+    for ($i = 1; $i -le 25; $i++) {
+        try {
+            Copy-Item $Source $Destination -Force -ErrorAction Stop
+            return
+        }
+        catch [System.IO.IOException] {
+            $LastError = $_
+            # A previous instance or scanner may still have a short-lived
+            # image handle. Kill again and retry instead of failing the update.
+            Get-Process -Name "TuringDesk" -ErrorAction SilentlyContinue |
+                Stop-Process -Force -ErrorAction SilentlyContinue
+            Start-Sleep -Milliseconds 200
+        }
+        catch {
+            $LastError = $_
+            break
+        }
+    }
+
+    throw "Unable to replace deployed TuringDesk.exe after retries: $($LastError.Exception.Message)"
 }
 
 function Test-Binary([string]$Exe) {
@@ -144,7 +199,7 @@ try {
     Stop-DeployedInstance
     New-Item -ItemType Directory -Force -Path $DeployDir | Out-Null
     $DeployedExe = Join-Path $DeployDir $ExeName
-    Copy-Item $Downloaded.Exe $DeployedExe -Force
+    Copy-DeployedBinary -Source $Downloaded.Exe -Destination $DeployedExe
 
     $Everything = Get-Process Everything -ErrorAction SilentlyContinue
     if (-not $Everything) {
