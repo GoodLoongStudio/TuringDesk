@@ -5,13 +5,18 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const here = dirname(fileURLToPath(import.meta.url))
-const runtimeRoot = resolve(here)
-const dshBin = join(runtimeRoot, 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js')
+// The smoke test is compiled to runtime/dist, while pnpm installs the official
+// Harness package in runtime/node_modules. Keep this resolver valid both for the
+// compiled CI entrypoint and for direct source-side execution.
+const runtimeRoots = [resolve(here, '..'), here]
+const dshBin = runtimeRoots
+  .map(root => join(root, 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js'))
+  .find(candidate => existsSync(candidate))
 const port = Number(process.env.TURINGDESK_HARNESS_WEB_SMOKE_PORT ?? '4329')
 const url = `http://127.0.0.1:${port}/`
 
-if (!existsSync(dshBin)) {
-  throw new Error(`Official DeepSeek Harness CLI is missing from the packaged runtime: ${dshBin}`)
+if (!dshBin) {
+  throw new Error(`Official DeepSeek Harness CLI is missing from the runtime roots: ${runtimeRoots.join(', ')}`)
 }
 
 const home = mkdtempSync(join(tmpdir(), 'turingdesk-dsh-web-'))
