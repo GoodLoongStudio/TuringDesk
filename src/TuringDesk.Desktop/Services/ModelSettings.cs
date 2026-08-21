@@ -19,7 +19,7 @@ public sealed record ModelSettings(
     string Model,
     bool HasApiKey)
 {
-    public static ModelSettings Default => new("unconfigured", "direct", string.Empty, string.Empty, false);
+    public static ModelSettings Default => new("unconfigured", "direct", string.Empty, "未配置", false);
 
     public bool IsConfigured =>
         !ProviderId.Equals("unconfigured", StringComparison.OrdinalIgnoreCase) &&
@@ -28,6 +28,15 @@ public sealed record ModelSettings(
 
 public static class ModelProviderPresets
 {
+    private static readonly ModelProviderPreset Unconfigured = new(
+        "unconfigured",
+        "尚未连接真实模型",
+        "direct",
+        string.Empty,
+        "未配置",
+        false,
+        "请在模型配置中心选择一个真实模型来源。");
+
     public static readonly ModelProviderPreset[] All =
     {
         new("deepseek", "DeepSeek API", "direct", "https://api.deepseek.com", "deepseek-v4-flash", true, "TuringDesk L3 由原生 HttpClient 直接调用 DeepSeek；保存后同一份配置与凭据同步给 DeepSeek Harness。"),
@@ -36,8 +45,12 @@ public static class ModelProviderPresets
         new("openai-compatible", "OpenAI 兼容 API / 中转站", "direct", string.Empty, string.Empty, false, "填写 Base URL、模型 ID 和服务要求的 API Key。L3 直接调用；保存后同步给 Harness。")
     };
 
-    public static ModelProviderPreset Find(string? id) =>
-        All.FirstOrDefault(item => item.Id.Equals(id, StringComparison.OrdinalIgnoreCase)) ?? All[0];
+    public static ModelProviderPreset Find(string? id)
+    {
+        if (string.IsNullOrWhiteSpace(id) || id.Equals("unconfigured", StringComparison.OrdinalIgnoreCase))
+            return Unconfigured;
+        return All.FirstOrDefault(item => item.Id.Equals(id, StringComparison.OrdinalIgnoreCase)) ?? All[0];
+    }
 }
 
 public sealed class ModelSettingsStore
@@ -111,6 +124,8 @@ public sealed class ModelSettingsStore
 
     private static ModelSettings Normalize(ModelSettings settings)
     {
+        // Migrate the removed development-only placeholder state into a real
+        // unconfigured state. There is no mock provider or mock execution path.
         if (settings.ProviderId.Equals("mock", StringComparison.OrdinalIgnoreCase) ||
             settings.Mode.Equals("mock", StringComparison.OrdinalIgnoreCase))
             return ModelSettings.Default;
@@ -119,9 +134,8 @@ public sealed class ModelSettingsStore
             string.IsNullOrWhiteSpace(settings.ProviderId))
             return ModelSettings.Default;
 
-        // Older builds incorrectly described real providers as "harness" mode even
-        // though L3 is meant to call them directly. Migrate those files in memory so
-        // existing users do not have to re-enter their configuration.
+        // Older builds described real providers as "harness" mode. L3 now always
+        // calls providers directly while Harness is a sibling consumer of the same state.
         var mode = settings.Mode.Equals("harness", StringComparison.OrdinalIgnoreCase)
             ? "direct"
             : string.IsNullOrWhiteSpace(settings.Mode) ? "direct" : settings.Mode;
