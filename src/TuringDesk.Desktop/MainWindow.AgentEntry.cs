@@ -42,6 +42,32 @@ public partial class MainWindow
         window.Activate();
     }
 
+    internal void ShowHarnessConsoleFromTray()
+    {
+        if (!Dispatcher.CheckAccess())
+        {
+            Dispatcher.BeginInvoke(ShowHarnessConsoleFromTray);
+            return;
+        }
+
+        var existing = Application.Current.Windows
+            .OfType<HarnessConsoleWindow>()
+            .FirstOrDefault(window => window.IsVisible);
+        if (existing is not null)
+        {
+            if (existing.WindowState == WindowState.Minimized)
+                existing.WindowState = WindowState.Normal;
+            existing.Activate();
+            existing.Focus();
+            return;
+        }
+
+        var window = new HarnessConsoleWindow();
+        window.Show();
+        window.Activate();
+        DesktopDiagnostics.Info("tray.action", "open-harness");
+    }
+
     internal void ShowDesktopSearchFromTray()
     {
         if (!Dispatcher.CheckAccess())

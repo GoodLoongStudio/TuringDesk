@@ -31,12 +31,13 @@ internal sealed class SystemTrayService : IDisposable
     private const uint TpmRightButton = 0x0002;
     private const uint TpmReturnCmd = 0x0100;
 
-    private const uint CommandSearch = 1001;
+    private const uint CommandHarness = 1001;
     private const uint CommandSettings = 1002;
     private const uint CommandExit = 1003;
 
     private readonly Dispatcher _dispatcher;
     private readonly Action _showSearch;
+    private readonly Action _showHarness;
     private readonly Action _showSettings;
     private readonly Action _exit;
     private readonly HwndSource _source;
@@ -45,10 +46,16 @@ internal sealed class SystemTrayService : IDisposable
     private bool _added;
     private int _disposed;
 
-    public SystemTrayService(Dispatcher dispatcher, Action showSearch, Action showSettings, Action exit)
+    public SystemTrayService(
+        Dispatcher dispatcher,
+        Action showSearch,
+        Action showHarness,
+        Action showSettings,
+        Action exit)
     {
         _dispatcher = dispatcher;
         _showSearch = showSearch;
+        _showHarness = showHarness;
         _showSettings = showSettings;
         _exit = exit;
 
@@ -119,8 +126,8 @@ internal sealed class SystemTrayService : IDisposable
 
         try
         {
-            _ = AppendMenu(menu, MfString, CommandSearch, "打开图灵搜索");
-            _ = AppendMenu(menu, MfString, CommandSettings, "桌面设置");
+            _ = AppendMenu(menu, MfString, CommandHarness, "打开 DeepSeek Harness");
+            _ = AppendMenu(menu, MfString, CommandSettings, "打开设置面板");
             _ = AppendMenu(menu, MfSeparator, 0, string.Empty);
             _ = AppendMenu(menu, MfString, CommandExit, "退出 TuringDesk");
 
@@ -137,8 +144,8 @@ internal sealed class SystemTrayService : IDisposable
 
             switch (command)
             {
-                case CommandSearch:
-                    _dispatcher.BeginInvoke(_showSearch, DispatcherPriority.Normal);
+                case CommandHarness:
+                    _dispatcher.BeginInvoke(_showHarness, DispatcherPriority.Normal);
                     break;
                 case CommandSettings:
                     _dispatcher.BeginInvoke(_showSettings, DispatcherPriority.Normal);
