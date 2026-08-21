@@ -24,5 +24,4 @@ if not "%CODE%"=="0" (
 
 echo.
 echo Update and launch complete.
-pause
 exit /b 0
