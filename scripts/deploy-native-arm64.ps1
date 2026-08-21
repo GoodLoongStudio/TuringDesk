@@ -163,9 +163,14 @@ function Deploy-BundledEverything([string]$ArtifactRoot) {
         return $null
     }
 
-    Step "Installing bundled Everything files"
     New-Item -ItemType Directory -Force -Path $DestinationDir | Out-Null
-    Copy-Item (Join-Path $SourceDir "*") $DestinationDir -Recurse -Force
+    if (-not (Test-Path $DestinationExe)) {
+        Step "Installing bundled Everything files"
+        Copy-Item (Join-Path $SourceDir "*") $DestinationDir -Recurse -Force
+    }
+    else {
+        Write-Host "Bundled Everything is already installed; keeping the binary to avoid service file locks." -ForegroundColor DarkGray
+    }
 
     $Config = Join-Path $DestinationDir "TuringDesk-Everything.ini"
     @"
