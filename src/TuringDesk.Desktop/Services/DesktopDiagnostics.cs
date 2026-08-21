@@ -27,7 +27,7 @@ internal static class DesktopDiagnostics
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     private static readonly Regex ApiKeyPattern = new(
-        @"(?i)((?:api[_-]?key|token|secret)\s*[:=]\s*[\"']?)[^\"'\s,;]{8,}",
+        @"(?i)((?:api[_-]?key|token|secret)\s*[:=]\s*[""']?)[^""'\s,;]{8,}",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     private static readonly Regex SkPattern = new(
