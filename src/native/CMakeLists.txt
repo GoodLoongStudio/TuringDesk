@@ -2,6 +2,7 @@ add_executable(TuringDesk WIN32
     src/main.cpp
     src/SearchWindow.cpp
     src/ModelSettingsWindow.cpp
+    src/L3CliWindow.cpp
     src/AppSearch.cpp
     src/EverythingSearch.cpp
     src/L3Agent.cpp

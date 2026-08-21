@@ -41,6 +41,7 @@ private:
     HWND hwnd_{};
     HWND edit_{};
     HWND settingsButton_{};
+    HWND closeButton_{};
     WNDPROC oldEditProc_{};
     AppSearch apps_;
     EverythingSearch files_;
@@ -52,8 +53,6 @@ private:
     bool fileSearchAvailable_{false};
     bool fileSearchQueryFailed_{false};
     std::wstring currentQuery_;
-    std::wstring streamingText_;
-    std::wstring lastL3Prompt_;
 
     Microsoft::WRL::ComPtr<ID2D1Factory> d2dFactory_;
     Microsoft::WRL::ComPtr<ID2D1HwndRenderTarget> renderTarget_;

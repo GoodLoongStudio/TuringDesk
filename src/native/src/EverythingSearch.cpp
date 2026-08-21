@@ -6,7 +6,6 @@
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
-#include <iterator>
 #include <string_view>
 #include <thread>
 #include <vector>
@@ -47,6 +46,7 @@ constexpr DWORD kEverythingCopyDataQuery2W = 18;
 constexpr DWORD kEverythingRequestFullPathAndName = 0x00000004;
 constexpr DWORD kEverythingSortNameAscending = 1;
 constexpr DWORD kEverythingFolder = 0x00000001;
+std::atomic_bool gStartedBundledEverything{false};
 
 struct FindContext { HWND hwnd{}; };
 
@@ -86,6 +86,38 @@ fs::path BundledEverythingPath() {
     return fs::path(modulePath).parent_path() / L"Everything" / L"Everything.exe";
 }
 
+fs::path BundledConfigPath(const fs::path& executable) {
+    return executable.parent_path() / L"TuringDesk-Everything.ini";
+}
+
+bool ConfigureBundledEverything(const fs::path& executable) {
+    const auto config = BundledConfigPath(executable).wstring();
+    return WritePrivateProfileStringW(L"Everything", L"run_in_background", L"1", config.c_str()) != FALSE &&
+           WritePrivateProfileStringW(L"Everything", L"show_tray_icon", L"0", config.c_str()) != FALSE &&
+           WritePrivateProfileStringW(L"Everything", L"check_for_updates_on_startup", L"0", config.c_str()) != FALSE;
+}
+
+bool LaunchBundledEverything(const std::wstring& action) {
+    const auto executable = BundledEverythingPath();
+    std::error_code ec;
+    if (executable.empty() || !fs::exists(executable, ec)) return false;
+    if (!ConfigureBundledEverything(executable)) return false;
+
+    const auto config = BundledConfigPath(executable).wstring();
+    std::wstring commandLine = L"\"" + executable.wstring() + L"\" -config \"" + config + L"\" " + action;
+    STARTUPINFOW startup{};
+    startup.cb = sizeof(startup);
+    PROCESS_INFORMATION process{};
+    if (!CreateProcessW(executable.c_str(), commandLine.data(), nullptr, nullptr, FALSE,
+                        CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW, nullptr, executable.parent_path().c_str(),
+                        &startup, &process)) {
+        return false;
+    }
+    CloseHandle(process.hThread);
+    CloseHandle(process.hProcess);
+    return true;
+}
+
 bool StartBundledEverything() {
     static std::atomic<ULONGLONG> lastAttempt{0};
     const ULONGLONG now = GetTickCount64();
@@ -93,21 +125,8 @@ bool StartBundledEverything() {
     if (previous != 0 && now - previous < 3000) return false;
     lastAttempt.store(now, std::memory_order_relaxed);
 
-    const auto executable = BundledEverythingPath();
-    std::error_code ec;
-    if (executable.empty() || !fs::exists(executable, ec)) return false;
-
-    std::wstring commandLine = L"\"" + executable.wstring() + L"\" -startup";
-    STARTUPINFOW startup{};
-    startup.cb = sizeof(startup);
-    PROCESS_INFORMATION process{};
-    if (!CreateProcessW(executable.c_str(), commandLine.data(), nullptr, nullptr, FALSE,
-                        CREATE_UNICODE_ENVIRONMENT, nullptr, executable.parent_path().c_str(),
-                        &startup, &process)) {
-        return false;
-    }
-    CloseHandle(process.hThread);
-    CloseHandle(process.hProcess);
+    if (!LaunchBundledEverything(L"-startup")) return false;
+    gStartedBundledEverything.store(true, std::memory_order_relaxed);
     return true;
 }
 
@@ -124,9 +143,7 @@ bool EverythingSearch::Available() const {
     if (FindEverythingWindow()) return true;
     if (!StartBundledEverything()) return false;
 
-    // The bundled client normally registers its IPC window almost immediately.
-    // Wait briefly so first-use searches do not show a false "missing" state.
-    for (int i = 0; i < 20; ++i) {
+    for (int i = 0; i < 30; ++i) {
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
         if (FindEverythingWindow()) return true;
     }
@@ -180,7 +197,6 @@ bool EverythingSearch::HandleCopyData(const COPYDATASTRUCT* copyData, std::vecto
     const auto* base = reinterpret_cast<const std::byte*>(copyData->lpData);
     const std::size_t size = copyData->cbData;
     if (list->numitems > (size - headerSize) / sizeof(EverythingIpcItem2)) return true;
-
     if ((list->request_flags & kEverythingRequestFullPathAndName) == 0) return true;
 
     results.clear();
@@ -231,6 +247,11 @@ bool EverythingSearch::SelfTest() const {
     return HandleCopyData(&copyData, results) && results.size() == 1 &&
            results[0].kind == ResultKind::File && results[0].title == L"verify.txt" &&
            results[0].target == expected;
+}
+
+void EverythingSearch::Shutdown() const {
+    if (!gStartedBundledEverything.exchange(false, std::memory_order_relaxed)) return;
+    LaunchBundledEverything(L"-exit");
 }
 
 } // namespace turingdesk

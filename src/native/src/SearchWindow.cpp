@@ -1,11 +1,9 @@
 #include "turingdesk/SearchWindow.h"
+#include "turingdesk/L3CliWindow.h"
 #include "turingdesk/ModelSettingsWindow.h"
 #include <dwmapi.h>
 #include <shellapi.h>
 #include <algorithm>
-#include <atomic>
-#include <cstdint>
-#include <memory>
 
 namespace turingdesk {
 namespace {
@@ -13,26 +11,9 @@ namespace {
 constexpr int kHotkeyId = 1;
 constexpr int kSearchEditId = 100;
 constexpr int kSettingsButtonId = 101;
-constexpr UINT kL3DeltaMessage = WM_APP + 10;
-constexpr UINT kL3DoneMessage = WM_APP + 11;
+constexpr int kCloseButtonId = 102;
 constexpr int kWindowWidth = 760;
 constexpr int kWindowHeight = 420;
-
-struct L3UiMessage {
-    std::uint64_t generation{};
-    std::wstring text;
-};
-
-std::atomic_uint64_t gL3Generation{0};
-
-void PostL3Message(HWND hwnd, UINT message, std::uint64_t generation, std::wstring text) {
-    auto payload = std::make_unique<L3UiMessage>();
-    payload->generation = generation;
-    payload->text = std::move(text);
-    if (PostMessageW(hwnd, message, 0, reinterpret_cast<LPARAM>(payload.get()))) {
-        payload.release();
-    }
-}
 
 bool IsLaunchable(ResultKind kind) {
     return kind == ResultKind::App || kind == ResultKind::File || kind == ResultKind::Folder;
@@ -49,13 +30,21 @@ const wchar_t* KindLabel(ResultKind kind) {
     return L"";
 }
 
+std::wstring ReadText(HWND control) {
+    const int len = GetWindowTextLengthW(control);
+    std::wstring value(static_cast<std::size_t>(len) + 1, L'\0');
+    if (len > 0) GetWindowTextW(control, value.data(), len + 1);
+    value.resize(static_cast<std::size_t>(len));
+    return value;
+}
+
 } // namespace
 
 SearchWindow::SearchWindow(HINSTANCE instance) : instance_(instance) {}
 
 SearchWindow::~SearchWindow() {
-    gL3Generation.fetch_add(1, std::memory_order_relaxed);
     l3_.Stop();
+    files_.Shutdown();
     if (hwnd_) UnregisterHotKey(hwnd_, kHotkeyId);
 }
 
@@ -70,12 +59,15 @@ bool SearchWindow::Create() {
     if (!RegisterClassExW(&wc) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS) return false;
 
     if (FAILED(D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, d2dFactory_.GetAddressOf()))) return false;
-    if (FAILED(DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED, __uuidof(IDWriteFactory), reinterpret_cast<IUnknown**>(writeFactory_.GetAddressOf())))) return false;
+    if (FAILED(DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED, __uuidof(IDWriteFactory),
+                                   reinterpret_cast<IUnknown**>(writeFactory_.GetAddressOf())))) return false;
 
     writeFactory_->CreateTextFormat(L"Segoe UI", nullptr, DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_FONT_STYLE_NORMAL,
                                     DWRITE_FONT_STRETCH_NORMAL, 17.0f, L"zh-CN", titleFormat_.GetAddressOf());
     writeFactory_->CreateTextFormat(L"Segoe UI", nullptr, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL,
                                     DWRITE_FONT_STRETCH_NORMAL, 12.5f, L"zh-CN", subtitleFormat_.GetAddressOf());
+    if (titleFormat_) titleFormat_->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
+    if (subtitleFormat_) subtitleFormat_->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
 
     hwnd_ = CreateWindowExW(WS_EX_TOOLWINDOW, wc.lpszClassName, L"TuringDesk Search", WS_POPUP,
                             CW_USEDEFAULT, CW_USEDEFAULT, kWindowWidth, kWindowHeight,
@@ -86,16 +78,26 @@ bool SearchWindow::Create() {
                             20, 16, kWindowWidth - 150, 38, hwnd_, reinterpret_cast<HMENU>(kSearchEditId), instance_, nullptr);
     if (!edit_) return false;
     SetWindowLongPtrW(edit_, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(this));
-    oldEditProc_ = reinterpret_cast<WNDPROC>(SetWindowLongPtrW(edit_, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(&SearchWindow::EditProc)));
-    SendMessageW(edit_, EM_SETCUEBANNER, TRUE, reinterpret_cast<LPARAM>(L"搜索应用、文件，或直接问 L3…  Ctrl+Enter 强制 AI"));
+    oldEditProc_ = reinterpret_cast<WNDPROC>(SetWindowLongPtrW(edit_, GWLP_WNDPROC,
+                                                               reinterpret_cast<LONG_PTR>(&SearchWindow::EditProc)));
+    SendMessageW(edit_, EM_SETCUEBANNER, TRUE,
+                 reinterpret_cast<LPARAM>(L"搜索应用、文件；Enter 进入 L3，Ctrl+Enter 强制 L3"));
 
     settingsButton_ = CreateWindowExW(0, L"BUTTON", L"AI 设置",
                                       WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
                                       kWindowWidth - 118, 16, 98, 38, hwnd_,
                                       reinterpret_cast<HMENU>(kSettingsButtonId), instance_, nullptr);
     if (!settingsButton_) return false;
-    SendMessageW(settingsButton_, WM_SETFONT,
-                 reinterpret_cast<WPARAM>(GetStockObject(DEFAULT_GUI_FONT)), TRUE);
+
+    closeButton_ = CreateWindowExW(0, L"BUTTON", L"×",
+                                   WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+                                   kWindowWidth - 52, kWindowHeight - 48, 32, 30, hwnd_,
+                                   reinterpret_cast<HMENU>(kCloseButtonId), instance_, nullptr);
+    if (!closeButton_) return false;
+
+    const auto font = reinterpret_cast<WPARAM>(GetStockObject(DEFAULT_GUI_FONT));
+    SendMessageW(settingsButton_, WM_SETFONT, font, TRUE);
+    SendMessageW(closeButton_, WM_SETFONT, font, TRUE);
 
     const DWM_WINDOW_CORNER_PREFERENCE corner = DWMWCP_ROUND;
     DwmSetWindowAttribute(hwnd_, DWMWA_WINDOW_CORNER_PREFERENCE, &corner, sizeof(corner));
@@ -178,14 +180,7 @@ LRESULT CALLBACK SearchWindow::EditProc(HWND hwnd, UINT message, WPARAM wParam, 
             return 0;
         }
         if (wParam == VK_ESCAPE) {
-            if (self->l3_.Busy()) {
-                gL3Generation.fetch_add(1, std::memory_order_relaxed);
-                self->l3_.Stop();
-                self->streamingText_.clear();
-                self->SetStatus(L"已取消 L3 请求", L"再次按 Esc 可隐藏搜索框");
-            } else {
-                ShowWindow(self->hwnd_, SW_HIDE);
-            }
+            ShowWindow(self->hwnd_, SW_HIDE);
             return 0;
         }
     }
@@ -200,6 +195,7 @@ LRESULT SearchWindow::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) 
     case WM_COMMAND:
         if (LOWORD(wParam) == kSearchEditId && HIWORD(wParam) == EN_CHANGE) { OnQueryChanged(); return 0; }
         if (LOWORD(wParam) == kSettingsButtonId && HIWORD(wParam) == BN_CLICKED) { OpenModelSettings(); return 0; }
+        if (LOWORD(wParam) == kCloseButtonId && HIWORD(wParam) == BN_CLICKED) { DestroyWindow(hwnd_); return 0; }
         break;
     case WM_COPYDATA: {
         std::vector<SearchResult> received;
@@ -212,39 +208,13 @@ LRESULT SearchWindow::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) 
         }
         break;
     }
-    case kL3DeltaMessage: {
-        std::unique_ptr<L3UiMessage> delta(reinterpret_cast<L3UiMessage*>(lParam));
-        if (!delta || delta->generation != gL3Generation.load(std::memory_order_relaxed)) return 0;
-        streamingText_ += delta->text;
-        results_.clear();
-        results_.push_back({ResultKind::Answer, streamingText_.empty() ? L"…" : streamingText_, L"L3 · WinHTTP streaming", L"", 0});
-        selected_ = -1;
-        InvalidateRect(hwnd_, nullptr, FALSE);
-        return 0;
-    }
-    case kL3DoneMessage: {
-        std::unique_ptr<L3UiMessage> done(reinterpret_cast<L3UiMessage*>(lParam));
-        if (!done || done->generation != gL3Generation.load(std::memory_order_relaxed)) return 0;
-        const bool failed = !done->text.empty();
-        if (failed) {
-            if (streamingText_.empty()) streamingText_ = done->text;
-            else streamingText_ += L"\n" + done->text;
-        }
-        if (!streamingText_.empty()) {
-            results_.clear();
-            results_.push_back({ResultKind::Answer,
-                                streamingText_,
-                                failed ? L"L3 · 失败 · 输入 /retry 重试" : L"L3 · 完成",
-                                L"", 0});
-        }
-        InvalidateRect(hwnd_, nullptr, FALSE);
-        return 0;
-    }
     case WM_SIZE: {
         const int width = static_cast<int>(LOWORD(lParam));
+        const int height = static_cast<int>(HIWORD(lParam));
         ResizeRenderTarget(LOWORD(lParam), HIWORD(lParam));
         if (edit_) MoveWindow(edit_, 20, 16, std::max(100, width - 150), 38, TRUE);
         if (settingsButton_) MoveWindow(settingsButton_, std::max(120, width - 118), 16, 98, 38, TRUE);
+        if (closeButton_) MoveWindow(closeButton_, std::max(20, width - 52), std::max(70, height - 48), 32, 30, TRUE);
         return 0;
     }
     case WM_PAINT: {
@@ -257,9 +227,10 @@ LRESULT SearchWindow::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) 
     case WM_ERASEBKGND:
         return 1;
     case WM_DESTROY:
-        gL3Generation.fetch_add(1, std::memory_order_relaxed);
         l3_.Stop();
+        files_.Shutdown();
         UnregisterHotKey(hwnd_, kHotkeyId);
+        hwnd_ = nullptr;
         PostQuitMessage(0);
         return 0;
     }
@@ -267,18 +238,8 @@ LRESULT SearchWindow::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) 
 }
 
 void SearchWindow::OnQueryChanged() {
-    const int len = GetWindowTextLengthW(edit_);
-    std::wstring query(static_cast<std::size_t>(len) + 1, L'\0');
-    if (len > 0) GetWindowTextW(edit_, query.data(), len + 1);
-    query.resize(static_cast<std::size_t>(len));
-
-    if (l3_.Busy()) {
-        gL3Generation.fetch_add(1, std::memory_order_relaxed);
-        l3_.Stop();
-    }
-
+    const auto query = ReadText(edit_);
     currentQuery_ = query;
-    streamingText_.clear();
     appResults_.clear();
     fileResults_.clear();
     results_.clear();
@@ -291,7 +252,7 @@ void SearchWindow::OnQueryChanged() {
         return;
     }
     if (query.front() == L'/') {
-        results_.push_back({ResultKind::Status, L"L3 命令", L"Enter 执行；/help 查看命令", L"", 0});
+        results_.push_back({ResultKind::Status, L"L3 命令", L"Enter 打开 L3 CLI 并执行；/help 查看命令", L"", 0});
         InvalidateRect(hwnd_, nullptr, FALSE);
         return;
     }
@@ -316,13 +277,13 @@ void SearchWindow::MergeResults() {
 
     if (!fileSearchAvailable_) {
         results_.push_back({ResultKind::Status,
-                            L"L2 文件搜索未连接",
-                            L"未检测到 Everything。启动 Everything 后，文件和文件夹结果会自动出现。",
+                            L"L2 文件搜索暂不可用",
+                            L"内置 Everything 尚未启动或索引服务不可用。",
                             L"", -1000});
     } else if (fileSearchQueryFailed_) {
         results_.push_back({ResultKind::Status,
                             L"L2 文件查询失败",
-                            L"Everything 已检测到，但 IPC 查询没有成功。",
+                            L"Everything 已连接，但本次 IPC 查询没有成功。",
                             L"", -1000});
     }
 
@@ -337,10 +298,7 @@ void SearchWindow::MergeResults() {
 }
 
 void SearchWindow::ExecuteSelected(bool forceL3) {
-    const int len = GetWindowTextLengthW(edit_);
-    std::wstring query(static_cast<std::size_t>(len) + 1, L'\0');
-    if (len > 0) GetWindowTextW(edit_, query.data(), len + 1);
-    query.resize(static_cast<std::size_t>(len));
+    const auto query = ReadText(edit_);
     if (query.empty()) return;
 
     if (!forceL3 && selected_ >= 0 && selected_ < static_cast<int>(results_.size())) {
@@ -356,56 +314,22 @@ void SearchWindow::ExecuteSelected(bool forceL3) {
 }
 
 void SearchWindow::StartL3(const std::wstring& prompt) {
-    const auto generation = gL3Generation.fetch_add(1, std::memory_order_relaxed) + 1;
     if (l3_.Busy()) l3_.Stop();
-
-    std::wstring actualPrompt = prompt;
-    if (prompt == L"/retry") {
-        if (lastL3Prompt_.empty()) {
-            SetStatus(L"没有可重试的 L3 请求", L"先提交一次模型请求后才能使用 /retry。");
-            return;
-        }
-        actualPrompt = lastL3Prompt_;
-    }
-
-    std::wstring localReply;
-    bool consumedSecret = false;
-    if (l3_.TryHandleLocal(actualPrompt, localReply, consumedSecret)) {
-        if (consumedSecret) SetWindowTextW(edit_, L"");
-        SetStatus(localReply, L"L3 · Native Tool Router");
+    if (!ShowL3CliWindow(instance_, hwnd_, l3_, prompt)) {
+        SetStatus(L"L3 CLI 启动失败", L"请重试，或打开 AI 设置检查模型配置。");
         return;
     }
-
-    if (!l3_.HasApiKey()) {
-        SetStatus(L"L3 模型尚未配置",
-                  L"点击右上角“AI 设置”填写 Base URL、Model 和 API Key；本地 L3 命令仍可使用。");
-        return;
-    }
-
-    lastL3Prompt_ = actualPrompt;
-    streamingText_.clear();
-    SetStatus(prompt == L"/retry" ? L"正在重试模型请求…" : L"正在连接模型…",
-              l3_.Config().model + L" · WinHTTP · 不经过 Harness");
-    l3_.AskAsync(actualPrompt,
-        [hwnd = hwnd_, generation](std::wstring delta) {
-            PostL3Message(hwnd, kL3DeltaMessage, generation, std::move(delta));
-        },
-        [hwnd = hwnd_, generation](std::wstring done) {
-            PostL3Message(hwnd, kL3DoneMessage, generation, std::move(done));
-        });
+    SetWindowTextW(edit_, L"");
+    ShowAndFocus();
 }
 
 void SearchWindow::OpenModelSettings() {
-    if (l3_.Busy()) {
-        gL3Generation.fetch_add(1, std::memory_order_relaxed);
-        l3_.Stop();
-    }
+    if (l3_.Busy()) l3_.Stop();
 
     const bool saved = ShowModelSettingsWindow(instance_, hwnd_, l3_);
     if (saved) {
         SetStatus(L"L3 模型配置已保存",
-                  l3_.Config().model + L" · " + l3_.Config().baseUrl +
-                  (l3_.HasApiKey() ? L" · API Key 已配置" : L" · API Key 未配置"));
+                  l3_.Config().model + (l3_.HasApiKey() ? L" · API Key 已配置" : L" · API Key 未配置"));
     } else {
         InvalidateRect(hwnd_, nullptr, FALSE);
     }
@@ -444,31 +368,40 @@ void SearchWindow::Draw() {
         std::wstring hint;
         if (currentQuery_.empty()) {
             hint = L"L1 应用 · L2 ";
-            hint += fileSearchAvailable_ ? L"已连接" : L"需要 Everything";
+            hint += fileSearchAvailable_ ? L"已连接" : L"启动中";
             hint += L" · L3 ";
-            hint += l3_.HasApiKey() ? l3_.Config().model : L"未配置（右上角 AI 设置）";
+            hint += l3_.HasApiKey() ? l3_.Config().model : L"未配置（AI 设置）";
         } else {
-            hint = L"没有本地结果 · 按 Enter 交给 L3，Ctrl+Enter 可随时强制 L3";
+            hint = L"没有本地结果 · Enter 进入 L3 CLI，Ctrl+Enter 可随时强制 L3";
         }
         renderTarget_->DrawText(hint.c_str(), static_cast<UINT32>(hint.size()), subtitleFormat_.Get(),
-                                D2D1::RectF(24, y, width - 24, y + 36), secondaryBrush_.Get());
+                                D2D1::RectF(24, y, width - 24, y + 30), secondaryBrush_.Get());
     }
 
     for (std::size_t i = 0; i < results_.size(); ++i) {
         const auto& result = results_[i];
-        const float rowHeight = (result.kind == ResultKind::Answer || result.kind == ResultKind::Status) ? 86.0f : 50.0f;
+        const float rowHeight = (result.kind == ResultKind::Status) ? 64.0f : 50.0f;
         if (static_cast<int>(i) == selected_) {
-            renderTarget_->FillRoundedRectangle(D2D1::RoundedRect(D2D1::RectF(14, y - 4, width - 14, y + rowHeight - 4), 8, 8), selectionBrush_.Get());
+            renderTarget_->FillRoundedRectangle(
+                D2D1::RoundedRect(D2D1::RectF(14, y - 4, width - 14, y + rowHeight - 4), 8, 8),
+                selectionBrush_.Get());
         }
+
         std::wstring title = result.title;
-        if (title.size() > 280) title.resize(280);
+        if (title.size() > 100) title.resize(100);
         renderTarget_->DrawText(title.c_str(), static_cast<UINT32>(title.size()), titleFormat_.Get(),
-                                D2D1::RectF(24, y, width - 24, y + rowHeight - 26), textBrush_.Get());
-        const std::wstring subtitle = std::wstring(KindLabel(result.kind)) + (result.subtitle.empty() ? L"" : L" · " + result.subtitle);
+                                D2D1::RectF(24, y, width - 64, y + 26), textBrush_.Get(),
+                                D2D1_DRAW_TEXT_OPTIONS_CLIP);
+
+        std::wstring subtitle = std::wstring(KindLabel(result.kind));
+        if (!result.subtitle.empty()) subtitle += L" · " + result.subtitle;
+        if (subtitle.size() > 150) subtitle.resize(150);
         renderTarget_->DrawText(subtitle.c_str(), static_cast<UINT32>(subtitle.size()), subtitleFormat_.Get(),
-                                D2D1::RectF(24, y + rowHeight - 28, width - 24, y + rowHeight), secondaryBrush_.Get());
+                                D2D1::RectF(24, y + 30, width - 64, y + rowHeight), secondaryBrush_.Get(),
+                                D2D1_DRAW_TEXT_OPTIONS_CLIP);
+
         y += rowHeight;
-        if (y > renderTarget_->GetSize().height - 20) break;
+        if (y > renderTarget_->GetSize().height - 56) break;
     }
 
     const HRESULT hr = renderTarget_->EndDraw();

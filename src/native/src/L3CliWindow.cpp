@@ -2,6 +2,7 @@
 #include "turingdesk/ModelSettingsWindow.h"
 #include <algorithm>
 #include <atomic>
+#include <cstdint>
 #include <cwctype>
 #include <memory>
 
@@ -36,6 +37,7 @@ struct CliState {
     HFONT uiFont{};
     std::wstring transcriptPrefix;
     std::wstring streaming;
+    std::wstring lastPrompt;
     std::uint64_t generation{};
     bool busy{};
 };
@@ -46,6 +48,13 @@ std::wstring Trim(std::wstring value) {
     const auto notSpace = [](wchar_t ch) { return !std::iswspace(ch); };
     value.erase(value.begin(), std::find_if(value.begin(), value.end(), notSpace));
     value.erase(std::find_if(value.rbegin(), value.rend(), notSpace).base(), value.end());
+    return value;
+}
+
+std::wstring Lower(std::wstring value) {
+    std::transform(value.begin(), value.end(), value.begin(), [](wchar_t ch) {
+        return static_cast<wchar_t>(std::towlower(ch));
+    });
     return value;
 }
 
@@ -65,7 +74,7 @@ void PostUi(HWND hwnd, UINT message, std::uint64_t generation, std::wstring text
 }
 
 void RenderTranscript(CliState& state, const std::wstring& tail = {}) {
-    std::wstring text = state.transcriptPrefix + tail;
+    const std::wstring text = state.transcriptPrefix + tail;
     SetWindowTextW(state.transcript, text.c_str());
     SendMessageW(state.transcript, EM_SETSEL, static_cast<WPARAM>(-1), static_cast<LPARAM>(-1));
     SendMessageW(state.transcript, EM_SCROLLCARET, 0, 0);
@@ -93,23 +102,39 @@ void StopTurn(CliState& state) {
 
 void SendPrompt(CliState& state) {
     if (state.busy) return;
-    const auto prompt = Trim(ReadText(state.input));
-    if (prompt.empty()) return;
+    const auto typedPrompt = Trim(ReadText(state.input));
+    if (typedPrompt.empty()) return;
     SetWindowTextW(state.input, L"");
 
-    std::wstring localReply;
-    bool consumedSecret = false;
-    if (state.agent->TryHandleLocal(prompt, localReply, consumedSecret)) {
-        AppendCompleted(state, prompt, localReply);
-        return;
+    const auto lower = Lower(typedPrompt);
+    std::wstring actualPrompt = typedPrompt;
+    bool retry = false;
+    if (lower == L"/retry") {
+        if (state.lastPrompt.empty()) {
+            AppendCompleted(state, typedPrompt, L"没有可重试的模型请求。");
+            return;
+        }
+        actualPrompt = state.lastPrompt;
+        retry = true;
+    }
+
+    if (!retry) {
+        std::wstring localReply;
+        bool consumedSecret = false;
+        if (state.agent->TryHandleLocal(actualPrompt, localReply, consumedSecret)) {
+            if (lower == L"/new" || lower == L"/new-chat" || lower == L"新对话") state.lastPrompt.clear();
+            AppendCompleted(state, typedPrompt, localReply);
+            return;
+        }
     }
 
     if (!state.agent->HasApiKey()) {
-        AppendCompleted(state, prompt, L"L3 未配置。点击右上角“AI 设置”填写 API 地址和 Key。");
+        AppendCompleted(state, typedPrompt, L"L3 未配置。点击右上角“AI 设置”填写 API 地址和 Key。");
         return;
     }
 
-    state.transcriptPrefix += L"> " + prompt + L"\r\nAI  ";
+    if (!retry) state.lastPrompt = actualPrompt;
+    state.transcriptPrefix += L"> " + typedPrompt + (retry ? L"  [重试上一请求]" : L"") + L"\r\nAI  ";
     state.streaming.clear();
     state.busy = true;
     state.generation = gCliGeneration.fetch_add(1, std::memory_order_relaxed) + 1;
@@ -118,7 +143,7 @@ void SendPrompt(CliState& state) {
 
     const auto generation = state.generation;
     const HWND hwnd = state.window;
-    state.agent->AskAsync(prompt,
+    state.agent->AskAsync(actualPrompt,
         [hwnd, generation](std::wstring delta) {
             PostUi(hwnd, kDeltaMessage, generation, std::move(delta));
         },
@@ -166,20 +191,23 @@ LRESULT CALLBACK CliProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) 
             return 0;
         }
         if (LOWORD(wParam) == kCloseId && HIWORD(wParam) == BN_CLICKED) {
+            if (state->busy) StopTurn(*state);
             DestroyWindow(hwnd);
             return 0;
         }
         break;
     case kDeltaMessage: {
         std::unique_ptr<UiMessage> payload(reinterpret_cast<UiMessage*>(lParam));
-        if (!payload || payload->generation != state->generation || payload->generation != gCliGeneration.load(std::memory_order_relaxed)) return 0;
+        if (!payload || payload->generation != state->generation ||
+            payload->generation != gCliGeneration.load(std::memory_order_relaxed)) return 0;
         state->streaming += payload->text;
         RenderTranscript(*state, state->streaming.empty() ? L"…" : state->streaming);
         return 0;
     }
     case kDoneMessage: {
         std::unique_ptr<UiMessage> payload(reinterpret_cast<UiMessage*>(lParam));
-        if (!payload || payload->generation != state->generation || payload->generation != gCliGeneration.load(std::memory_order_relaxed)) return 0;
+        if (!payload || payload->generation != state->generation ||
+            payload->generation != gCliGeneration.load(std::memory_order_relaxed)) return 0;
         if (!payload->text.empty()) {
             if (state->streaming.empty()) state->streaming = payload->text;
             else state->streaming += L"\r\n" + payload->text;
@@ -194,8 +222,8 @@ LRESULT CALLBACK CliProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) 
         return 0;
     }
     case WM_SIZE: {
-        const int width = LOWORD(lParam);
-        const int height = HIWORD(lParam);
+        const int width = static_cast<int>(LOWORD(lParam));
+        const int height = static_cast<int>(HIWORD(lParam));
         if (state->transcript) MoveWindow(state->transcript, 16, 52, std::max(100, width - 32), std::max(80, height - 118), TRUE);
         if (state->input) MoveWindow(state->input, 16, std::max(80, height - 50), std::max(100, width - 76), 34, TRUE);
         if (state->settings) MoveWindow(state->settings, std::max(120, width - 112), 14, 96, 28, TRUE);
@@ -203,11 +231,8 @@ LRESULT CALLBACK CliProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) 
         return 0;
     }
     case WM_CTLCOLOREDIT:
-        SetTextColor(reinterpret_cast<HDC>(wParam), RGB(240, 240, 240));
-        SetBkColor(reinterpret_cast<HDC>(wParam), RGB(24, 26, 31));
-        return reinterpret_cast<LRESULT>(state->backgroundBrush);
     case WM_CTLCOLORSTATIC:
-        SetTextColor(reinterpret_cast<HDC>(wParam), RGB(210, 210, 210));
+        SetTextColor(reinterpret_cast<HDC>(wParam), RGB(240, 240, 240));
         SetBkColor(reinterpret_cast<HDC>(wParam), RGB(24, 26, 31));
         return reinterpret_cast<LRESULT>(state->backgroundBrush);
     case WM_CLOSE:
@@ -283,13 +308,15 @@ bool ShowL3CliWindow(HINSTANCE instance, HWND owner, L3Agent& agent, const std::
     }
 
     SetWindowLongPtrW(state.input, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(&state));
-    state.oldInputProc = reinterpret_cast<WNDPROC>(SetWindowLongPtrW(state.input, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(&InputProc)));
+    state.oldInputProc = reinterpret_cast<WNDPROC>(SetWindowLongPtrW(state.input, GWLP_WNDPROC,
+                                                                     reinterpret_cast<LONG_PTR>(&InputProc)));
     SendMessageW(title, WM_SETFONT, reinterpret_cast<WPARAM>(state.uiFont), TRUE);
     SendMessageW(state.settings, WM_SETFONT, reinterpret_cast<WPARAM>(state.uiFont), TRUE);
     SendMessageW(state.close, WM_SETFONT, reinterpret_cast<WPARAM>(state.uiFont), TRUE);
     SendMessageW(state.transcript, WM_SETFONT, reinterpret_cast<WPARAM>(state.monoFont), TRUE);
     SendMessageW(state.input, WM_SETFONT, reinterpret_cast<WPARAM>(state.monoFont), TRUE);
-    SendMessageW(state.input, EM_SETCUEBANNER, TRUE, reinterpret_cast<LPARAM>(L"继续对话… Enter 发送 · Esc 返回搜索"));
+    SendMessageW(state.input, EM_SETCUEBANNER, TRUE,
+                 reinterpret_cast<LPARAM>(L"继续对话… Enter 发送 · Esc 返回搜索"));
 
     std::wstring ignored;
     bool secret = false;

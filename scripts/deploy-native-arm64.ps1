@@ -14,39 +14,47 @@ function Step([string]$Text) {
     Write-Host "`n==> $Text" -ForegroundColor Cyan
 }
 
+function Stop-BundledEverything {
+    $BundledPath = Join-Path $DeployDir "Everything\Everything.exe"
+    if (-not (Test-Path $BundledPath)) { return }
+
+    $Expected = [System.IO.Path]::GetFullPath($BundledPath)
+    foreach ($Process in @(Get-Process -Name "Everything" -ErrorAction SilentlyContinue)) {
+        try {
+            if ($Process.Path -and ([System.IO.Path]::GetFullPath($Process.Path) -eq $Expected)) {
+                Stop-Process -Id $Process.Id -Force -ErrorAction SilentlyContinue
+            }
+        }
+        catch { }
+    }
+    Start-Sleep -Milliseconds 200
+}
+
 function Stop-DeployedInstance {
     Step "Stopping previous TuringDesk instance"
-
-    $Processes = @(Get-Process -Name "TuringDesk" -ErrorAction SilentlyContinue)
-    foreach ($Process in $Processes) {
-        try {
-            Stop-Process -Id $Process.Id -Force -ErrorAction Stop
-        }
-        catch {
-            Write-Host "Stop-Process did not terminate PID $($Process.Id); retrying." -ForegroundColor DarkGray
-        }
+    foreach ($Process in @(Get-Process -Name "TuringDesk" -ErrorAction SilentlyContinue)) {
+        try { Stop-Process -Id $Process.Id -Force -ErrorAction Stop }
+        catch { Write-Host "Stop-Process did not terminate PID $($Process.Id); retrying." -ForegroundColor DarkGray }
     }
 
     for ($i = 0; $i -lt 30; $i++) {
         $Remaining = @(Get-Process -Name "TuringDesk" -ErrorAction SilentlyContinue)
-        if ($Remaining.Count -eq 0) {
-            Start-Sleep -Milliseconds 150
-            return
-        }
-
+        if ($Remaining.Count -eq 0) { break }
         foreach ($Process in $Remaining) {
             Stop-Process -Id $Process.Id -Force -ErrorAction SilentlyContinue
         }
         Start-Sleep -Milliseconds 100
     }
 
-    & taskkill.exe /F /IM TuringDesk.exe 2>$null | Out-Null
-    Start-Sleep -Milliseconds 250
+    if (@(Get-Process -Name "TuringDesk" -ErrorAction SilentlyContinue).Count -gt 0) {
+        & taskkill.exe /F /IM TuringDesk.exe 2>$null | Out-Null
+    }
+    Start-Sleep -Milliseconds 200
+    Stop-BundledEverything
 }
 
 function Copy-DeployedBinary([string]$Source, [string]$Destination) {
     $LastError = $null
-
     for ($i = 1; $i -le 25; $i++) {
         try {
             Copy-Item $Source $Destination -Force -ErrorAction Stop
@@ -63,7 +71,6 @@ function Copy-DeployedBinary([string]$Source, [string]$Destination) {
             break
         }
     }
-
     throw "Unable to replace deployed TuringDesk.exe after retries: $($LastError.Exception.Message)"
 }
 
@@ -92,28 +99,20 @@ function Get-RunForCommit([string]$Sha, [switch]$SuccessfulOnly) {
         "--limit", "1",
         "--json", "databaseId,headSha,status,conclusion"
     )
-    if ($SuccessfulOnly) {
-        $Args += @("--status", "success")
-    }
+    if ($SuccessfulOnly) { $Args += @("--status", "success") }
 
     $Json = & gh @Args
-    if ($LASTEXITCODE -ne 0) {
-        throw "Unable to query GitHub Actions runs"
-    }
+    if ($LASTEXITCODE -ne 0) { throw "Unable to query GitHub Actions runs" }
 
     $Runs = @($Json | ConvertFrom-Json)
-    if ($Runs.Count -eq 0) {
-        return $null
-    }
+    if ($Runs.Count -eq 0) { return $null }
     return $Runs[0]
 }
 
 function Start-And-WaitForRun([string]$Sha) {
     Step "No successful ARM64 package for current main; starting CI"
     & gh workflow run $Workflow --repo $Repo --ref main | Out-Host
-    if ($LASTEXITCODE -ne 0) {
-        throw "Unable to start GitHub Actions workflow"
-    }
+    if ($LASTEXITCODE -ne 0) { throw "Unable to start GitHub Actions workflow" }
 
     $Run = $null
     for ($i = 0; $i -lt 30; $i++) {
@@ -121,19 +120,13 @@ function Start-And-WaitForRun([string]$Sha) {
         $Run = Get-RunForCommit $Sha
         if ($Run) { break }
     }
-
-    if (-not $Run) {
-        throw "Workflow was started but its run could not be found"
-    }
+    if (-not $Run) { throw "Workflow was started but its run could not be found" }
 
     $RunId = [long]$Run.databaseId
     Step "Waiting for GitHub Actions run $RunId"
     & gh run watch $RunId --repo $Repo --exit-status | Out-Host
-    if ($LASTEXITCODE -ne 0) {
-        throw "GitHub Actions build failed"
-    }
-
-    return $RunId
+    if ($LASTEXITCODE -ne 0) { throw "GitHub Actions build failed" }
+    return [long]$RunId
 }
 
 function Download-Artifact([long]$RunId) {
@@ -170,26 +163,23 @@ function Deploy-BundledEverything([string]$ArtifactRoot) {
         return $null
     }
 
-    # Everything is pinned in CI. Avoid replacing a running image on every sync.
-    # A future version bump can explicitly stop the bundled process first.
-    if (-not (Test-Path $DestinationExe)) {
-        Step "Installing bundled Everything files"
-        New-Item -ItemType Directory -Force -Path $DestinationDir | Out-Null
-        Copy-Item (Join-Path $SourceDir "*") $DestinationDir -Recurse -Force
-    }
+    Step "Installing bundled Everything files"
+    New-Item -ItemType Directory -Force -Path $DestinationDir | Out-Null
+    Copy-Item (Join-Path $SourceDir "*") $DestinationDir -Recurse -Force
+
+    $Config = Join-Path $DestinationDir "TuringDesk-Everything.ini"
+    @"
+[Everything]
+run_in_background=1
+show_tray_icon=0
+check_for_updates_on_startup=0
+"@ | Set-Content -Path $Config -Encoding UTF8
 
     return $DestinationExe
 }
 
-function Ensure-Everything([string]$EverythingExe) {
-    if ([string]::IsNullOrWhiteSpace($EverythingExe) -or -not (Test-Path $EverythingExe)) {
-        return
-    }
-
-    if (Get-Process -Name "Everything" -ErrorAction SilentlyContinue) {
-        Write-Host "Everything is already running; L2 will reuse it." -ForegroundColor DarkGray
-        return
-    }
+function Ensure-EverythingService([string]$EverythingExe) {
+    if ([string]::IsNullOrWhiteSpace($EverythingExe) -or -not (Test-Path $EverythingExe)) { return }
 
     $Service = Get-Service -Name "Everything" -ErrorAction SilentlyContinue
     if (-not $Service) {
@@ -206,17 +196,8 @@ function Ensure-Everything([string]$EverythingExe) {
         }
     }
 
-    try {
-        # Suppress Everything's first-run volume chooser/update prompt and keep it background-only.
-        Start-Process -FilePath $EverythingExe -ArgumentList @("-disable-update-notification", "-no-choose-volumes") -Wait -WindowStyle Hidden | Out-Null
-    }
-    catch {
-        Write-Host "Everything preference setup skipped: $($_.Exception.Message)" -ForegroundColor DarkGray
-    }
-
-    Step "Starting bundled Everything for L2"
-    Start-Process -FilePath $EverythingExe -ArgumentList "-startup" -WindowStyle Hidden | Out-Null
-    Start-Sleep -Milliseconds 800
+    Write-Host "Bundled Everything is configured for background use with no tray icon." -ForegroundColor DarkGray
+    Write-Host "TuringDesk will start and stop the client automatically." -ForegroundColor DarkGray
 }
 
 if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
@@ -253,7 +234,7 @@ try {
     Copy-DeployedBinary -Source $Downloaded.Exe -Destination $DeployedExe
 
     $EverythingExe = Deploy-BundledEverything -ArtifactRoot $Downloaded.Root
-    Ensure-Everything -EverythingExe $EverythingExe
+    Ensure-EverythingService -EverythingExe $EverythingExe
 
     Step "Starting TuringDesk Native Search"
     Start-Process $DeployedExe
