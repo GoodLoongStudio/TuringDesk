@@ -1,4 +1,5 @@
 #include "turingdesk/SearchWindow.h"
+#include "turingdesk/ModelSettingsWindow.h"
 #include <dwmapi.h>
 #include <shellapi.h>
 #include <algorithm>
@@ -10,6 +11,8 @@ namespace turingdesk {
 namespace {
 
 constexpr int kHotkeyId = 1;
+constexpr int kSearchEditId = 100;
+constexpr int kSettingsButtonId = 101;
 constexpr UINT kL3DeltaMessage = WM_APP + 10;
 constexpr UINT kL3DoneMessage = WM_APP + 11;
 constexpr int kWindowWidth = 760;
@@ -31,13 +34,17 @@ void PostL3Message(HWND hwnd, UINT message, std::uint64_t generation, std::wstri
     }
 }
 
+bool IsLaunchable(ResultKind kind) {
+    return kind == ResultKind::App || kind == ResultKind::File || kind == ResultKind::Folder;
+}
+
 const wchar_t* KindLabel(ResultKind kind) {
     switch (kind) {
     case ResultKind::App: return L"L1 应用";
     case ResultKind::File: return L"L2 文件";
     case ResultKind::Folder: return L"L2 文件夹";
     case ResultKind::Answer: return L"L3 AI";
-    case ResultKind::Status: return L"L3";
+    case ResultKind::Status: return L"状态";
     }
     return L"";
 }
@@ -76,11 +83,19 @@ bool SearchWindow::Create() {
     if (!hwnd_) return false;
 
     edit_ = CreateWindowExW(0, L"EDIT", L"", WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL,
-                            20, 16, kWindowWidth - 40, 38, hwnd_, reinterpret_cast<HMENU>(100), instance_, nullptr);
+                            20, 16, kWindowWidth - 150, 38, hwnd_, reinterpret_cast<HMENU>(kSearchEditId), instance_, nullptr);
     if (!edit_) return false;
     SetWindowLongPtrW(edit_, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(this));
     oldEditProc_ = reinterpret_cast<WNDPROC>(SetWindowLongPtrW(edit_, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(&SearchWindow::EditProc)));
     SendMessageW(edit_, EM_SETCUEBANNER, TRUE, reinterpret_cast<LPARAM>(L"搜索应用、文件，或直接问 L3…  Ctrl+Enter 强制 AI"));
+
+    settingsButton_ = CreateWindowExW(0, L"BUTTON", L"AI 设置",
+                                      WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+                                      kWindowWidth - 118, 16, 98, 38, hwnd_,
+                                      reinterpret_cast<HMENU>(kSettingsButtonId), instance_, nullptr);
+    if (!settingsButton_) return false;
+    SendMessageW(settingsButton_, WM_SETFONT,
+                 reinterpret_cast<WPARAM>(GetStockObject(DEFAULT_GUI_FONT)), TRUE);
 
     const DWM_WINDOW_CORNER_PREFERENCE corner = DWMWCP_ROUND;
     DwmSetWindowAttribute(hwnd_, DWMWA_WINDOW_CORNER_PREFERENCE, &corner, sizeof(corner));
@@ -89,6 +104,7 @@ bool SearchWindow::Create() {
     if (!RegisterHotKey(hwnd_, kHotkeyId, MOD_ALT | MOD_NOREPEAT, VK_SPACE)) return false;
 
     apps_.BuildIndex();
+    fileSearchAvailable_ = files_.Available();
     PositionWindow();
     ShowAndFocus();
     return true;
@@ -99,7 +115,7 @@ bool SearchWindow::SelfTest() {
     std::wstring reply;
     bool secret = false;
     const bool local = l3_.TryHandleLocal(L"/time", reply, secret);
-    return apps_.Count() >= 5 && local && !reply.empty() && !secret;
+    return apps_.Count() >= 5 && files_.SelfTest() && local && !reply.empty() && !secret;
 }
 
 void SearchWindow::ShowAndFocus() {
@@ -109,6 +125,7 @@ void SearchWindow::ShowAndFocus() {
     SetForegroundWindow(hwnd_);
     SetFocus(edit_);
     SendMessageW(edit_, EM_SETSEL, 0, -1);
+    InvalidateRect(hwnd_, nullptr, FALSE);
 }
 
 int SearchWindow::RunMessageLoop() {
@@ -181,11 +198,14 @@ LRESULT SearchWindow::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) 
         if (wParam == kHotkeyId) { ShowAndFocus(); return 0; }
         break;
     case WM_COMMAND:
-        if (LOWORD(wParam) == 100 && HIWORD(wParam) == EN_CHANGE) { OnQueryChanged(); return 0; }
+        if (LOWORD(wParam) == kSearchEditId && HIWORD(wParam) == EN_CHANGE) { OnQueryChanged(); return 0; }
+        if (LOWORD(wParam) == kSettingsButtonId && HIWORD(wParam) == BN_CLICKED) { OpenModelSettings(); return 0; }
         break;
     case WM_COPYDATA: {
         std::vector<SearchResult> received;
         if (files_.HandleCopyData(reinterpret_cast<COPYDATASTRUCT*>(lParam), received)) {
+            fileSearchAvailable_ = true;
+            fileSearchQueryFailed_ = false;
             fileResults_ = std::move(received);
             MergeResults();
             return TRUE;
@@ -216,10 +236,13 @@ LRESULT SearchWindow::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) 
         InvalidateRect(hwnd_, nullptr, FALSE);
         return 0;
     }
-    case WM_SIZE:
+    case WM_SIZE: {
+        const int width = static_cast<int>(LOWORD(lParam));
         ResizeRenderTarget(LOWORD(lParam), HIWORD(lParam));
-        if (edit_) MoveWindow(edit_, 20, 16, std::max(100, static_cast<int>(LOWORD(lParam)) - 40), 38, TRUE);
+        if (edit_) MoveWindow(edit_, 20, 16, std::max(100, width - 150), 38, TRUE);
+        if (settingsButton_) MoveWindow(settingsButton_, std::max(120, width - 118), 16, 98, 38, TRUE);
         return 0;
+    }
     case WM_PAINT: {
         PAINTSTRUCT ps{};
         BeginPaint(hwnd_, &ps);
@@ -256,8 +279,13 @@ void SearchWindow::OnQueryChanged() {
     fileResults_.clear();
     results_.clear();
     selected_ = -1;
+    fileSearchQueryFailed_ = false;
 
-    if (query.empty()) { InvalidateRect(hwnd_, nullptr, FALSE); return; }
+    if (query.empty()) {
+        fileSearchAvailable_ = files_.Available();
+        InvalidateRect(hwnd_, nullptr, FALSE);
+        return;
+    }
     if (query.front() == L'/') {
         results_.push_back({ResultKind::Status, L"L3 命令", L"Enter 执行；/help 查看命令", L"", 0});
         InvalidateRect(hwnd_, nullptr, FALSE);
@@ -265,18 +293,42 @@ void SearchWindow::OnQueryChanged() {
     }
 
     appResults_ = apps_.Query(query, 5);
+    fileSearchAvailable_ = files_.Available();
     MergeResults();
-    files_.Query(hwnd_, query, 8);
+
+    if (fileSearchAvailable_ && !files_.Query(hwnd_, query, 8)) {
+        fileSearchQueryFailed_ = true;
+        MergeResults();
+    }
 }
 
 void SearchWindow::MergeResults() {
     results_.clear();
     for (const auto& result : appResults_) results_.push_back(result);
     for (const auto& result : fileResults_) {
-        if (results_.size() >= 10) break;
+        if (results_.size() >= 9) break;
         results_.push_back(result);
     }
-    selected_ = results_.empty() ? -1 : 0;
+
+    if (!fileSearchAvailable_) {
+        results_.push_back({ResultKind::Status,
+                            L"L2 文件搜索未连接",
+                            L"未检测到 Everything。启动 Everything 后，文件和文件夹结果会自动出现。",
+                            L"", -1000});
+    } else if (fileSearchQueryFailed_) {
+        results_.push_back({ResultKind::Status,
+                            L"L2 文件查询失败",
+                            L"Everything 已检测到，但 IPC 查询没有成功。",
+                            L"", -1000});
+    }
+
+    selected_ = -1;
+    for (std::size_t i = 0; i < results_.size(); ++i) {
+        if (IsLaunchable(results_[i].kind)) {
+            selected_ = static_cast<int>(i);
+            break;
+        }
+    }
     InvalidateRect(hwnd_, nullptr, FALSE);
 }
 
@@ -289,7 +341,7 @@ void SearchWindow::ExecuteSelected(bool forceL3) {
 
     if (!forceL3 && selected_ >= 0 && selected_ < static_cast<int>(results_.size())) {
         const auto& result = results_[selected_];
-        if ((result.kind == ResultKind::App || result.kind == ResultKind::File || result.kind == ResultKind::Folder) && !result.target.empty()) {
+        if (IsLaunchable(result.kind) && !result.target.empty()) {
             const auto code = reinterpret_cast<INT_PTR>(ShellExecuteW(hwnd_, L"open", result.target.c_str(), nullptr, nullptr, SW_SHOWNORMAL));
             if (code <= 32) SetStatus(L"打开失败", result.target);
             else ShowWindow(hwnd_, SW_HIDE);
@@ -311,6 +363,12 @@ void SearchWindow::StartL3(const std::wstring& prompt) {
         return;
     }
 
+    if (!l3_.HasApiKey()) {
+        SetStatus(L"L3 模型尚未配置",
+                  L"点击右上角“AI 设置”填写 Base URL、Model 和 API Key；本地 L3 命令仍可使用。");
+        return;
+    }
+
     streamingText_.clear();
     SetStatus(L"正在连接模型…", l3_.Config().model + L" · WinHTTP · 不经过 Harness");
     l3_.AskAsync(prompt,
@@ -320,6 +378,23 @@ void SearchWindow::StartL3(const std::wstring& prompt) {
         [hwnd = hwnd_, generation](std::wstring done) {
             PostL3Message(hwnd, kL3DoneMessage, generation, std::move(done));
         });
+}
+
+void SearchWindow::OpenModelSettings() {
+    if (l3_.Busy()) {
+        gL3Generation.fetch_add(1, std::memory_order_relaxed);
+        l3_.Stop();
+    }
+
+    const bool saved = ShowModelSettingsWindow(instance_, hwnd_, l3_);
+    if (saved) {
+        SetStatus(L"L3 模型配置已保存",
+                  l3_.Config().model + L" · " + l3_.Config().baseUrl +
+                  (l3_.HasApiKey() ? L" · API Key 已配置" : L" · API Key 未配置"));
+    } else {
+        InvalidateRect(hwnd_, nullptr, FALSE);
+    }
+    SetFocus(edit_);
 }
 
 void SearchWindow::SetStatus(std::wstring title, std::wstring subtitle) {
@@ -351,9 +426,15 @@ void SearchWindow::Draw() {
     float y = 68.0f;
     const float width = renderTarget_->GetSize().width;
     if (results_.empty()) {
-        const std::wstring hint = currentQuery_.empty()
-            ? L"L1 应用 · L2 文件 · L3 Native Agent"
-            : L"没有本地结果 · 按 Enter 交给 L3，Ctrl+Enter 可随时强制 L3";
+        std::wstring hint;
+        if (currentQuery_.empty()) {
+            hint = L"L1 应用 · L2 ";
+            hint += fileSearchAvailable_ ? L"已连接" : L"需要 Everything";
+            hint += L" · L3 ";
+            hint += l3_.HasApiKey() ? l3_.Config().model : L"未配置（右上角 AI 设置）";
+        } else {
+            hint = L"没有本地结果 · 按 Enter 交给 L3，Ctrl+Enter 可随时强制 L3";
+        }
         renderTarget_->DrawText(hint.c_str(), static_cast<UINT32>(hint.size()), subtitleFormat_.Get(),
                                 D2D1::RectF(24, y, width - 24, y + 36), secondaryBrush_.Get());
     }

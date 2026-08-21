@@ -31,6 +31,7 @@ private:
     void MergeResults();
     void ExecuteSelected(bool forceL3);
     void StartL3(const std::wstring& prompt);
+    void OpenModelSettings();
     void Draw();
     void ResizeRenderTarget(UINT width, UINT height);
     void PositionWindow();
@@ -39,6 +40,7 @@ private:
     HINSTANCE instance_{};
     HWND hwnd_{};
     HWND edit_{};
+    HWND settingsButton_{};
     WNDPROC oldEditProc_{};
     AppSearch apps_;
     EverythingSearch files_;
@@ -47,6 +49,8 @@ private:
     std::vector<SearchResult> fileResults_;
     std::vector<SearchResult> results_;
     int selected_{-1};
+    bool fileSearchAvailable_{false};
+    bool fileSearchQueryFailed_{false};
     std::wstring currentQuery_;
     std::wstring streamingText_;
 
