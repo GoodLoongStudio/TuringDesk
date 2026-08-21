@@ -27,6 +27,17 @@ The above copyright notice and this permission notice shall be included in all c
 
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
+## OpenAI Codex
+
+- Project: OpenAI Codex
+- Source: https://github.com/openai/codex
+- Pinned TuringDesk Agent Runtime POC: `rust-v0.146.0`
+- Component: `codex-app-server`
+- License: Apache License 2.0
+- TuringDesk usage: optional, on-demand L3 Agent Runtime sidecar. TuringDesk keeps its own native Search UI, Provider configuration, Credential Manager storage, and runtime routing. The sidecar is not part of the resident Search path.
+
+The Codex binary is installed on demand for the Agent Runtime POC. Formal redistributable packages must ship the applicable upstream Apache-2.0 license and notices alongside the component.
+
 ## Microsoft PowerToys
 
 - Project: Microsoft PowerToys / PowerToys Run Program plugin

@@ -1,4 +1,5 @@
 #include "turingdesk/L3CliWindow.h"
+#include "turingdesk/CodexRuntime.h"
 #include "turingdesk/ModelSettingsWindow.h"
 #include <CommCtrl.h>
 #include <algorithm>
@@ -18,6 +19,11 @@ constexpr int kCloseId = 3104;
 constexpr UINT kDeltaMessage = WM_APP + 31;
 constexpr UINT kDoneMessage = WM_APP + 32;
 
+enum class ActiveRuntime {
+    Direct,
+    Codex,
+};
+
 struct UiMessage {
     std::uint64_t generation{};
     std::wstring text;
@@ -33,6 +39,7 @@ struct CliState {
     HWND close{};
     WNDPROC oldInputProc{};
     L3Agent* agent{};
+    std::unique_ptr<CodexRuntime> codex;
     HBRUSH backgroundBrush{};
     HFONT monoFont{};
     HFONT uiFont{};
@@ -40,6 +47,8 @@ struct CliState {
     std::wstring streaming;
     std::wstring lastPrompt;
     std::uint64_t generation{};
+    ActiveRuntime activeRuntime{ActiveRuntime::Direct};
+    ActiveRuntime lastRuntime{ActiveRuntime::Direct};
     bool busy{};
 };
 
@@ -87,10 +96,23 @@ void AppendCompleted(CliState& state, const std::wstring& user, const std::wstri
     RenderTranscript(state);
 }
 
+std::wstring RuntimeStatusText(CliState& state) {
+    const auto status = state.codex->Status(*state.agent);
+    std::wstring text = L"当前路由：";
+    text += state.codex->CanHandle(*state.agent) ? L"Codex Agent Runtime" : L"Direct Model Runtime";
+    text += L"\r\nCodex sidecar：";
+    text += status.binaryAvailable ? L"已安装" : L"未安装";
+    text += L"\r\nProvider → Codex：";
+    text += status.providerCompatible ? L"Responses 可直连" : L"等待协议桥";
+    text += L"\r\n" + status.message;
+    return text;
+}
+
 void StopTurn(CliState& state) {
     if (!state.busy) return;
     gCliGeneration.fetch_add(1, std::memory_order_relaxed);
-    state.agent->Stop();
+    if (state.activeRuntime == ActiveRuntime::Codex) state.codex->Stop();
+    else state.agent->Stop();
     state.busy = false;
     if (state.streaming.empty()) state.streaming = L"[已停止]";
     else state.streaming += L"\r\n[已停止]";
@@ -108,6 +130,11 @@ void SendPrompt(CliState& state) {
     SetWindowTextW(state.input, L"");
 
     const auto lower = Lower(typedPrompt);
+    if (lower == L"/runtime") {
+        AppendCompleted(state, typedPrompt, RuntimeStatusText(state));
+        return;
+    }
+
     std::wstring actualPrompt = typedPrompt;
     bool retry = false;
     if (lower == L"/retry") {
@@ -123,7 +150,10 @@ void SendPrompt(CliState& state) {
         std::wstring localReply;
         bool consumedSecret = false;
         if (state.agent->TryHandleLocal(actualPrompt, localReply, consumedSecret)) {
-            if (lower == L"/new" || lower == L"/new-chat" || lower == L"新对话") state.lastPrompt.clear();
+            if (lower == L"/new" || lower == L"/new-chat" || lower == L"新对话") {
+                state.lastPrompt.clear();
+                state.codex->ResetSession();
+            }
             AppendCompleted(state, typedPrompt, localReply);
             return;
         }
@@ -134,23 +164,37 @@ void SendPrompt(CliState& state) {
         return;
     }
 
-    if (!retry) state.lastPrompt = actualPrompt;
+    const bool canUseCodex = state.codex->CanHandle(*state.agent);
+    ActiveRuntime runtime = canUseCodex ? ActiveRuntime::Codex : ActiveRuntime::Direct;
+    if (retry && state.lastRuntime == ActiveRuntime::Direct) runtime = ActiveRuntime::Direct;
+    if (retry && state.lastRuntime == ActiveRuntime::Codex && !canUseCodex) runtime = ActiveRuntime::Direct;
+
+    if (!retry) {
+        state.lastPrompt = actualPrompt;
+        state.lastRuntime = runtime;
+    }
+    state.activeRuntime = runtime;
     state.transcriptPrefix += L"> " + typedPrompt + (retry ? L"  [重试上一请求]" : L"") + L"\r\nAI  ";
     state.streaming.clear();
     state.busy = true;
     state.generation = gCliGeneration.fetch_add(1, std::memory_order_relaxed) + 1;
     EnableWindow(state.input, FALSE);
-    RenderTranscript(state, L"…");
+    RenderTranscript(state, runtime == ActiveRuntime::Codex ? L"[Codex Agent] …" : L"…");
 
     const auto generation = state.generation;
     const HWND hwnd = state.window;
-    state.agent->AskAsync(actualPrompt,
-        [hwnd, generation](std::wstring delta) {
-            PostUi(hwnd, kDeltaMessage, generation, std::move(delta));
-        },
-        [hwnd, generation](std::wstring done) {
-            PostUi(hwnd, kDoneMessage, generation, std::move(done));
-        });
+    auto onDelta = [hwnd, generation](std::wstring delta) {
+        PostUi(hwnd, kDeltaMessage, generation, std::move(delta));
+    };
+    auto onDone = [hwnd, generation](std::wstring done) {
+        PostUi(hwnd, kDoneMessage, generation, std::move(done));
+    };
+
+    if (runtime == ActiveRuntime::Codex) {
+        state.codex->AskAsync(*state.agent, actualPrompt, std::move(onDelta), std::move(onDone));
+    } else {
+        state.agent->AskAsync(actualPrompt, std::move(onDelta), std::move(onDone));
+    }
 }
 
 LRESULT CALLBACK InputProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) {
@@ -185,7 +229,9 @@ LRESULT CALLBACK CliProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) 
         if (LOWORD(wParam) == kSettingsId && HIWORD(wParam) == BN_CLICKED) {
             if (state->busy) StopTurn(*state);
             if (ShowModelSettingsWindow(state->instance, hwnd, *state->agent)) {
-                state->transcriptPrefix += L"[配置] " + state->agent->Config().model + L" 已保存\r\n\r\n";
+                state->codex->ResetSession();
+                state->transcriptPrefix += L"[配置] " + state->agent->Config().model + L" 已保存\r\n";
+                state->transcriptPrefix += L"[Runtime] " + RuntimeStatusText(*state) + L"\r\n\r\n";
                 RenderTranscript(*state);
             }
             SetFocus(state->input);
@@ -243,6 +289,7 @@ LRESULT CALLBACK CliProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) 
     case WM_DESTROY:
         gCliGeneration.fetch_add(1, std::memory_order_relaxed);
         state->agent->Stop();
+        state->codex->ResetSession();
         return 0;
     }
     return DefWindowProcW(hwnd, message, wParam, lParam);
@@ -264,6 +311,7 @@ bool ShowL3CliWindow(HINSTANCE instance, HWND owner, L3Agent& agent, const std::
     state.instance = instance;
     state.owner = owner;
     state.agent = &agent;
+    state.codex = std::make_unique<CodexRuntime>();
     state.backgroundBrush = CreateSolidBrush(RGB(24, 26, 31));
     state.monoFont = CreateFontW(-17, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
                                  OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
@@ -286,8 +334,8 @@ bool ShowL3CliWindow(HINSTANCE instance, HWND owner, L3Agent& agent, const std::
         return false;
     }
 
-    HWND title = CreateWindowExW(0, L"STATIC", L"L3 CLI", WS_CHILD | WS_VISIBLE,
-                                 16, 16, 220, 24, window, nullptr, instance, nullptr);
+    HWND title = CreateWindowExW(0, L"STATIC", L"L3 CLI · Agent Runtime", WS_CHILD | WS_VISIBLE,
+                                 16, 16, 300, 24, window, nullptr, instance, nullptr);
     state.settings = CreateWindowExW(0, L"BUTTON", L"AI 设置", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
                                      width - 112, 14, 96, 28, window, reinterpret_cast<HMENU>(kSettingsId), instance, nullptr);
     state.transcript = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"",
@@ -317,11 +365,12 @@ bool ShowL3CliWindow(HINSTANCE instance, HWND owner, L3Agent& agent, const std::
     SendMessageW(state.transcript, WM_SETFONT, reinterpret_cast<WPARAM>(state.monoFont), TRUE);
     SendMessageW(state.input, WM_SETFONT, reinterpret_cast<WPARAM>(state.monoFont), TRUE);
     SendMessageW(state.input, EM_SETCUEBANNER, TRUE,
-                 reinterpret_cast<LPARAM>(L"继续对话… Enter 发送 · Esc 返回搜索"));
+                 reinterpret_cast<LPARAM>(L"继续对话… Enter 发送 · /runtime 查看运行时 · Esc 返回"));
 
     std::wstring ignored;
     bool secret = false;
     agent.TryHandleLocal(L"/new", ignored, secret);
+    state.codex->ResetSession();
 
     ShowWindow(window, SW_SHOWNORMAL);
     SetForegroundWindow(window);

@@ -9,6 +9,9 @@ $DeployDir = Join-Path $env:LOCALAPPDATA "TuringDesk\NativeTest"
 $ArtifactName = "TuringDesk-Native-Search-ARM64"
 $Workflow = "native-search-windows.yml"
 $ExeName = "TuringDesk.exe"
+$CodexRepo = "openai/codex"
+$CodexRelease = "rust-v0.146.0"
+$CodexAsset = "codex-app-server-aarch64-pc-windows-msvc.exe.zip"
 
 function Step([string]$Text) {
     Write-Host "`n==> $Text" -ForegroundColor Cyan
@@ -28,6 +31,22 @@ function Stop-BundledEverything {
         catch { }
     }
     Start-Sleep -Milliseconds 200
+}
+
+function Stop-CodexRuntime {
+    $BundledPath = Join-Path $DeployDir "Codex\codex-app-server.exe"
+    if (-not (Test-Path $BundledPath)) { return }
+
+    $Expected = [System.IO.Path]::GetFullPath($BundledPath)
+    foreach ($Process in @(Get-Process -Name "codex-app-server" -ErrorAction SilentlyContinue)) {
+        try {
+            if ($Process.Path -and ([System.IO.Path]::GetFullPath($Process.Path) -eq $Expected)) {
+                Stop-Process -Id $Process.Id -Force -ErrorAction SilentlyContinue
+            }
+        }
+        catch { }
+    }
+    Start-Sleep -Milliseconds 100
 }
 
 function Stop-DeployedInstance {
@@ -50,6 +69,7 @@ function Stop-DeployedInstance {
         & taskkill.exe /F /IM TuringDesk.exe 2>$null | Out-Null
     }
     Start-Sleep -Milliseconds 200
+    Stop-CodexRuntime
     Stop-BundledEverything
 }
 
@@ -209,6 +229,52 @@ function Ensure-EverythingService([string]$EverythingExe) {
     Write-Host "TuringDesk will start and stop the client automatically." -ForegroundColor DarkGray
 }
 
+function Ensure-CodexRuntime {
+    $CodexDir = Join-Path $DeployDir "Codex"
+    $CodexExe = Join-Path $CodexDir "codex-app-server.exe"
+    if (Test-Path $CodexExe) {
+        Write-Host "Codex Agent Runtime is already installed." -ForegroundColor DarkGray
+        return $CodexExe
+    }
+
+    Step "Installing Codex Agent Runtime (one-time, optional)"
+    $Temp = Join-Path $env:TEMP ("TuringDesk-Codex-" + [guid]::NewGuid().ToString("N"))
+    New-Item -ItemType Directory -Force -Path $Temp | Out-Null
+    try {
+        & gh release download $CodexRelease --repo $CodexRepo --pattern $CodexAsset --dir $Temp --clobber | Out-Host
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "WARNING: Codex Runtime download failed. L3 will continue with Direct Runtime." -ForegroundColor Yellow
+            return $null
+        }
+
+        $Zip = Get-ChildItem -Path $Temp -Filter "*.zip" | Select-Object -First 1
+        if (-not $Zip) {
+            Write-Host "WARNING: Codex Runtime archive was not found. Direct Runtime remains available." -ForegroundColor Yellow
+            return $null
+        }
+        $Expanded = Join-Path $Temp "expanded"
+        Expand-Archive $Zip.FullName -DestinationPath $Expanded -Force
+        $Found = Get-ChildItem -Path $Expanded -Filter "codex-app-server-aarch64-pc-windows-msvc.exe" -Recurse | Select-Object -First 1
+        if (-not $Found) {
+            Write-Host "WARNING: Codex app-server executable was not found in the release archive." -ForegroundColor Yellow
+            return $null
+        }
+
+        New-Item -ItemType Directory -Force -Path $CodexDir | Out-Null
+        Copy-Item $Found.FullName $CodexExe -Force
+        Write-Host "Codex Agent Runtime installed: $CodexExe" -ForegroundColor Green
+        return $CodexExe
+    }
+    catch {
+        Write-Host "WARNING: Codex Runtime install failed: $($_.Exception.Message)" -ForegroundColor Yellow
+        Write-Host "L3 will continue with Direct Runtime." -ForegroundColor Yellow
+        return $null
+    }
+    finally {
+        Remove-Item $Temp -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
 if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
     throw "GitHub CLI (gh) was not found in PATH"
 }
@@ -244,6 +310,7 @@ try {
 
     $EverythingExe = Deploy-BundledEverything -ArtifactRoot $Downloaded.Root
     Ensure-EverythingService -EverythingExe $EverythingExe
+    Ensure-CodexRuntime | Out-Null
 
     Step "Starting TuringDesk Native Search"
     Start-Process $DeployedExe
