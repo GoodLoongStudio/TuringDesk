@@ -323,8 +323,6 @@ bool ShowL3CliWindow(HINSTANCE instance, HWND owner, L3Agent& agent, const std::
     bool secret = false;
     agent.TryHandleLocal(L"/new", ignored, secret);
 
-    EnableWindow(owner, FALSE);
-    ShowWindow(owner, SW_HIDE);
     ShowWindow(window, SW_SHOWNORMAL);
     SetForegroundWindow(window);
     SetFocus(state.input);
@@ -346,9 +344,7 @@ bool ShowL3CliWindow(HINSTANCE instance, HWND owner, L3Agent& agent, const std::
         DispatchMessageW(&msg);
     }
 
-    EnableWindow(owner, TRUE);
-    ShowWindow(owner, SW_SHOWNORMAL);
-    SetForegroundWindow(owner);
+    if (IsWindow(owner)) SetForegroundWindow(owner);
     DeleteObject(state.backgroundBrush);
     if (state.monoFont) DeleteObject(state.monoFont);
     if (sawQuit) PostQuitMessage(static_cast<int>(msg.wParam));
