@@ -451,12 +451,21 @@ void L3Agent::RunRequest(std::wstring prompt, DeltaCallback onDelta, DoneCallbac
     std::wstring assistantText;
     bool emitted = false;
     bool done = false;
+    DWORD streamError = ERROR_SUCCESS;
     while (!stopToken.stop_requested() && !done) {
         DWORD available = 0;
-        if (!WinHttpQueryDataAvailable(request, &available) || available == 0) break;
+        if (!WinHttpQueryDataAvailable(request, &available)) {
+            streamError = GetLastError();
+            break;
+        }
+        if (available == 0) break;
         std::vector<char> buffer(available);
         DWORD read = 0;
-        if (!WinHttpReadData(request, buffer.data(), available, &read)) break;
+        if (!WinHttpReadData(request, buffer.data(), available, &read)) {
+            streamError = GetLastError();
+            break;
+        }
+        if (read == 0) break;
         pending.append(buffer.data(), read);
         fullBody.append(buffer.data(), read);
 
@@ -484,6 +493,10 @@ void L3Agent::RunRequest(std::wstring prompt, DeltaCallback onDelta, DoneCallbac
 
     closeHandles();
     if (stopToken.stop_requested()) { onDone(L"已停止"); return; }
+    if (streamError != ERROR_SUCCESS) {
+        onDone(L"模型流式传输失败：" + HttpError(streamError) + L"。本次截断内容未写入 L3 会话，可直接重试。");
+        return;
+    }
     if (status < 200 || status >= 300) {
         std::wstring detail = L"模型请求失败：HTTP " + std::to_wstring(status) + L" · Endpoint=" + path;
         if (!fullBody.empty()) {
