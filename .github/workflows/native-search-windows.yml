@@ -9,6 +9,9 @@ on:
       - .github/workflows/native-search-windows.yml
   workflow_dispatch:
 
+env:
+  EVERYTHING_VERSION: 1.5.0.1422b
+
 jobs:
   build-x64:
     runs-on: windows-latest
@@ -20,10 +23,21 @@ jobs:
         run: cmake --build build --config Release --parallel
       - name: Native Search self-test
         run: .\build\src\native\Release\TuringDesk.exe --self-test
+      - name: Package x64 with Everything
+        shell: pwsh
+        run: |
+          $package = "build/package"
+          $everything = Join-Path $package "Everything"
+          New-Item -ItemType Directory -Force -Path $everything | Out-Null
+          Copy-Item "build/src/native/Release/TuringDesk.exe" (Join-Path $package "TuringDesk.exe") -Force
+          $zip = Join-Path $env:RUNNER_TEMP "Everything-x64.zip"
+          Invoke-WebRequest "https://www.voidtools.com/Everything-$env:EVERYTHING_VERSION.x64.zip" -OutFile $zip
+          Expand-Archive $zip -DestinationPath $everything -Force
+          Invoke-WebRequest "https://www.voidtools.com/License.txt" -OutFile (Join-Path $everything "LICENSE.txt")
       - uses: actions/upload-artifact@v4
         with:
           name: TuringDesk-Native-Search-x64
-          path: build/src/native/Release/TuringDesk.exe
+          path: build/package/**
 
   build-arm64:
     runs-on: windows-11-arm
@@ -35,7 +49,18 @@ jobs:
         run: cmake --build build --config Release --parallel
       - name: Native Search self-test
         run: .\build\src\native\Release\TuringDesk.exe --self-test
+      - name: Package ARM64 with Everything
+        shell: pwsh
+        run: |
+          $package = "build/package"
+          $everything = Join-Path $package "Everything"
+          New-Item -ItemType Directory -Force -Path $everything | Out-Null
+          Copy-Item "build/src/native/Release/TuringDesk.exe" (Join-Path $package "TuringDesk.exe") -Force
+          $zip = Join-Path $env:RUNNER_TEMP "Everything-ARM64.zip"
+          Invoke-WebRequest "https://www.voidtools.com/Everything-$env:EVERYTHING_VERSION.ARM64.zip" -OutFile $zip
+          Expand-Archive $zip -DestinationPath $everything -Force
+          Invoke-WebRequest "https://www.voidtools.com/License.txt" -OutFile (Join-Path $everything "LICENSE.txt")
       - uses: actions/upload-artifact@v4
         with:
           name: TuringDesk-Native-Search-ARM64
-          path: build/src/native/Release/TuringDesk.exe
+          path: build/package/**
