@@ -265,8 +265,9 @@ public partial class DesktopSearchBarWindow : Window
         var apps = _searchIndex.SearchApps(query, 5);
         ApplySearchResults(query, generation, apps);
 
-        // Level 2 owns its CTS. A new keystroke only Cancels the old source; the
-        // corresponding async task disposes it after all token users have unwound.
+        // The heavier shell-icon and Everything work share one debounced pipeline.
+        // A newer keystroke cancels both, so rapid typing never accumulates separate
+        // icon/file tasks behind the UI thread.
         var pipeline = new CancellationTokenSource();
         _searchPipeline = pipeline;
         _ = StreamFileResultsAsync(query, apps, generation, pipeline);
@@ -280,14 +281,17 @@ public partial class DesktopSearchBarWindow : Window
     {
         try
         {
-            // L1 has already painted. Delay only the heavier file tier so a burst of
-            // keyboard input collapses into one file query rather than one Task.Run
-            // per character.
+            // L1 text has already painted from RAM. Debounce all non-RAM work, then
+            // resolve the few visible app icons and Everything rows concurrently.
             await Task.Delay(FileSearchDebounce, pipeline.Token);
-            var files = await _searchIndex.SearchFilesAsync(query, 6, pipeline.Token);
+            var iconsTask = _searchIndex.ResolveAppIconsAsync(apps, pipeline.Token);
+            var filesTask = _searchIndex.SearchFilesAsync(query, 6, pipeline.Token);
+            await Task.WhenAll(iconsTask, filesTask);
             pipeline.Token.ThrowIfCancellationRequested();
 
-            var merged = apps
+            var enrichedApps = await iconsTask;
+            var files = await filesTask;
+            var merged = enrichedApps
                 .Concat(files)
                 .OrderByDescending(item => item.Score)
                 .ThenBy(item => item.Level)
@@ -307,7 +311,7 @@ public partial class DesktopSearchBarWindow : Window
         }
         catch
         {
-            // Keep already-rendered Level 1 app results if the file provider fails.
+            // Keep already-rendered Level 1 app results if either enrichment tier fails.
         }
         finally
         {
