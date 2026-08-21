@@ -128,6 +128,12 @@ public partial class DesktopSearchBarWindow
         if (!IsVisible || generation != Volatile.Read(ref _l3TimeoutWatchdogGeneration)) return;
         if (_l3UserCancellationRequested || !string.Equals(SearchBox.Text.Trim(), prompt, StringComparison.Ordinal)) return;
 
+        // A request can finish normally long before this delayed watchdog wakes up.
+        // The successful/requires-model/deep-processing result remains rendered even
+        // though _busy has already been released; never replace that completed result
+        // with a stale timeout just because the input text itself has not changed.
+        if (!_busy && !string.IsNullOrWhiteSpace(ReplyText.Text)) return;
+
         // The request owns its timeout CTS and unwinds through the same cancellation
         // catch as Escape. If we paint the final timeout error while the provider is
         // still unwinding, that catch can restore idle state afterwards and erase the
