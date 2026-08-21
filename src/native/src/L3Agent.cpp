@@ -16,6 +16,7 @@ namespace turingdesk {
 namespace {
 
 constexpr wchar_t kCredentialTarget[] = L"TuringDesk/ModelApiKey";
+constexpr std::size_t kMaxConversationTurns = 6;
 
 std::wstring Trim(std::wstring value) {
     const auto notSpace = [](wchar_t ch) { return !std::iswspace(ch); };
@@ -240,18 +241,30 @@ bool L3Agent::HasApiKey() const {
     return !LoadApiKey().empty();
 }
 
+void L3Agent::ClearConversation() {
+    std::scoped_lock lock(conversationMutex_);
+    conversation_.clear();
+}
+
 bool L3Agent::TryHandleLocal(const std::wstring& raw, std::wstring& reply, bool& consumedSecret) {
     consumedSecret = false;
     const auto input = Trim(raw);
     const auto lower = Lower(input);
 
     if (lower == L"/help") {
-        reply = L"L3 命令：/status、/time、/provider <BaseURL> <Model>、/key <API Key>、/clear-key。Ctrl+Enter 强制使用模型。";
+        reply = L"L3 命令：/status、/time、/new、/provider <BaseURL> <Model>、/key <API Key>、/clear-key。Ctrl+Enter 强制使用模型。";
         return true;
     }
     if (lower == L"/status") {
         reply = L"Native L3 · Provider=" + config_.providerId + L" · Model=" + config_.model +
                 L" · API Key=" + (HasApiKey() ? L"已配置" : L"未配置") + L" · Harness=未参与";
+        return true;
+    }
+    if (lower == L"/new" || lower == L"/new-chat" || lower == L"新对话") {
+        Stop();
+        if (worker_.joinable()) worker_.join();
+        ClearConversation();
+        reply = L"已开始新的 L3 对话。";
         return true;
     }
     if (lower == L"/time" || lower == L"现在几点" || lower == L"现在几点？" || lower == L"当前时间") {
@@ -293,9 +306,11 @@ bool L3Agent::TryHandleLocal(const std::wstring& raw, std::wstring& reply, bool&
             reply = L"Base URL 必须以 http:// 或 https:// 开头，并填写模型 ID。";
             return true;
         }
+        const bool changed = config_.baseUrl != baseUrl || config_.model != model;
         config_.baseUrl = baseUrl;
         config_.model = model;
         config_.providerId = Lower(baseUrl).find(L"deepseek") != std::wstring::npos ? L"deepseek" : L"openai-compatible";
+        if (changed) ClearConversation();
         reply = SaveConfig(config_) ? L"模型配置已保存：" + config_.model + L" @ " + config_.baseUrl : L"模型配置保存失败。";
         return true;
     }
@@ -369,10 +384,20 @@ void L3Agent::RunRequest(std::wstring prompt, DeltaCallback onDelta, DoneCallbac
     }
     activeRequest_.store(request);
 
+    std::vector<ChatTurn> history;
+    {
+        std::scoped_lock lock(conversationMutex_);
+        history = conversation_;
+    }
+
     const std::wstring headers = L"Content-Type: application/json\r\nAccept: text/event-stream\r\nAuthorization: Bearer " + apiKey + L"\r\n";
     std::string body = "{\"model\":\"" + EscapeJson(config_.model) +
-                       "\",\"messages\":[{\"role\":\"system\",\"content\":\"You are TuringDesk L3. Be concise. Never claim an OS action ran unless a registered native tool actually ran it.\"},{\"role\":\"user\",\"content\":\"" +
-                       EscapeJson(prompt) + "\"}],\"stream\":true";
+                       "\",\"messages\":[{\"role\":\"system\",\"content\":\"You are TuringDesk L3. Be concise. Never claim an OS action ran unless a registered native tool actually ran it.\"}";
+    for (const auto& turn : history) {
+        body += ",{\"role\":\"user\",\"content\":\"" + EscapeJson(turn.user) + "\"}";
+        body += ",{\"role\":\"assistant\",\"content\":\"" + EscapeJson(turn.assistant) + "\"}";
+    }
+    body += ",{\"role\":\"user\",\"content\":\"" + EscapeJson(prompt) + "\"}],\"stream\":true";
     if (Lower(host).find(L"deepseek") != std::wstring::npos) body += ",\"thinking\":{\"type\":\"disabled\"}";
     body += "}";
 
@@ -398,6 +423,7 @@ void L3Agent::RunRequest(std::wstring prompt, DeltaCallback onDelta, DoneCallbac
 
     std::string pending;
     std::string fullBody;
+    std::wstring assistantText;
     bool emitted = false;
     bool done = false;
     while (!stopToken.stop_requested() && !done) {
@@ -422,7 +448,11 @@ void L3Agent::RunRequest(std::wstring prompt, DeltaCallback onDelta, DoneCallbac
             const auto content = ExtractJsonString(data, "\"content\"");
             if (!content.empty()) {
                 const auto wide = Utf8ToWide(content);
-                if (!wide.empty()) { emitted = true; onDelta(wide); }
+                if (!wide.empty()) {
+                    emitted = true;
+                    assistantText += wide;
+                    onDelta(wide);
+                }
             }
         }
     }
@@ -435,7 +465,19 @@ void L3Agent::RunRequest(std::wstring prompt, DeltaCallback onDelta, DoneCallbac
         const auto content = ExtractJsonString(fullBody, "\"content\"");
         if (!content.empty()) {
             const auto wide = Utf8ToWide(content);
-            if (!wide.empty()) { onDelta(wide); emitted = true; }
+            if (!wide.empty()) {
+                onDelta(wide);
+                assistantText = wide;
+                emitted = true;
+            }
+        }
+    }
+
+    if (emitted && !assistantText.empty()) {
+        std::scoped_lock lock(conversationMutex_);
+        conversation_.push_back({std::move(prompt), std::move(assistantText)});
+        if (conversation_.size() > kMaxConversationTurns) {
+            conversation_.erase(conversation_.begin(), conversation_.begin() + (conversation_.size() - kMaxConversationTurns));
         }
     }
     onDone(emitted ? L"" : L"模型返回成功，但没有可显示的 content。请检查 OpenAI-compatible 响应格式。");
