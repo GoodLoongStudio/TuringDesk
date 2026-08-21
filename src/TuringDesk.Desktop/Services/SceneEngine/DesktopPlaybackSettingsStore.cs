@@ -85,6 +85,12 @@ public sealed class DesktopPlaybackSettingsStore
     private static string? LastObservedSignature;
     private readonly string _path;
 
+    /// <summary>
+    /// Raised only after a successful save. Wallpaper hosts subscribe to this instead
+    /// of re-reading playback-settings.json on every health-policy tick.
+    /// </summary>
+    public static event Action? SettingsChanged;
+
     public DesktopPlaybackSettingsStore()
     {
         var root = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "TuringDesk");
@@ -135,6 +141,7 @@ public sealed class DesktopPlaybackSettingsStore
                 "settings.playback.save",
                 $"activePlaylist={settings.ActivePlaylistId ?? "<null>"} activeProfile={settings.ActiveProfileId ?? "<null>"} rules={settings.ApplicationRules.Count} fps={settings.GlobalFpsLimit} path={_path}");
             TraceObserved(settings, "save");
+            SettingsChanged?.Invoke();
         }
         catch (Exception error)
         {
