@@ -23,7 +23,12 @@ jobs:
       - name: Parse verification launchers
         shell: powershell
         run: |
-          foreach ($file in @("scripts/quick-verify.ps1", "scripts/bootstrap-everything.ps1", "scripts/verify-app-search.ps1")) {
+          foreach ($file in @(
+            "scripts/quick-verify.ps1",
+            "scripts/bootstrap-everything.ps1",
+            "scripts/verify-app-search.ps1",
+            "scripts/report-quick-verify-failure.ps1"
+          )) {
             $tokens = $null
             $errors = $null
             [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $file), [ref]$tokens, [ref]$errors) | Out-Null
@@ -31,6 +36,21 @@ jobs:
               $errors | ForEach-Object { Write-Error "${file}: $($_.Message)" }
               throw "Windows PowerShell parser rejected $file"
             }
+          }
+
+      - name: Self-test diagnostic reporter
+        shell: powershell
+        env:
+          TURINGDESK_DISABLE_GITHUB_REPORT: "1"
+        run: |
+          .\scripts\report-quick-verify-failure.ps1 -Stage "ci-reporter-self-test" -ExitCode 99
+          $report = Get-ChildItem ".tools\quick-verify\reports\quick-verify-*.md" -ErrorAction Stop |
+            Sort-Object LastWriteTimeUtc -Descending |
+            Select-Object -First 1
+          if (-not $report) { throw "Diagnostic reporter did not produce a local report." }
+          $body = Get-Content $report.FullName -Raw
+          if ($body -notmatch "ci-reporter-self-test" -or $body -notmatch "Diagnostic fingerprint") {
+            throw "Diagnostic reporter output is incomplete."
           }
 
       - name: Prepare pinned Everything backend
@@ -102,7 +122,7 @@ jobs:
           $result | ConvertTo-Json | Set-Content -Encoding UTF8 ".ci/quick-verify-status.json"
 
           git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config user.email "418982+github-actions[bot]@users.noreply.github.com"
           git add ".ci/quick-verify-status.json"
           git commit -m "ci: record quick verify result [skip ci]"
           git push origin HEAD:main
