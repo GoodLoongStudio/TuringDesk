@@ -5,6 +5,8 @@ namespace TuringDesk.Desktop;
 
 public partial class App : Application
 {
+    private SystemTrayService? _tray;
+
     protected override void OnStartup(StartupEventArgs e)
     {
         DesktopDiagnostics.Initialize(this);
@@ -22,17 +24,10 @@ public partial class App : Application
                 return;
             }
 
-            // Desktop settings and the Harness console are utility surfaces, not
-            // full-screen application pages. Size them after per-monitor DPI is known
-            // and keep them inside the Windows work area so the taskbar is never
-            // covered on 125%/150% scaled desktops.
             CompactToolWindowService.Install();
             DesktopDiagnostics.Info("startup.phase", "compact-tool-window-service-installed");
 
             // Runtime and DeepSeek Harness are intentionally NOT started here.
-            // Enhancement mode, the wallpaper engine and the RAM search index must be
-            // usable with the heavy Agent stack completely cold. HarnessConsoleWindow
-            // is the explicit boundary that wakes the official workbench.
             var shellMode = e.Args.Any(arg => string.Equals(arg, "--shell", StringComparison.OrdinalIgnoreCase));
             var controlOnly = e.Args.Any(arg => string.Equals(arg, "--control-only", StringComparison.OrdinalIgnoreCase));
             DesktopDiagnostics.Info("startup.mode", shellMode ? "shell" : controlOnly ? "control-only" : "enhancement");
@@ -54,12 +49,27 @@ public partial class App : Application
 
             window.Show();
             DesktopDiagnostics.Info("startup.window-shown", "main-window-show-returned");
+
+            // Native tray icon: no WinForms dependency and no background worker.
+            _tray = new SystemTrayService(
+                Dispatcher,
+                window.ShowDesktopSearchFromTray,
+                window.ShowDesktopLibrary,
+                window.RequestApplicationExit);
         }
         catch (Exception error)
         {
             DesktopDiagnostics.Fatal("startup.onstartup", error);
             throw;
         }
+    }
+
+    protected override void OnExit(ExitEventArgs e)
+    {
+        DesktopDiagnostics.Info("shutdown.begin", $"exitCode={e.ApplicationExitCode}");
+        try { _tray?.Dispose(); } catch { }
+        _tray = null;
+        base.OnExit(e);
     }
 
     private async void RunAppSearchVerification()
