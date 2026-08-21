@@ -17,9 +17,6 @@ function Step([string]$Text) {
 function Stop-DeployedInstance {
     Step "Stopping previous TuringDesk instance"
 
-    # Do not depend on Win32_Process.ExecutablePath. Windows can return a null
-    # path for a process that we still own, which previously left the old EXE
-    # running and caused Copy-Item to fail with a sharing violation.
     $Processes = @(Get-Process -Name "TuringDesk" -ErrorAction SilentlyContinue)
     foreach ($Process in $Processes) {
         try {
@@ -30,8 +27,6 @@ function Stop-DeployedInstance {
         }
     }
 
-    # Retry briefly because process teardown and image-file unlock are not
-    # guaranteed to be instantaneous on Windows.
     for ($i = 0; $i -lt 30; $i++) {
         $Remaining = @(Get-Process -Name "TuringDesk" -ErrorAction SilentlyContinue)
         if ($Remaining.Count -eq 0) {
@@ -45,8 +40,6 @@ function Stop-DeployedInstance {
         Start-Sleep -Milliseconds 100
     }
 
-    # Last-resort Windows process termination. Ignore taskkill's exit code if
-    # the process disappeared between the check and the command.
     & taskkill.exe /F /IM TuringDesk.exe 2>$null | Out-Null
     Start-Sleep -Milliseconds 250
 }
@@ -61,8 +54,6 @@ function Copy-DeployedBinary([string]$Source, [string]$Destination) {
         }
         catch [System.IO.IOException] {
             $LastError = $_
-            # A previous instance or scanner may still have a short-lived
-            # image handle. Kill again and retry instead of failing the update.
             Get-Process -Name "TuringDesk" -ErrorAction SilentlyContinue |
                 Stop-Process -Force -ErrorAction SilentlyContinue
             Start-Sleep -Milliseconds 200
@@ -164,8 +155,68 @@ function Download-Artifact([long]$RunId) {
 
     return @{
         Exe = $Found.FullName
+        Root = $Found.Directory.FullName
         Temp = $Temp
     }
+}
+
+function Deploy-BundledEverything([string]$ArtifactRoot) {
+    $SourceDir = Join-Path $ArtifactRoot "Everything"
+    $DestinationDir = Join-Path $DeployDir "Everything"
+    $DestinationExe = Join-Path $DestinationDir "Everything.exe"
+
+    if (-not (Test-Path $SourceDir)) {
+        Write-Host "WARNING: ARM64 artifact does not contain bundled Everything." -ForegroundColor Yellow
+        return $null
+    }
+
+    # Everything is pinned in CI. Avoid replacing a running image on every sync.
+    # A future version bump can explicitly stop the bundled process first.
+    if (-not (Test-Path $DestinationExe)) {
+        Step "Installing bundled Everything files"
+        New-Item -ItemType Directory -Force -Path $DestinationDir | Out-Null
+        Copy-Item (Join-Path $SourceDir "*") $DestinationDir -Recurse -Force
+    }
+
+    return $DestinationExe
+}
+
+function Ensure-Everything([string]$EverythingExe) {
+    if ([string]::IsNullOrWhiteSpace($EverythingExe) -or -not (Test-Path $EverythingExe)) {
+        return
+    }
+
+    if (Get-Process -Name "Everything" -ErrorAction SilentlyContinue) {
+        Write-Host "Everything is already running; L2 will reuse it." -ForegroundColor DarkGray
+        return
+    }
+
+    $Service = Get-Service -Name "Everything" -ErrorAction SilentlyContinue
+    if (-not $Service) {
+        Step "Installing Everything indexing service (one-time)"
+        Write-Host "Windows may show one UAC prompt. This is only needed once for NTFS indexing." -ForegroundColor Yellow
+        try {
+            $Install = Start-Process -FilePath $EverythingExe -ArgumentList "-install-service" -Verb RunAs -Wait -PassThru
+            if ($Install.ExitCode -ne 0) {
+                Write-Host "WARNING: Everything service installer returned $($Install.ExitCode)." -ForegroundColor Yellow
+            }
+        }
+        catch {
+            Write-Host "WARNING: Everything service was not installed: $($_.Exception.Message)" -ForegroundColor Yellow
+        }
+    }
+
+    try {
+        # Suppress Everything's first-run volume chooser/update prompt and keep it background-only.
+        Start-Process -FilePath $EverythingExe -ArgumentList @("-disable-update-notification", "-no-choose-volumes") -Wait -WindowStyle Hidden | Out-Null
+    }
+    catch {
+        Write-Host "Everything preference setup skipped: $($_.Exception.Message)" -ForegroundColor DarkGray
+    }
+
+    Step "Starting bundled Everything for L2"
+    Start-Process -FilePath $EverythingExe -ArgumentList "-startup" -WindowStyle Hidden | Out-Null
+    Start-Sleep -Milliseconds 800
 }
 
 if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
@@ -201,10 +252,8 @@ try {
     $DeployedExe = Join-Path $DeployDir $ExeName
     Copy-DeployedBinary -Source $Downloaded.Exe -Destination $DeployedExe
 
-    $Everything = Get-Process Everything -ErrorAction SilentlyContinue
-    if (-not $Everything) {
-        Write-Host "NOTE: Everything is not running. L2 file search is unavailable; L1 and L3 still work." -ForegroundColor Yellow
-    }
+    $EverythingExe = Deploy-BundledEverything -ArtifactRoot $Downloaded.Root
+    Ensure-Everything -EverythingExe $EverythingExe
 
     Step "Starting TuringDesk Native Search"
     Start-Process $DeployedExe
