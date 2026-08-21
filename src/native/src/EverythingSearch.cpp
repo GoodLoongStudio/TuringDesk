@@ -1,11 +1,17 @@
 #include "turingdesk/EverythingSearch.h"
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <filesystem>
 #include <iterator>
 #include <string_view>
+#include <thread>
 #include <vector>
+
+namespace fs = std::filesystem;
 
 namespace turingdesk {
 namespace {
@@ -72,6 +78,39 @@ bool ReadFullPath(const std::byte* base, std::size_t size, DWORD offset, std::ws
     return !result.empty();
 }
 
+fs::path BundledEverythingPath() {
+    std::wstring modulePath(32768, L'\0');
+    const DWORD count = GetModuleFileNameW(nullptr, modulePath.data(), static_cast<DWORD>(modulePath.size()));
+    if (count == 0 || count >= modulePath.size()) return {};
+    modulePath.resize(count);
+    return fs::path(modulePath).parent_path() / L"Everything" / L"Everything.exe";
+}
+
+bool StartBundledEverything() {
+    static std::atomic<ULONGLONG> lastAttempt{0};
+    const ULONGLONG now = GetTickCount64();
+    const ULONGLONG previous = lastAttempt.load(std::memory_order_relaxed);
+    if (previous != 0 && now - previous < 3000) return false;
+    lastAttempt.store(now, std::memory_order_relaxed);
+
+    const auto executable = BundledEverythingPath();
+    std::error_code ec;
+    if (executable.empty() || !fs::exists(executable, ec)) return false;
+
+    std::wstring commandLine = L"\"" + executable.wstring() + L"\" -startup";
+    STARTUPINFOW startup{};
+    startup.cb = sizeof(startup);
+    PROCESS_INFORMATION process{};
+    if (!CreateProcessW(executable.c_str(), commandLine.data(), nullptr, nullptr, FALSE,
+                        CREATE_UNICODE_ENVIRONMENT, nullptr, executable.parent_path().c_str(),
+                        &startup, &process)) {
+        return false;
+    }
+    CloseHandle(process.hThread);
+    CloseHandle(process.hProcess);
+    return true;
+}
+
 } // namespace
 
 HWND EverythingSearch::FindEverythingWindow() {
@@ -82,13 +121,26 @@ HWND EverythingSearch::FindEverythingWindow() {
 }
 
 bool EverythingSearch::Available() const {
-    return FindEverythingWindow() != nullptr;
+    if (FindEverythingWindow()) return true;
+    if (!StartBundledEverything()) return false;
+
+    // The bundled client normally registers its IPC window almost immediately.
+    // Wait briefly so first-use searches do not show a false "missing" state.
+    for (int i = 0; i < 20; ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        if (FindEverythingWindow()) return true;
+    }
+    return false;
 }
 
 bool EverythingSearch::Query(HWND replyWindow, const std::wstring& queryText, DWORD maxResults) const {
     if (!replyWindow || queryText.empty()) return false;
-    const HWND everything = FindEverythingWindow();
-    if (!everything) return false;
+    HWND everything = FindEverythingWindow();
+    if (!everything) {
+        if (!Available()) return false;
+        everything = FindEverythingWindow();
+        if (!everything) return false;
+    }
 
     const std::size_t bytes = sizeof(EverythingIpcQuery2W) - sizeof(wchar_t) +
                               (queryText.size() + 1) * sizeof(wchar_t);
