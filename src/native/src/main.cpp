@@ -23,6 +23,17 @@ bool RunNativeSelfTest() {
 
     reply.clear();
     consumedSecret = false;
+    if (!l3.TryHandleLocal(L"/status", reply, consumedSecret) || reply.empty() || consumedSecret) return false;
+    if (reply.find(L"Harness=未参与") == std::wstring::npos) return false;
+    if (reply.find(L"4317") != std::wstring::npos || reply.find(L"4318") != std::wstring::npos || reply.find(L"MCP") != std::wstring::npos) return false;
+
+    reply.clear();
+    consumedSecret = false;
+    if (!l3.TryHandleLocal(L"/help", reply, consumedSecret) || reply.empty() || consumedSecret) return false;
+    if (reply.find(L"/new") == std::wstring::npos || reply.find(L"Ctrl+Enter") == std::wstring::npos) return false;
+
+    reply.clear();
+    consumedSecret = false;
     if (!l3.TryHandleLocal(L"/new", reply, consumedSecret) || reply.empty() || consumedSecret) return false;
 
     return true;
