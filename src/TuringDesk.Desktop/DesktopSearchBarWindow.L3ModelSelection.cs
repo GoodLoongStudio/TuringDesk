@@ -21,7 +21,10 @@ public partial class DesktopSearchBarWindow
 
     private void L3ModelSelector_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (_modelsInitializing) return;
+        // Programmatic RefreshModelChoices updates _selectedModel before assigning
+        // SelectedItem. Session selection must follow that refresh too; otherwise a
+        // user can click "new conversation" before the first message and clear the
+        // previously-active model session instead of the model shown in the UI.
         _quickAnswer.SelectConversationModel(_selectedModel);
     }
 }
