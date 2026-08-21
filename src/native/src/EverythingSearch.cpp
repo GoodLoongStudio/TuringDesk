@@ -59,11 +59,16 @@ bool ReadFullPath(const std::byte* base, std::size_t size, DWORD offset, std::ws
     DWORD chars = 0;
     std::memcpy(&chars, base + offset, sizeof(chars));
     const auto textOffset = static_cast<std::size_t>(offset) + sizeof(DWORD);
-    const auto bytesNeeded = (static_cast<std::size_t>(chars) + 1) * sizeof(wchar_t);
+    const auto textBytes = static_cast<std::size_t>(chars) * sizeof(wchar_t);
+    const auto bytesNeeded = textBytes + sizeof(wchar_t);
     if (textOffset > size || bytesNeeded > size - textOffset) return false;
-    const auto* text = reinterpret_cast<const wchar_t*>(base + textOffset);
-    if (text[chars] != L'\0') return false;
-    result.assign(text, chars);
+
+    wchar_t terminator = L'X';
+    std::memcpy(&terminator, base + textOffset + textBytes, sizeof(terminator));
+    if (terminator != L'\0') return false;
+
+    result.assign(chars, L'\0');
+    if (textBytes > 0) std::memcpy(result.data(), base + textOffset, textBytes);
     return !result.empty();
 }
 
@@ -122,8 +127,7 @@ bool EverythingSearch::HandleCopyData(const COPYDATASTRUCT* copyData, std::vecto
     const auto* list = reinterpret_cast<const EverythingIpcList2*>(copyData->lpData);
     const auto* base = reinterpret_cast<const std::byte*>(copyData->lpData);
     const std::size_t size = copyData->cbData;
-    const auto itemsBytes = static_cast<std::size_t>(list->numitems) * sizeof(EverythingIpcItem2);
-    if (list->numitems > (size - headerSize) / sizeof(EverythingIpcItem2) || headerSize + itemsBytes > size) return true;
+    if (list->numitems > (size - headerSize) / sizeof(EverythingIpcItem2)) return true;
 
     if ((list->request_flags & kEverythingRequestFullPathAndName) == 0) return true;
 
@@ -144,6 +148,37 @@ bool EverythingSearch::HandleCopyData(const COPYDATASTRUCT* copyData, std::vecto
                            std::move(title), fullPath, fullPath, 500.0 - static_cast<double>(i)});
     }
     return true;
+}
+
+bool EverythingSearch::SelfTest() const {
+    const std::wstring expected = L"C:\\TuringDesk\\verify.txt";
+    constexpr std::size_t headerSize = offsetof(EverythingIpcList2, items);
+    const std::size_t itemEnd = headerSize + sizeof(EverythingIpcItem2);
+    const std::size_t payloadBytes = sizeof(DWORD) + (expected.size() + 1) * sizeof(wchar_t);
+    std::vector<std::byte> storage(itemEnd + payloadBytes);
+
+    auto* list = reinterpret_cast<EverythingIpcList2*>(storage.data());
+    list->totitems = 1;
+    list->numitems = 1;
+    list->offset = 0;
+    list->request_flags = kEverythingRequestFullPathAndName;
+    list->sort_type = kEverythingSortNameAscending;
+    list->items[0].flags = 0;
+    list->items[0].data_offset = static_cast<DWORD>(itemEnd);
+
+    const DWORD chars = static_cast<DWORD>(expected.size());
+    std::memcpy(storage.data() + itemEnd, &chars, sizeof(chars));
+    std::memcpy(storage.data() + itemEnd + sizeof(chars), expected.c_str(), (expected.size() + 1) * sizeof(wchar_t));
+
+    COPYDATASTRUCT copyData{};
+    copyData.dwData = kReplyId;
+    copyData.cbData = static_cast<DWORD>(storage.size());
+    copyData.lpData = storage.data();
+
+    std::vector<SearchResult> results;
+    return HandleCopyData(&copyData, results) && results.size() == 1 &&
+           results[0].kind == ResultKind::File && results[0].title == L"verify.txt" &&
+           results[0].target == expected;
 }
 
 } // namespace turingdesk
