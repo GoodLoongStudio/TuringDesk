@@ -1,0 +1,36 @@
+name: Patch Codex runtime JSON parser
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/patch-codex-runtime-json.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Apply parser hardening
+        shell: pwsh
+        run: .\scripts\patch-codex-runtime-json.ps1
+      - name: Remove temporary patch files
+        shell: pwsh
+        run: |
+          Remove-Item .\scripts\patch-codex-runtime-json.ps1 -Force
+          Remove-Item .\.github\workflows\patch-codex-runtime-json.yml -Force
+      - name: Commit final patch
+        shell: pwsh
+        run: |
+          git config user.name "GoodLoongStudio"
+          git config user.email "chnmlong@hotmail.com"
+          git add -A
+          git commit -m "fix: harden Codex app-server event parsing"
+          git push origin HEAD:main
