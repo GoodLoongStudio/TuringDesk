@@ -14,6 +14,7 @@ struct ModelConfig {
     std::wstring providerId{L"deepseek"};
     std::wstring baseUrl{L"https://api.deepseek.com"};
     std::wstring model{L"deepseek-v4-flash"};
+    std::wstring endpoint{L"/chat/completions"};
 };
 
 class L3Agent {
