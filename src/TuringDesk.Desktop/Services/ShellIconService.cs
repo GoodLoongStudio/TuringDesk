@@ -56,6 +56,9 @@ public static class ShellIconService
     private const uint ShgsiLargeIcon = 0x00000000;
     private const uint ShgsiSmallIcon = 0x00000001;
 
+    private const uint SiigbfBiggerSizeOk = 0x00000001;
+    private const uint SiigbfIconOnly = 0x00000004;
+
     private static readonly ConcurrentDictionary<string, ImageSource?> Cache = new(StringComparer.OrdinalIgnoreCase);
 
     public static ImageSource? GetIcon(string path, bool large = true)
@@ -79,6 +82,38 @@ public static class ShellIconService
 
         var path = Path.Combine(systemDirectory, executableName);
         return File.Exists(path) ? GetIcon(path, large) : null;
+    }
+
+    public static ImageSource? GetPackagedAppIcon(string appUserModelId, bool large = false)
+    {
+        if (string.IsNullOrWhiteSpace(appUserModelId)) return null;
+        var key = $"AUMID|{(large ? "L" : "S")}|{appUserModelId}";
+        return Cache.GetOrAdd(key, _ => LoadPackagedAppIcon(appUserModelId, large));
+    }
+
+    public static ImageSource? GetApplicationIcon(string target, bool large = false)
+    {
+        if (string.IsNullOrWhiteSpace(target)) return null;
+
+        if (target.StartsWith("aumid:", StringComparison.OrdinalIgnoreCase))
+        {
+            return GetPackagedAppIcon(target["aumid:".Length..], large)
+                ?? GetStockIcon(ShellStockIconId.Application, large);
+        }
+
+        if (target.StartsWith("ms-settings:", StringComparison.OrdinalIgnoreCase))
+        {
+            return GetStockIcon(ShellStockIconId.Settings, large)
+                ?? GetSystemExecutableIcon("SystemSettings.exe", large);
+        }
+
+        if (File.Exists(target) || Directory.Exists(target))
+            return GetIcon(target, large) ?? GetStockIcon(ShellStockIconId.Application, large);
+
+        if (target.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
+            return GetSystemExecutableIcon(target, large) ?? GetStockIcon(ShellStockIconId.Application, large);
+
+        return GetStockIcon(ShellStockIconId.Application, large);
     }
 
     private static ImageSource? LoadIcon(string path, bool large)
@@ -108,6 +143,36 @@ public static class ShellIconService
         return ConvertAndDestroy(info.hIcon);
     }
 
+    private static ImageSource? LoadPackagedAppIcon(string appUserModelId, bool large)
+    {
+        IShellItemImageFactory? factory = null;
+        try
+        {
+            var iid = typeof(IShellItemImageFactory).GUID;
+            var parsingName = $"shell:AppsFolder\\{appUserModelId}";
+            var result = SHCreateItemFromParsingName(parsingName, IntPtr.Zero, ref iid, out factory);
+            if (result < 0 || factory is null) return null;
+
+            var requestedSize = large ? 48 : 32;
+            var size = new NativeSize { Cx = requestedSize, Cy = requestedSize };
+            result = factory.GetImage(size, SiigbfIconOnly | SiigbfBiggerSizeOk, out var bitmap);
+            if (result < 0 || bitmap == IntPtr.Zero) return null;
+
+            return ConvertAndDeleteBitmap(bitmap);
+        }
+        catch
+        {
+            return null;
+        }
+        finally
+        {
+            if (factory is not null && Marshal.IsComObject(factory))
+            {
+                try { Marshal.FinalReleaseComObject(factory); } catch { }
+            }
+        }
+    }
+
     private static ImageSource? ConvertAndDestroy(IntPtr iconHandle)
     {
         try
@@ -126,6 +191,28 @@ public static class ShellIconService
         finally
         {
             _ = DestroyIcon(iconHandle);
+        }
+    }
+
+    private static ImageSource? ConvertAndDeleteBitmap(IntPtr bitmapHandle)
+    {
+        try
+        {
+            var source = Imaging.CreateBitmapSourceFromHBitmap(
+                bitmapHandle,
+                IntPtr.Zero,
+                Int32Rect.Empty,
+                BitmapSizeOptions.FromEmptyOptions());
+            source.Freeze();
+            return source;
+        }
+        catch
+        {
+            return null;
+        }
+        finally
+        {
+            _ = DeleteObject(bitmapHandle);
         }
     }
 
@@ -149,6 +236,22 @@ public static class ShellIconService
         [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)] public string szPath;
     }
 
+    [StructLayout(LayoutKind.Sequential)]
+    private struct NativeSize
+    {
+        public int Cx;
+        public int Cy;
+    }
+
+    [ComImport]
+    [Guid("BCC18B79-BA16-442F-80C4-8A59C30C463B")]
+    [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    private interface IShellItemImageFactory
+    {
+        [PreserveSig]
+        int GetImage(NativeSize size, uint flags, out IntPtr phbm);
+    }
+
     [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
     private static extern IntPtr SHGetFileInfo(
         string pszPath,
@@ -163,6 +266,16 @@ public static class ShellIconService
         uint uFlags,
         ref ShStockIconInfo psii);
 
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode, PreserveSig = true)]
+    private static extern int SHCreateItemFromParsingName(
+        string pszPath,
+        IntPtr pbc,
+        ref Guid riid,
+        [MarshalAs(UnmanagedType.Interface)] out IShellItemImageFactory? ppv);
+
     [DllImport("user32.dll")]
     private static extern bool DestroyIcon(IntPtr hIcon);
+
+    [DllImport("gdi32.dll")]
+    private static extern bool DeleteObject(IntPtr hObject);
 }
