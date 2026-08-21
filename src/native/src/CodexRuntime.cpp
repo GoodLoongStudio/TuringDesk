@@ -221,7 +221,11 @@ std::wstring LoadApiKey() {
 std::wstring DesktopDirectory() {
     wchar_t profile[32768]{};
     const DWORD count = GetEnvironmentVariableW(L"USERPROFILE", profile, static_cast<DWORD>(std::size(profile)));
-    if (count > 0 && count < std::size(profile)) return (fs::path(profile) / L"Desktop").wstring();
+    if (count > 0 && count < std::size(profile)) {
+        const auto desktop = fs::path(profile) / L"Desktop";
+        std::error_code ec;
+        if (fs::exists(desktop, ec) && fs::is_directory(desktop, ec)) return desktop.wstring();
+    }
     return ModuleDirectory().wstring();
 }
 
@@ -571,7 +575,7 @@ bool CodexRuntime::WaitForResponse(long long id, std::string& response, std::wst
     while (ReadLine(line)) {
         if (!HasResponseId(line, id)) continue;
         response = line;
-        if (line.find("\"error\"") != std::string::npos) {
+        if (line.find("\"result\"") == std::string::npos && line.find("\"error\"") != std::string::npos) {
             auto message = ExtractJsonString(line, "\"message\"");
             error = message.empty() ? L"Codex JSON-RPC 请求失败" : Utf8ToWide(message);
             return false;
@@ -622,7 +626,7 @@ void CodexRuntime::RunTurn(ProviderSetup setup, std::wstring prompt, DeltaCallba
     std::string line;
     while (!stopToken.stop_requested() && ReadLine(line)) {
         if (HasResponseId(line, requestId)) {
-            if (line.find("\"error\"") != std::string::npos) {
+            if (line.find("\"result\"") == std::string::npos && line.find("\"error\"") != std::string::npos) {
                 const auto message = ExtractJsonString(line, "\"message\"");
                 if (onDone) onDone(message.empty() ? L"Codex turn/start 失败" : Utf8ToWide(message));
                 return;
@@ -630,17 +634,19 @@ void CodexRuntime::RunTurn(ProviderSetup setup, std::wstring prompt, DeltaCallba
             startAccepted = true;
             continue;
         }
-        if (line.find("\"method\":\"item/agentMessage/delta\"") != std::string::npos) {
+        const auto method = ExtractJsonString(line, "\"method\"");
+        if (method == "item/agentMessage/delta") {
             const auto delta = ExtractJsonString(line, "\"delta\"");
             if (!delta.empty() && onDelta) onDelta(Utf8ToWide(delta));
             continue;
         }
-        if (line.find("\"method\":\"turn/completed\"") != std::string::npos) {
+        if (method == "turn/completed") {
             std::wstring done;
-            if (line.find("\"status\":\"failed\"") != std::string::npos) {
+            const auto status = ExtractJsonString(line, "\"status\"");
+            if (status == "failed") {
                 const auto message = ExtractJsonString(line, "\"message\"");
                 done = message.empty() ? L"Codex turn 失败" : Utf8ToWide(message);
-            } else if (line.find("\"status\":\"interrupted\"") != std::string::npos) {
+            } else if (status == "interrupted") {
                 done = L"Codex turn 已中断";
             }
             if (onDone) onDone(std::move(done));
