@@ -43,7 +43,7 @@ jobs:
         with:
           dotnet-version: 8.0.424
 
-      - name: Verify lightweight search and lazy Agent contract
+      - name: Verify tiered search, native L3 and lazy Harness contract
         shell: pwsh
         run: |
           foreach ($required in @(
@@ -57,6 +57,7 @@ jobs:
             "src/TuringDesk.Desktop/Services/AppSearch/AppSearchEntry.cs",
             "src/TuringDesk.Desktop/Services/EverythingFileSearchProvider.cs",
             "src/TuringDesk.Desktop/Services/DesktopQuickAnswerService.cs",
+            "src/TuringDesk.Desktop/Services/L3NativeToolService.cs",
             "src/TuringDesk.Desktop/Services/L3ChatProviderClient.cs",
             "src/TuringDesk.Desktop/Services/DesktopAiModelChoiceService.cs",
             "src/TuringDesk.Desktop/Services/HarnessWebUiService.cs"
@@ -113,10 +114,18 @@ jobs:
 
           $quick = Get-Content "src/TuringDesk.Desktop/Services/DesktopQuickAnswerService.cs" -Raw
           if ($quick -match "HarnessWebUiService") {
-            throw "Level-3 quick answers must not wake Harness"
+            throw "Level-3 CLI must not wake Harness"
           }
-          foreach ($marker in @("L3ChatProviderClient", "TryCalculate", "QuickIntent.Translate", "QuickIntent.Explain", "PartialResponseUpdated")) {
-            if ($quick -notmatch [regex]::Escape($marker)) { throw "Lightweight direct-answer contract missing: $marker" }
+          foreach ($marker in @("L3NativeToolService", "TryHandleAsync", "L3ChatProviderClient", "TryCalculate", "QuickIntent.Translate", "QuickIntent.Explain", "PartialResponseUpdated")) {
+            if ($quick -notmatch [regex]::Escape($marker)) { throw "L3 CLI orchestration contract missing: $marker" }
+          }
+
+          $nativeL3 = Get-Content "src/TuringDesk.Desktop/Services/L3NativeToolService.cs" -Raw
+          foreach ($marker in @("/help", "/status", "/time", "/apps", "/files", "/open", "/open-file", "SystemStatusService.Read", "SearchApps", "SearchFilesAsync", "RequiresDeepProcessing")) {
+            if ($nativeL3 -notmatch [regex]::Escape($marker)) { throw "Native L3 tool contract missing: $marker" }
+          }
+          if ($nativeL3 -match "Process\.Start|PowerShell\.Create|System\.Management\.Automation") {
+            throw "Native L3 tool broker must not become a raw shell/process execution surface"
           }
 
           $l3Transport = Get-Content "src/TuringDesk.Desktop/Services/L3ChatProviderClient.cs" -Raw
@@ -167,7 +176,7 @@ jobs:
           }
 
           $desktopHost = Get-Content "src/TuringDesk.Desktop/Services/ExplorerDesktopHost.cs" -Raw
-          foreach ($marker in @("progman/behind-defview", "workerw/progman-child", "workerw/classic-sibling", "SysListView32", "ExplorerProcessId", "CaptureDesktopGeneration", "InvalidateAll", "MapWindowPoints", "BringWindowToTop", "VerifyAttachment", "HwndTop")) {
+          foreach ($marker in @("progman/behind-defview-fallback", "workerw/progman-child", "workerw/desktop-sibling", "SysListView32", "ExplorerProcessId", "CaptureDesktopGeneration", "InvalidateAll", "MapWindowPoints", "BringWindowToTop", "VerifyAttachment", "HwndTop")) {
             if ($desktopHost -notmatch [regex]::Escape($marker)) { throw "Explorer desktop-generation contract missing: $marker" }
           }
           if ($desktopHost -match "HwndBottom") { throw "Scene HWND must not be pushed under Explorer's wallpaper child with HWND_BOTTOM" }
