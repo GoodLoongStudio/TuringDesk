@@ -12,121 +12,187 @@ $ArtifactName = "TuringDesk-Native-Search-ARM64"
 $Workflow = "native-search-windows.yml"
 $ExeName = "TuringDesk.exe"
 
-function Step([string]$text) {
-    Write-Host "`n==> $text" -ForegroundColor Cyan
+function Step([string]$Text) {
+    Write-Host "`n==> $Text" -ForegroundColor Cyan
 }
 
 function Stop-DeployedInstance {
-    $target = (Join-Path $DeployDir $ExeName).ToLowerInvariant()
+    $Target = (Join-Path $DeployDir $ExeName).ToLowerInvariant()
     Get-CimInstance Win32_Process -Filter "Name='TuringDesk.exe'" -ErrorAction SilentlyContinue |
-        Where-Object { $_.ExecutablePath -and $_.ExecutablePath.ToLowerInvariant() -eq $target } |
+        Where-Object { $_.ExecutablePath -and $_.ExecutablePath.ToLowerInvariant() -eq $Target } |
         ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
 }
 
-function Test-Binary([string]$exe) {
-    Step "运行 Native Search 自测"
-    & $exe --self-test
-    if ($LASTEXITCODE -ne 0) { throw "--self-test failed with exit code $LASTEXITCODE" }
+function Test-Binary([string]$Exe) {
+    Step "Running Native Search self-test"
+    & $Exe --self-test
+    if ($LASTEXITCODE -ne 0) {
+        throw "Self-test failed with exit code $LASTEXITCODE"
+    }
 }
 
 function Try-LocalBuild {
-    if (-not (Get-Command cmake -ErrorAction SilentlyContinue)) { return $null }
+    if (-not (Get-Command cmake -ErrorAction SilentlyContinue)) {
+        return $null
+    }
 
     try {
-        Step "检测到 CMake：优先本地 ARM64 增量编译（最快）"
+        Step "CMake found; trying local ARM64 incremental build"
         & cmake -S $Root -B $BuildDir -A ARM64
         if ($LASTEXITCODE -ne 0) { throw "CMake configure failed" }
+
         & cmake --build $BuildDir --config Release --parallel
         if ($LASTEXITCODE -ne 0) { throw "CMake build failed" }
 
-        $exe = Join-Path $BuildDir "src\native\Release\$ExeName"
-        if (-not (Test-Path $exe)) { throw "Build succeeded but $ExeName was not found" }
-        return $exe
+        $Exe = Join-Path $BuildDir "src\native\Release\$ExeName"
+        if (-not (Test-Path $Exe)) {
+            throw "Build succeeded but $ExeName was not found"
+        }
+        return $Exe
     }
     catch {
-        Write-Warning "本地 ARM64 编译不可用：$($_.Exception.Message)"
-        Write-Host "自动切换到 GitHub Actions ARM64 Artifact。" -ForegroundColor Yellow
+        Write-Warning "Local ARM64 build unavailable: $($_.Exception.Message)"
+        Write-Host "Falling back to GitHub Actions ARM64 artifact." -ForegroundColor Yellow
         return $null
+    }
+}
+
+function Get-LatestSuccessfulRunId {
+    $Json = & gh run list --repo $Repo --workflow $Workflow --branch main --status success --limit 1 --json databaseId
+    if ($LASTEXITCODE -ne 0) {
+        throw "Unable to query GitHub Actions runs"
+    }
+
+    $Runs = @($Json | ConvertFrom-Json)
+    if ($Runs.Count -eq 0) {
+        return $null
+    }
+    return $Runs[0].databaseId
+}
+
+function Start-And-WaitForCiRun {
+    Step "No usable artifact found; starting GitHub Actions build"
+    & gh workflow run $Workflow --repo $Repo --ref main
+    if ($LASTEXITCODE -ne 0) {
+        throw "Unable to start GitHub Actions workflow"
+    }
+
+    Start-Sleep -Seconds 4
+    $Json = & gh run list --repo $Repo --workflow $Workflow --branch main --limit 1 --json databaseId,status,conclusion
+    if ($LASTEXITCODE -ne 0) {
+        throw "Unable to find newly started workflow run"
+    }
+
+    $Runs = @($Json | ConvertFrom-Json)
+    if ($Runs.Count -eq 0) {
+        throw "Workflow was started but no run was found"
+    }
+
+    $RunId = $Runs[0].databaseId
+    Step "Waiting for GitHub Actions run $RunId"
+    & gh run watch $RunId --repo $Repo --exit-status
+    if ($LASTEXITCODE -ne 0) {
+        throw "GitHub Actions ARM64 build failed"
+    }
+    return $RunId
+}
+
+function Download-ArtifactFromRun([long]$RunId) {
+    $Temp = Join-Path $env:TEMP ("TuringDesk-ARM64-" + [guid]::NewGuid().ToString("N"))
+    New-Item -ItemType Directory -Force -Path $Temp | Out-Null
+
+    try {
+        Step "Downloading ARM64 artifact from run $RunId"
+        & gh run download $RunId --repo $Repo --name $ArtifactName --dir $Temp
+        if ($LASTEXITCODE -ne 0) {
+            return $null
+        }
+
+        $Found = Get-ChildItem -Path $Temp -Filter $ExeName -Recurse | Select-Object -First 1
+        if (-not $Found) {
+            return $null
+        }
+
+        $Cache = Join-Path $Root "build\arm64-artifact"
+        Remove-Item $Cache -Recurse -Force -ErrorAction SilentlyContinue
+        New-Item -ItemType Directory -Force -Path $Cache | Out-Null
+        $CachedExe = Join-Path $Cache $ExeName
+        Copy-Item $Found.FullName $CachedExe -Force
+        return $CachedExe
+    }
+    finally {
+        Remove-Item $Temp -Recurse -Force -ErrorAction SilentlyContinue
     }
 }
 
 function Download-LatestArtifact {
     if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
-        throw "未找到 GitHub CLI (gh)。请安装或把 gh 加入 PATH。"
+        throw "GitHub CLI (gh) was not found in PATH"
     }
 
-    Step "检查 GitHub CLI 登录状态"
+    Step "Checking GitHub CLI authentication"
     & gh auth status 2>$null
-    if ($LASTEXITCODE -ne 0) { throw "gh 尚未登录，请先执行: gh auth login" }
-
-    Step "查找 main 最新成功 ARM64 构建"
-    $json = & gh run list --repo $Repo --workflow $Workflow --branch main --status success --limit 1 --json databaseId,headSha,conclusion
-    if ($LASTEXITCODE -ne 0) { throw "无法读取 GitHub Actions runs" }
-    $runs = @($json | ConvertFrom-Json)
-
-    if ($runs.Count -eq 0) {
-        Step "没有可用成功构建，触发一次 ARM64 CI"
-        & gh workflow run $Workflow --repo $Repo --ref main
-        if ($LASTEXITCODE -ne 0) { throw "无法触发 workflow" }
-        Start-Sleep -Seconds 4
-        $json = & gh run list --repo $Repo --workflow $Workflow --branch main --limit 1 --json databaseId,headSha,status,conclusion
-        $runs = @($json | ConvertFrom-Json)
-        if ($runs.Count -eq 0) { throw "已触发 workflow，但没有找到 run" }
-        & gh run watch $runs[0].databaseId --repo $Repo --exit-status
-        if ($LASTEXITCODE -ne 0) { throw "ARM64 CI 构建失败" }
+    if ($LASTEXITCODE -ne 0) {
+        throw "GitHub CLI is not authenticated. Run: gh auth login"
     }
 
-    $runId = $runs[0].databaseId
-    $temp = Join-Path $env:TEMP ("TuringDesk-ARM64-" + [guid]::NewGuid().ToString("N"))
-    New-Item -ItemType Directory -Force -Path $temp | Out-Null
-
-    try {
-        Step "下载 ARM64 Artifact (run $runId)"
-        & gh run download $runId --repo $Repo --name $ArtifactName --dir $temp
-        if ($LASTEXITCODE -ne 0) { throw "Artifact 下载失败" }
-        $exe = Get-ChildItem -Path $temp -Filter $ExeName -Recurse | Select-Object -First 1
-        if (-not $exe) { throw "Artifact 中没有找到 $ExeName" }
-
-        $cache = Join-Path $Root "build\arm64-artifact"
-        Remove-Item $cache -Recurse -Force -ErrorAction SilentlyContinue
-        New-Item -ItemType Directory -Force -Path $cache | Out-Null
-        Copy-Item $exe.FullName (Join-Path $cache $ExeName) -Force
-        return (Join-Path $cache $ExeName)
+    $RunId = Get-LatestSuccessfulRunId
+    if ($RunId) {
+        $Exe = Download-ArtifactFromRun $RunId
+        if ($Exe) {
+            return $Exe
+        }
+        Write-Host "Latest successful run has no usable ARM64 artifact." -ForegroundColor Yellow
     }
-    finally {
-        Remove-Item $temp -Recurse -Force -ErrorAction SilentlyContinue
+
+    $RunId = Start-And-WaitForCiRun
+    $Exe = Download-ArtifactFromRun $RunId
+    if (-not $Exe) {
+        throw "ARM64 artifact could not be downloaded after successful CI"
     }
+    return $Exe
 }
 
-Step "同步 main"
-if (Test-Path (Join-Path $Root ".git")) {
+Step "Preparing source tree"
+$GitDir = Join-Path $Root ".git"
+if ((Test-Path $GitDir) -and (Get-Command git -ErrorAction SilentlyContinue)) {
     & git -C $Root fetch origin main
     if ($LASTEXITCODE -ne 0) { throw "git fetch failed" }
-    $branch = (& git -C $Root branch --show-current).Trim()
-    if ($branch -eq "main") {
+
+    $Branch = (& git -C $Root branch --show-current).Trim()
+    if ($Branch -eq "main") {
         & git -C $Root pull --ff-only origin main
-        if ($LASTEXITCODE -ne 0) { throw "git pull --ff-only failed；请先处理本地改动" }
-    } else {
-        Write-Host "当前分支是 $branch；不自动切分支，继续构建当前工作树。" -ForegroundColor Yellow
+        if ($LASTEXITCODE -ne 0) {
+            throw "git pull --ff-only failed; resolve local changes first"
+        }
+    }
+    else {
+        Write-Host "Current branch is $Branch; building current working tree." -ForegroundColor Yellow
     }
 }
-
-$exe = Try-LocalBuild
-if (-not $exe) { $exe = Download-LatestArtifact }
-
-Test-Binary $exe
-
-Step "部署到 $DeployDir"
-Stop-DeployedInstance
-New-Item -ItemType Directory -Force -Path $DeployDir | Out-Null
-Copy-Item $exe (Join-Path $DeployDir $ExeName) -Force
-
-$everything = Get-Process Everything -ErrorAction SilentlyContinue
-if (-not $everything) {
-    Write-Host "提示：Everything 当前未运行，L2 文件搜索会不可用；L1/L3 不受影响。" -ForegroundColor Yellow
+else {
+    Write-Host "Git checkout not detected; using current extracted files." -ForegroundColor DarkGray
 }
 
-Step "启动 TuringDesk Native Search"
-Start-Process (Join-Path $DeployDir $ExeName)
-Write-Host "`n部署完成。按 Alt+Space 打开 Search。" -ForegroundColor Green
-Write-Host "路径: $DeployDir"
+$Exe = Try-LocalBuild
+if (-not $Exe) {
+    $Exe = Download-LatestArtifact
+}
+
+Test-Binary $Exe
+
+Step "Deploying to $DeployDir"
+Stop-DeployedInstance
+New-Item -ItemType Directory -Force -Path $DeployDir | Out-Null
+$DeployedExe = Join-Path $DeployDir $ExeName
+Copy-Item $Exe $DeployedExe -Force
+
+$Everything = Get-Process Everything -ErrorAction SilentlyContinue
+if (-not $Everything) {
+    Write-Host "NOTE: Everything is not running. L2 file search will be unavailable; L1 and L3 still work." -ForegroundColor Yellow
+}
+
+Step "Starting TuringDesk Native Search"
+Start-Process $DeployedExe
+Write-Host "`nDeployment complete. Press Alt+Space to open Search." -ForegroundColor Green
+Write-Host "Path: $DeployDir"
