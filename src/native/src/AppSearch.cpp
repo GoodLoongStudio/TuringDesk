@@ -3,7 +3,9 @@
 #include <filesystem>
 #include <algorithm>
 #include <cwctype>
+#include <iterator>
 #include <unordered_set>
+#include <utility>
 
 namespace fs = std::filesystem;
 

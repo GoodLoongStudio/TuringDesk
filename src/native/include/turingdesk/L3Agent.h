@@ -4,6 +4,7 @@
 #include <string>
 #include <thread>
 #include <windows.h>
+#include <winhttp.h>
 
 namespace turingdesk {
 

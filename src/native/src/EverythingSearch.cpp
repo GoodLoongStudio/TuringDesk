@@ -1,6 +1,8 @@
 #include "turingdesk/EverythingSearch.h"
 #include <algorithm>
 #include <cstddef>
+#include <iterator>
+#include <string_view>
 #include <vector>
 
 namespace turingdesk {

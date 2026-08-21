@@ -3,10 +3,11 @@
 #include "turingdesk/EverythingSearch.h"
 #include "turingdesk/L3Agent.h"
 #include "turingdesk/SearchTypes.h"
+#include <windows.h>
+#include <CommCtrl.h>
 #include <d2d1.h>
 #include <dwrite.h>
 #include <wrl/client.h>
-#include <windows.h>
 #include <string>
 #include <vector>
 
