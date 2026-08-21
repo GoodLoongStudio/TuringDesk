@@ -167,7 +167,10 @@ public static class HarnessWebUiService
         startInfo.ArgumentList.Add("127.0.0.1");
         startInfo.ArgumentList.Add("--port");
         startInfo.ArgumentList.Add(Port.ToString());
-        startInfo.ArgumentList.Add("--no-open");
+        // Current official DeepSeek Harness web profile accepts --host, --port
+        // and --trusted-host. It does not accept the historical --no-open flag;
+        // passing an unknown app argument makes dsh exit before the WebUI binds.
+        // The web profile does not open a browser by itself in this embedded path.
         HarnessModelBridgeService.ApplyEnvironment(startInfo);
 
         var process = new Process { StartInfo = startInfo, EnableRaisingEvents = true };
