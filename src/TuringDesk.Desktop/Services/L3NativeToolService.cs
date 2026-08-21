@@ -26,11 +26,31 @@ public sealed class L3NativeToolService
         @"^(?:请|帮我|麻烦)?\s*(?:打开)\s*(?:一下|下)?\s*(?:文件|文件夹|目录)\s*[:：]?\s*(?<target>.+)$",
         RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
 
-    private static readonly string[] UnsafeIntentMarkers =
+    private static readonly Regex ExplicitHighRiskRequestPattern = new(
+        @"(?:帮我|替我|给我|麻烦|请)\s*(?:用|通过|执行|运行|调用|删除|删掉|卸载|安装|关机|重启|格式化|修改|写入|提权)",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
+
+    private static readonly string[] HighRiskActionMarkers =
     {
-        "powershell", "cmd.exe", "命令行", "执行命令", "运行命令", "终端命令",
-        "删除文件", "删掉文件", "卸载", "安装软件", "关机", "重启电脑", "格式化",
-        "注册表", "管理员权限", "提权"
+        "执行命令", "运行命令", "删除文件", "删掉文件", "卸载", "安装软件", "关机", "重启电脑",
+        "格式化", "修改注册表", "写注册表", "管理员权限执行", "以管理员运行", "提权"
+    };
+
+    private static readonly string[] ShellTopicMarkers =
+    {
+        "powershell", "cmd.exe", "命令行", "终端命令"
+    };
+
+    private static readonly string[] ShellExecutionMarkers =
+    {
+        "执行 powershell", "运行 powershell", "调用 powershell", "用 powershell", "通过 powershell",
+        "打开 powershell", "启动 powershell", "执行cmd", "运行cmd", "调用cmd", "用cmd", "通过cmd"
+    };
+
+    private static readonly string[] InformationalIntentMarkers =
+    {
+        "什么是", "是什么", "解释", "介绍", "教程", "怎么", "如何", "为什么", "区别", "原理",
+        "用法", "语法", "安全吗", "风险", "示例", "例子", "能不能", "能否", "可以吗", "是否可以"
     };
 
     private readonly DesktopSearchIndexService _search;
@@ -225,8 +245,48 @@ public sealed class L3NativeToolService
         return compact is "几点了" or "现在几点" or "现在几点了" or "今天几号" or "今天日期";
     }
 
-    private static bool IsUnsafeOrPrivilegedIntent(string text) =>
-        UnsafeIntentMarkers.Any(marker => text.Contains(marker, StringComparison.OrdinalIgnoreCase));
+    private static bool IsUnsafeOrPrivilegedIntent(string text)
+    {
+        var normalized = Regex.Replace(text, @"\s+", " ").Trim();
+        var informational = InformationalIntentMarkers.Any(marker =>
+            normalized.Contains(marker, StringComparison.OrdinalIgnoreCase));
+        var explicitRequest = ExplicitHighRiskRequestPattern.IsMatch(normalized);
+
+        // Discussion, explanation and coding advice about system tools belong in L3.
+        // Only an actual request to perform a privileged/destructive action crosses
+        // the L4 boundary. This prevents phrases such as “解释 PowerShell” or
+        // “如何安装软件” from waking Harness.
+        if (informational && !explicitRequest)
+            return false;
+
+        if (LooksLikeExplicitRawCommand(normalized))
+            return true;
+
+        if (HighRiskActionMarkers.Any(marker =>
+                normalized.Contains(marker, StringComparison.OrdinalIgnoreCase)))
+            return true;
+
+        var mentionsShell = ShellTopicMarkers.Any(marker =>
+            normalized.Contains(marker, StringComparison.OrdinalIgnoreCase));
+        if (!mentionsShell)
+            return false;
+
+        return ShellExecutionMarkers.Any(marker =>
+                   normalized.Contains(marker, StringComparison.OrdinalIgnoreCase)) ||
+               explicitRequest;
+    }
+
+    private static bool LooksLikeExplicitRawCommand(string text) =>
+        text.Contains("&&", StringComparison.Ordinal) ||
+        text.Contains("||", StringComparison.Ordinal) ||
+        text.Contains('|') ||
+        text.Contains('>') ||
+        text.Contains('<') ||
+        text.Contains(";", StringComparison.Ordinal) ||
+        text.StartsWith("powershell -", StringComparison.OrdinalIgnoreCase) ||
+        text.StartsWith("powershell.exe ", StringComparison.OrdinalIgnoreCase) ||
+        text.StartsWith("cmd /", StringComparison.OrdinalIgnoreCase) ||
+        text.StartsWith("cmd.exe /", StringComparison.OrdinalIgnoreCase);
 
     private static bool LooksLikeRawCommand(string query) =>
         query.Contains("&&", StringComparison.Ordinal) ||
