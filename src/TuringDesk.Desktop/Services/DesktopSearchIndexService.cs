@@ -29,8 +29,8 @@ public sealed record DesktopSearchResult(
 /// The coordinator never crawls disks and never starts Node/Harness.
 ///
 /// Heavy discovery is not part of the window-construction critical path. App
-/// discovery is warmed shortly after first paint (or on first query), and Everything
-/// stays fully demand-driven until a real file query is issued.
+/// discovery is warmed after first paint and desktop-engine attach (or on first
+/// query), and Everything stays fully demand-driven until a real file query is issued.
 /// </summary>
 public sealed class DesktopSearchIndexService : IDisposable
 {
@@ -46,12 +46,13 @@ public sealed class DesktopSearchIndexService : IDisposable
 
     internal DesktopSearchIndexService(bool initializeFileSearch)
     {
-        // Give WPF/Explorer/scene-host startup the CPU first. If the user searches
-        // sooner, SearchApps starts discovery immediately and this timer becomes a no-op.
+        // Stagger CPU-heavy discovery behind the interactive shell and initial scene
+        // attach. If the user searches sooner, SearchApps starts discovery immediately
+        // and this timer becomes a no-op.
         _appWarmupTimer = new Timer(
             _ => _apps.WarmUp(),
             null,
-            TimeSpan.FromMilliseconds(1250),
+            TimeSpan.FromSeconds(3),
             Timeout.InfiniteTimeSpan);
 
         if (initializeFileSearch)
@@ -68,8 +69,6 @@ public sealed class DesktopSearchIndexService : IDisposable
     public int AppCount => _apps.Count;
     internal Task AppSearchInitialization => _apps.Initialization;
 
-    // Compatibility property retained for the existing status UI. TuringDesk owns
-    // no filename database; Everything owns the file index.
     public int IndexedFileCount => 0;
 
     public void WarmUpApplications() => _apps.WarmUp();
@@ -77,13 +76,6 @@ public sealed class DesktopSearchIndexService : IDisposable
     public Task WarmUpFileSearchAsync(CancellationToken cancellationToken = default) =>
         _everything.InitializeAsync(cancellationToken);
 
-    /// <summary>
-    /// Level 1: RAM-only application ranking over the immutable app snapshot.
-    /// Do not resolve Shell icons here: this method runs synchronously for every
-    /// keystroke and must never touch disk, registry, COM, IPC or Explorer after the
-    /// background snapshot has been built. A first query can kick off discovery but
-    /// returns immediately from the current snapshot.
-    /// </summary>
     public IReadOnlyList<DesktopSearchResult> SearchApps(string query, int limit = 5)
     {
         return _apps.Search(query, limit)
@@ -121,12 +113,6 @@ public sealed class DesktopSearchIndexService : IDisposable
         }, cancellationToken);
     }
 
-    /// <summary>
-    /// Level 2: bounded Everything query. Everything maintains the global filename
-    /// index; TuringDesk only asks for the small number of rows visible in the UI.
-    /// The Everything process/service is started on first real file query instead of
-    /// during TuringDesk startup. Single-character queries remain RAM-only.
-    /// </summary>
     public async Task<IReadOnlyList<DesktopSearchResult>> SearchFilesAsync(
         string query,
         int limit = 6,
