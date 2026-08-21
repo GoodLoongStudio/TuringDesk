@@ -4,6 +4,7 @@ add_executable(TuringDesk WIN32
     src/ModelSettingsWindow.cpp
     src/L3CliWindow.cpp
     src/CodexRuntime.cpp
+    src/NativeTools.cpp
     src/AppSearch.cpp
     src/EverythingSearch.cpp
     src/L3Agent.cpp
@@ -25,6 +26,7 @@ target_link_libraries(TuringDesk PRIVATE
     gdi32
     shell32
     ole32
+    oleaut32
     advapi32
     comctl32
     d2d1
