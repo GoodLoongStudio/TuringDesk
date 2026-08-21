@@ -12,7 +12,7 @@ public:
     bool Query(HWND replyWindow, const std::wstring& query, DWORD maxResults = 12) const;
     bool HandleCopyData(const COPYDATASTRUCT* copyData, std::vector<SearchResult>& results) const;
 
-    static constexpr ULONG_PTR kReplyId = 0x54444631; // TDF1
+    static constexpr DWORD kReplyId = 0x54444631; // TDF1
 
 private:
     static HWND FindEverythingWindow();
