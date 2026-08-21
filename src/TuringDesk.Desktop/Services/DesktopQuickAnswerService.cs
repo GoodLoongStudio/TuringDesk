@@ -122,7 +122,7 @@ public sealed class DesktopQuickAnswerService
                     "CLI · 超出本地能力边界",
                     reason);
 
-            AppendTurn(text, reply);
+            AppendTurn(modelKey, text, reply);
             return new(
                 DesktopQuickAnswerDisposition.Answered,
                 intent switch
@@ -211,15 +211,20 @@ Otherwise answer normally and never mention Harness.
         }
     }
 
-    private void AppendTurn(string userText, string assistantText)
+    private void AppendTurn(string expectedModelKey, string userText, string assistantText)
     {
         lock (_historyGate)
         {
+            // A model switch or New Chat can happen while a network request is in
+            // flight. Never let that stale reply contaminate the newly active model
+            // session; the UI may still decide how to present the completed request.
+            if (!string.Equals(_conversationModelKey, expectedModelKey, StringComparison.Ordinal))
+                return;
+
             _history.Add(new L3ChatMessage("user", userText));
             _history.Add(new L3ChatMessage("assistant", assistantText));
             TrimHistoryNoLock();
-            if (_conversationModelKey is not null)
-                _sessionStore.Save(_conversationModelKey, _history);
+            _sessionStore.Save(expectedModelKey, _history);
         }
     }
 
