@@ -15,7 +15,7 @@ if errorlevel 1 (
   exit /b 1
 )
 
-powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%SYNC_PS1%" -Destination "%~dp0"
+powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%SYNC_PS1%"
 set "CODE=%ERRORLEVEL%"
 del /q "%SYNC_PS1%" >nul 2>nul
 
