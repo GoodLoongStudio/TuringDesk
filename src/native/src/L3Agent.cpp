@@ -171,6 +171,21 @@ std::wstring HttpError(DWORD error) {
     return L"WinHTTP 错误 " + std::to_wstring(error);
 }
 
+std::wstring BuildRequestPath(const std::wstring& basePathRaw, const std::wstring& endpointRaw) {
+    std::wstring basePath = basePathRaw;
+    if (basePath.empty()) basePath = L"/";
+    while (basePath.size() > 1 && basePath.back() == L'/') basePath.pop_back();
+
+    std::wstring endpoint = Trim(endpointRaw);
+    if (endpoint == L"-") endpoint.clear();
+    if (endpoint.empty()) return basePath.empty() ? L"/" : basePath;
+    if (endpoint.front() != L'/') endpoint.insert(endpoint.begin(), L'/');
+
+    if (basePath == L"/") basePath.clear();
+    if (!basePath.ends_with(endpoint)) basePath += endpoint;
+    return basePath.empty() ? L"/" : basePath;
+}
+
 } // namespace
 
 L3Agent::L3Agent() : config_(LoadConfig()) {}
@@ -188,9 +203,11 @@ ModelConfig L3Agent::LoadConfig() const {
     const auto provider = ConfigValue(json, "\"ProviderId\"");
     const auto baseUrl = ConfigValue(json, "\"BaseUrl\"");
     const auto model = ConfigValue(json, "\"Model\"");
+    const auto endpoint = ConfigValue(json, "\"Endpoint\"");
     if (!provider.empty() && provider != L"unconfigured") result.providerId = provider;
     if (!baseUrl.empty()) result.baseUrl = baseUrl;
     if (!model.empty() && model != L"未配置") result.model = model;
+    if (!endpoint.empty()) result.endpoint = endpoint;
     return result;
 }
 
@@ -202,6 +219,7 @@ bool L3Agent::SaveConfig(const ModelConfig& config) const {
            << "  \"Mode\": \"direct\",\n"
            << "  \"BaseUrl\": \"" << EscapeJson(config.baseUrl) << "\",\n"
            << "  \"Model\": \"" << EscapeJson(config.model) << "\",\n"
+           << "  \"Endpoint\": \"" << EscapeJson(config.endpoint) << "\",\n"
            << "  \"HasApiKey\": " << (HasApiKey() ? "true" : "false") << "\n}\n";
     return static_cast<bool>(stream);
 }
@@ -252,11 +270,12 @@ bool L3Agent::TryHandleLocal(const std::wstring& raw, std::wstring& reply, bool&
     const auto lower = Lower(input);
 
     if (lower == L"/help") {
-        reply = L"L3 命令：/status、/time、/new、/provider <BaseURL> <Model>、/key <API Key>、/clear-key。Ctrl+Enter 强制使用模型。";
+        reply = L"L3 命令：/status、/time、/new、/provider <BaseURL> <Model>、/endpoint <Path>、/key <API Key>、/clear-key。Ctrl+Enter 强制使用模型。";
         return true;
     }
     if (lower == L"/status") {
         reply = L"Native L3 · Provider=" + config_.providerId + L" · Model=" + config_.model +
+                L" · Endpoint=" + (config_.endpoint.empty() ? L"(Base URL path)" : config_.endpoint) +
                 L" · API Key=" + (HasApiKey() ? L"已配置" : L"未配置") + L" · Harness=未参与";
         return true;
     }
@@ -291,6 +310,17 @@ bool L3Agent::TryHandleLocal(const std::wstring& raw, std::wstring& reply, bool&
         const bool ok = SaveApiKey(L"");
         SaveConfig(config_);
         reply = ok ? L"API Key 已删除。" : L"API Key 删除失败。";
+        return true;
+    }
+    if (lower.starts_with(L"/endpoint ")) {
+        auto endpoint = Trim(input.substr(10));
+        if (endpoint == L"-") endpoint.clear();
+        if (!endpoint.empty() && endpoint.front() != L'/') endpoint.insert(endpoint.begin(), L'/');
+        const bool changed = config_.endpoint != endpoint;
+        config_.endpoint = endpoint;
+        if (changed) ClearConversation();
+        reply = SaveConfig(config_) ? L"Endpoint 已保存：" + (config_.endpoint.empty() ? L"使用 Base URL 自带路径" : config_.endpoint)
+                                    : L"Endpoint 保存失败。";
         return true;
     }
     if (lower.starts_with(L"/provider ")) {
@@ -335,7 +365,7 @@ void L3Agent::AskAsync(std::wstring prompt, DeltaCallback onDelta, DoneCallback 
 void L3Agent::RunRequest(std::wstring prompt, DeltaCallback onDelta, DoneCallback onDone, std::stop_token stopToken) {
     const auto apiKey = LoadApiKey();
     if (apiKey.empty()) {
-        onDone(L"未配置 API Key。输入 /key <API Key> 保存；默认使用 DeepSeek。也可用 /provider <BaseURL> <Model> 切换兼容服务。");
+        onDone(L"未配置 API Key。请打开右上角 AI 设置填写 Key。");
         return;
     }
 
@@ -345,19 +375,14 @@ void L3Agent::RunRequest(std::wstring prompt, DeltaCallback onDelta, DoneCallbac
     parts.dwHostNameLength = static_cast<DWORD>(-1);
     parts.dwUrlPathLength = static_cast<DWORD>(-1);
     if (!WinHttpCrackUrl(config_.baseUrl.c_str(), 0, 0, &parts)) {
-        onDone(L"模型 Base URL 无效。使用 /provider <BaseURL> <Model> 重新设置。");
+        onDone(L"模型 Base URL 无效。请在 AI 设置中重新填写。");
         return;
     }
 
     const std::wstring host(parts.lpszHostName, parts.dwHostNameLength);
-    std::wstring path;
-    if (parts.lpszUrlPath && parts.dwUrlPathLength) path.assign(parts.lpszUrlPath, parts.dwUrlPathLength);
-    if (path.empty()) path = L"/";
-    while (path.size() > 1 && path.back() == L'/') path.pop_back();
-    if (!path.ends_with(L"/chat/completions")) {
-        if (path == L"/") path.clear();
-        path += L"/chat/completions";
-    }
+    std::wstring basePath;
+    if (parts.lpszUrlPath && parts.dwUrlPathLength) basePath.assign(parts.lpszUrlPath, parts.dwUrlPathLength);
+    const std::wstring path = BuildRequestPath(basePath, config_.endpoint);
 
     HINTERNET session = WinHttpOpen(L"TuringDesk.Native/2.0", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
                                     WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
@@ -459,7 +484,16 @@ void L3Agent::RunRequest(std::wstring prompt, DeltaCallback onDelta, DoneCallbac
 
     closeHandles();
     if (stopToken.stop_requested()) { onDone(L"已停止"); return; }
-    if (status < 200 || status >= 300) { onDone(L"模型请求失败：HTTP " + std::to_wstring(status)); return; }
+    if (status < 200 || status >= 300) {
+        std::wstring detail = L"模型请求失败：HTTP " + std::to_wstring(status) + L" · Endpoint=" + path;
+        if (!fullBody.empty()) {
+            std::string shortBody = fullBody.substr(0, 300);
+            const auto wideBody = Utf8ToWide(shortBody);
+            if (!wideBody.empty()) detail += L" · " + wideBody;
+        }
+        onDone(detail);
+        return;
+    }
 
     if (!emitted) {
         const auto content = ExtractJsonString(fullBody, "\"content\"");
