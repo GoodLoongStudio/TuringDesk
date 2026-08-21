@@ -14,10 +14,24 @@ public partial class DesktopSearchBarWindow
     private int _l3StreamStartScheduled;
     private long _l3TimeoutWatchdogGeneration;
     private bool _l3UserCancellationRequested;
+    private bool _l3StreamingInitialized;
 
     protected override void OnInitialized(EventArgs e)
     {
         base.OnInitialized(e);
+
+        // InitializeComponent can raise Initialized before the constructor has created
+        // _quickAnswer and the dynamically-added L3 action buttons. Defer all L3
+        // subscriptions until Loaded, when the window's constructor is complete.
+        Loaded += L3Streaming_Loaded;
+        Closed += L3Streaming_Closed;
+    }
+
+    private void L3Streaming_Loaded(object sender, RoutedEventArgs e)
+    {
+        if (_l3StreamingInitialized) return;
+        _l3StreamingInitialized = true;
+        Loaded -= L3Streaming_Loaded;
 
         _l3StreamRenderTimer = new DispatcherTimer(DispatcherPriority.Background)
         {
@@ -29,15 +43,20 @@ public partial class DesktopSearchBarWindow
         PreviewKeyDown += L3Window_PreviewKeyDown;
         if (_retryButton is not null)
             _retryButton.Click += L3RetryButton_Click;
-        Closed += L3Streaming_Closed;
     }
 
     private void L3Streaming_Closed(object? sender, EventArgs e)
     {
-        _quickAnswer.PartialResponseUpdated -= OnL3PartialResponseUpdated;
-        PreviewKeyDown -= L3Window_PreviewKeyDown;
-        if (_retryButton is not null)
-            _retryButton.Click -= L3RetryButton_Click;
+        Loaded -= L3Streaming_Loaded;
+
+        if (_l3StreamingInitialized)
+        {
+            _quickAnswer.PartialResponseUpdated -= OnL3PartialResponseUpdated;
+            PreviewKeyDown -= L3Window_PreviewKeyDown;
+            if (_retryButton is not null)
+                _retryButton.Click -= L3RetryButton_Click;
+        }
+
         Interlocked.Increment(ref _l3TimeoutWatchdogGeneration);
 
         if (_l3StreamRenderTimer is not null)
