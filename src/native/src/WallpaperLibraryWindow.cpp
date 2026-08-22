@@ -1,7 +1,10 @@
 #include "turingdesk/WallpaperLibraryWindow.h"
+#include "turingdesk/WallpaperWebRuntimeCoordinator.h"
+#include "turingdesk/WebWallpaperHost.h"
 
 #include <commctrl.h>
 #include <commdlg.h>
+
 #include <filesystem>
 #include <iterator>
 #include <optional>
@@ -29,6 +32,8 @@ constexpr int kApplyId = 5110;
 constexpr int kCloseId = 5111;
 constexpr int kStatusId = 5112;
 constexpr int kTargetComboId = 5113;
+constexpr int kWebUrlId = 5114;
+constexpr int kImportWebUrlId = 5115;
 
 enum class FilterMode {
     All,
@@ -70,6 +75,7 @@ struct WallpaperLibraryWindow::Impl {
     HWND list{};
     HWND targetCombo{};
     HWND managedCopy{};
+    HWND webUrl{};
     HWND favoriteButton{};
     HWND status{};
     WallpaperLibrary* library{};
@@ -90,7 +96,8 @@ struct WallpaperLibraryWindow::Impl {
     std::optional<WallpaperLibraryItem> Selected() const {
         if (!library || !list) return std::nullopt;
         const LRESULT selected = SendMessageW(list, LB_GETCURSEL, 0, 0);
-        if (selected == LB_ERR || selected < 0 || static_cast<std::size_t>(selected) >= visibleIds.size()) return std::nullopt;
+        if (selected == LB_ERR || selected < 0 || static_cast<std::size_t>(selected) >= visibleIds.size())
+            return std::nullopt;
         return library->Find(visibleIds[static_cast<std::size_t>(selected)]);
     }
 
@@ -104,9 +111,19 @@ struct WallpaperLibraryWindow::Impl {
     std::wstring TargetDisplayName(std::wstring_view id) const {
         if (id.empty()) return L"全局壁纸";
         for (const auto& target : targets) {
-            if (_wcsicmp(target.monitorId.c_str(), std::wstring(id).c_str()) == 0) return target.displayName;
+            if (_wcsicmp(target.monitorId.c_str(), std::wstring(id).c_str()) == 0)
+                return target.displayName.empty() ? L"显示器" : target.displayName;
         }
         return L"显示器";
+    }
+
+    bool SourceMissing(const WallpaperLibraryItem& item) const {
+        if (item.kind == LibraryWallpaperKind::Scene) return false;
+        if (item.kind == LibraryWallpaperKind::Web)
+            return !WebWallpaperProcessSet::IsSupportedSource(item.source.wstring());
+        if (item.source.empty()) return true;
+        std::error_code ec;
+        return !fs::exists(item.source, ec) || !fs::is_regular_file(item.source, ec);
     }
 
     void RebuildTargets() {
@@ -126,6 +143,18 @@ struct WallpaperLibraryWindow::Impl {
                 selectedIndex = static_cast<int>(targetIds.size() - 1);
         }
         SendMessageW(targetCombo, CB_SETCURSEL, selectedIndex, 0);
+    }
+
+    void SelectVisibleId(std::wstring_view id) {
+        if (!list || id.empty()) return;
+        const std::wstring wanted(id);
+        for (std::size_t i = 0; i < visibleIds.size(); ++i) {
+            if (_wcsicmp(visibleIds[i].c_str(), wanted.c_str()) == 0) {
+                SendMessageW(list, LB_SETCURSEL, static_cast<WPARAM>(i), 0);
+                UpdateSelectionActions();
+                return;
+            }
+        }
     }
 
     void RebuildList() {
@@ -157,15 +186,10 @@ struct WallpaperLibraryWindow::Impl {
 
         int restoreIndex = -1;
         for (const auto& item : items) {
-            bool missing = false;
-            if (item.kind != LibraryWallpaperKind::Scene && !item.source.empty()) {
-                std::error_code ec;
-                missing = !fs::exists(item.source, ec);
-            }
             std::wstring label = item.favorite ? L"★ " : L"☆ ";
             label += L"[" + std::wstring(KindLabel(item.kind)) + L"] " + item.title;
             if (item.managedCopy) label += L" · 托管副本";
-            if (missing) label += L" · 源文件缺失";
+            if (SourceMissing(item)) label += item.kind == LibraryWallpaperKind::Web ? L" · Web 源无效" : L" · 源文件缺失";
             SendMessageW(list, LB_ADDSTRING, 0, reinterpret_cast<LPARAM>(label.c_str()));
             if (!previous.empty() && _wcsicmp(previous.c_str(), item.id.c_str()) == 0)
                 restoreIndex = static_cast<int>(visibleIds.size());
@@ -184,7 +208,16 @@ struct WallpaperLibraryWindow::Impl {
 
     void UpdateSelectionActions() {
         const auto selected = Selected();
-        if (favoriteButton) SetWindowTextW(favoriteButton, selected && selected->favorite ? L"取消收藏" : L"收藏");
+        if (favoriteButton)
+            SetWindowTextW(favoriteButton, selected && selected->favorite ? L"取消收藏" : L"收藏");
+    }
+
+    void FinishImport(const WallpaperLibraryItem& imported, const std::wstring& message) {
+        filter = FilterMode::All;
+        if (search) SetWindowTextW(search, L"");
+        RebuildList();
+        SelectVisibleId(imported.id);
+        SetStatus(message);
     }
 
     void ImportFile() {
@@ -199,7 +232,7 @@ struct WallpaperLibraryWindow::Impl {
             L"壁纸文件\0*.jpg;*.jpeg;*.png;*.bmp;*.gif;*.webp;*.tif;*.tiff;*.mp4;*.mov;*.wmv;*.m4v;*.avi;*.mkv;*.webm;*.html;*.htm\0"
             L"图片\0*.jpg;*.jpeg;*.png;*.bmp;*.gif;*.webp;*.tif;*.tiff\0"
             L"视频\0*.mp4;*.mov;*.wmv;*.m4v;*.avi;*.mkv;*.webm\0"
-            L"Web\0*.html;*.htm\0所有文件\0*.*\0";
+            L"本地 Web\0*.html;*.htm\0所有文件\0*.*\0";
         dialog.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST;
         if (!GetOpenFileNameW(&dialog)) return;
 
@@ -211,17 +244,26 @@ struct WallpaperLibraryWindow::Impl {
             SetStatus(error.empty() ? L"导入失败。" : error);
             return;
         }
-        filter = FilterMode::All;
-        if (search) SetWindowTextW(search, L"");
-        RebuildList();
-        for (std::size_t i = 0; i < visibleIds.size(); ++i) {
-            if (_wcsicmp(visibleIds[i].c_str(), imported->id.c_str()) == 0) {
-                SendMessageW(list, LB_SETCURSEL, static_cast<WPARAM>(i), 0);
-                break;
-            }
+        FinishImport(*imported,
+                     L"已导入：" + imported->title +
+                     (imported->thumbnail.empty() ? L" · 未生成缩略图" : L" · 缩略图已生成"));
+    }
+
+    void ImportWebUrl() {
+        if (!library || !webUrl) return;
+        const std::wstring url = WindowText(webUrl);
+        if (url.empty()) {
+            SetStatus(L"请粘贴 HTTPS Web 壁纸地址。");
+            return;
         }
-        SetStatus(L"已导入：" + imported->title + (imported->thumbnail.empty() ? L" · 未生成缩略图" : L" · 缩略图已生成"));
-        UpdateSelectionActions();
+        std::wstring error;
+        const auto imported = library->ImportWebUrl(url, {}, &error);
+        if (!imported) {
+            SetStatus(error.empty() ? L"Web URL 导入失败。" : error);
+            return;
+        }
+        SetWindowTextW(webUrl, L"");
+        FinishImport(*imported, L"已导入 HTTPS Web 壁纸：" + imported->title);
     }
 
     void ToggleFavorite() {
@@ -241,7 +283,7 @@ struct WallpaperLibraryWindow::Impl {
         const auto selected = Selected();
         if (!selected) return;
         if (selected->kind == LibraryWallpaperKind::Scene) {
-            SetStatus(L"内置 Scene 属于 TuringDesk 基础壁纸，不能从库中删除。" );
+            SetStatus(L"内置 Scene 属于 TuringDesk 基础壁纸，不能从库中删除。");
             return;
         }
         std::wstring error;
@@ -250,39 +292,49 @@ struct WallpaperLibraryWindow::Impl {
             return;
         }
         RebuildList();
-        SetStatus(L"已从壁纸库移除记录；原文件未删除。" );
+        SetStatus(L"已从壁纸库移除记录；原文件未删除。");
     }
 
     void ApplySelected() {
-        if (!library || !applyCallback) return;
+        if (!library) return;
         const auto selected = Selected();
         if (!selected) {
-            SetStatus(L"请先选择一个壁纸。" );
-            return;
-        }
-        if (selected->kind == LibraryWallpaperKind::Web) {
-            SetStatus(L"Web 壁纸已可入库；WebView2 运行后端将在路线第 9 项接入。" );
+            SetStatus(L"请先选择一个壁纸。");
             return;
         }
         if (selected->kind == LibraryWallpaperKind::Unknown) {
-            SetStatus(L"未知壁纸类型，不能应用。" );
+            SetStatus(L"未知壁纸类型，不能应用。");
             return;
         }
-        if (selected->kind != LibraryWallpaperKind::Scene && !selected->source.empty()) {
-            std::error_code ec;
-            if (!fs::exists(selected->source, ec)) {
-                SetStatus(L"源文件已经不存在：" + selected->source.wstring());
+        if (SourceMissing(*selected)) {
+            SetStatus(selected->kind == LibraryWallpaperKind::Web
+                ? L"Web 壁纸源不可用：" + selected->source.wstring()
+                : L"源文件已经不存在：" + selected->source.wstring());
+            return;
+        }
+
+        const std::wstring targetId = SelectedTargetId();
+        std::wstring error;
+        if (selected->kind == LibraryWallpaperKind::Web) {
+            if (!ActivateWebWallpaperItem(*selected, targetId, &error)) {
+                SetStatus(error.empty() ? L"Web 壁纸应用失败。" : error);
                 return;
             }
+        } else {
+            if (!applyCallback) {
+                SetStatus(L"壁纸运行时没有提供应用回调。");
+                return;
+            }
+            applyCallback(*selected, targetId);
         }
-        const std::wstring targetId = SelectedTargetId();
-        applyCallback(*selected, targetId);
-        std::wstring error;
-        library->MarkUsed(selected->id, &error);
+
+        std::wstring markError;
+        library->MarkUsed(selected->id, &markError);
         RebuildList();
         const std::wstring targetName = TargetDisplayName(targetId);
-        SetStatus(error.empty() ? L"已应用到 " + targetName + L"：" + selected->title
-                                : L"壁纸已应用，但最近使用记录保存失败：" + error);
+        SetStatus(markError.empty()
+            ? L"已应用到 " + targetName + L"：" + selected->title
+            : L"壁纸已应用，但最近使用记录保存失败：" + markError);
     }
 
     static LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) {
@@ -290,8 +342,10 @@ struct WallpaperLibraryWindow::Impl {
         if (message == WM_NCCREATE) {
             const auto* create = reinterpret_cast<CREATESTRUCTW*>(lParam);
             self = static_cast<Impl*>(create->lpCreateParams);
-            self->window = hwnd;
-            SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(self));
+            if (self) {
+                self->window = hwnd;
+                SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(self));
+            }
         }
         if (!self) return DefWindowProcW(hwnd, message, wParam, lParam);
 
@@ -305,6 +359,7 @@ struct WallpaperLibraryWindow::Impl {
             else if (id == kFavoritesId && notification == BN_CLICKED) { self->filter = FilterMode::Favorites; self->RebuildList(); }
             else if (id == kRecentId && notification == BN_CLICKED) { self->filter = FilterMode::Recent; self->RebuildList(); }
             else if (id == kImportId && notification == BN_CLICKED) self->ImportFile();
+            else if (id == kImportWebUrlId && notification == BN_CLICKED) self->ImportWebUrl();
             else if (id == kFavoriteId && notification == BN_CLICKED) self->ToggleFavorite();
             else if (id == kRemoveId && notification == BN_CLICKED) self->RemoveSelected();
             else if (id == kApplyId && notification == BN_CLICKED) self->ApplySelected();
@@ -321,6 +376,7 @@ struct WallpaperLibraryWindow::Impl {
             self->list = nullptr;
             self->targetCombo = nullptr;
             self->managedCopy = nullptr;
+            self->webUrl = nullptr;
             self->favoriteButton = nullptr;
             self->status = nullptr;
             return 0;
@@ -340,54 +396,64 @@ struct WallpaperLibraryWindow::Impl {
 
         window = CreateWindowExW(WS_EX_TOOLWINDOW, kWindowClass, L"TuringDesk 壁纸库",
                                  WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
-                                 CW_USEDEFAULT, CW_USEDEFAULT, 820, 650,
+                                 CW_USEDEFAULT, CW_USEDEFAULT, 900, 720,
                                  nullptr, nullptr, instance, this);
         if (!window) return false;
 
         const HFONT font = reinterpret_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
-        auto button = [&](const wchar_t* text, int id, int x, int y, int w, int h) {
-            HWND control = CreateWindowExW(0, L"BUTTON", text, WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
-                                           x, y, w, h, window, ControlId(id), instance, nullptr);
-            SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
+        auto setFont = [&](HWND control) {
+            if (control) SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
             return control;
         };
+        auto button = [&](const wchar_t* text, int id, int x, int y, int w, int h) {
+            return setFont(CreateWindowExW(0, L"BUTTON", text,
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+                x, y, w, h, window, ControlId(id), instance, nullptr));
+        };
+        auto label = [&](const wchar_t* text, int x, int y, int w, int h) {
+            return setFont(CreateWindowExW(0, L"STATIC", text, WS_CHILD | WS_VISIBLE,
+                x, y, w, h, window, nullptr, instance, nullptr));
+        };
 
-        HWND title = CreateWindowExW(0, L"STATIC", L"壁纸库", WS_CHILD | WS_VISIBLE,
-                                     20, 18, 160, 28, window, nullptr, instance, nullptr);
-        SendMessageW(title, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
-        search = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
-                                 20, 54, 360, 30, window, ControlId(kSearchId), instance, nullptr);
-        SendMessageW(search, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
+        label(L"壁纸库", 20, 18, 160, 28);
+        search = setFont(CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
+            20, 54, 390, 30, window, ControlId(kSearchId), instance, nullptr));
         SendMessageW(search, EM_SETCUEBANNER, TRUE, reinterpret_cast<LPARAM>(L"搜索标题、路径或类型"));
+        button(L"全部", kAllId, 424, 54, 72, 30);
+        button(L"收藏", kFavoritesId, 504, 54, 72, 30);
+        button(L"最近", kRecentId, 584, 54, 72, 30);
+        button(L"导入文件…", kImportId, 676, 54, 164, 30);
 
-        button(L"全部", kAllId, 394, 54, 72, 30);
-        button(L"收藏", kFavoritesId, 474, 54, 72, 30);
-        button(L"最近", kRecentId, 554, 54, 72, 30);
-        button(L"导入…", kImportId, 650, 54, 120, 30);
+        label(L"目标", 20, 100, 48, 24);
+        targetCombo = setFont(CreateWindowExW(0, L"COMBOBOX", L"",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST,
+            72, 94, 420, 180, window, ControlId(kTargetComboId), instance, nullptr));
+        managedCopy = setFont(CreateWindowExW(0, L"BUTTON", L"导入文件时复制到托管库",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
+            512, 96, 250, 26, window, ControlId(kManagedCopyId), instance, nullptr));
 
-        HWND targetLabel = CreateWindowExW(0, L"STATIC", L"目标", WS_CHILD | WS_VISIBLE,
-                                           20, 98, 48, 24, window, nullptr, instance, nullptr);
-        SendMessageW(targetLabel, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
-        targetCombo = CreateWindowExW(0, L"COMBOBOX", L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST,
-                                      72, 92, 390, 180, window, ControlId(kTargetComboId), instance, nullptr);
-        SendMessageW(targetCombo, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
-        managedCopy = CreateWindowExW(0, L"BUTTON", L"导入时复制到托管库", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
-                                      480, 94, 220, 26, window, ControlId(kManagedCopyId), instance, nullptr);
-        SendMessageW(managedCopy, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
+        list = setFont(CreateWindowExW(WS_EX_CLIENTEDGE, L"LISTBOX", L"",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL | LBS_NOTIFY | LBS_NOINTEGRALHEIGHT,
+            20, 136, 820, 330, window, ControlId(kListId), instance, nullptr));
 
-        list = CreateWindowExW(WS_EX_CLIENTEDGE, L"LISTBOX", L"",
-                               WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL | LBS_NOTIFY | LBS_NOINTEGRALHEIGHT,
-                               20, 128, 750, 350, window, ControlId(kListId), instance, nullptr);
-        SendMessageW(list, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
+        favoriteButton = button(L"收藏", kFavoriteId, 20, 482, 100, 32);
+        button(L"移出库", kRemoveId, 130, 482, 100, 32);
+        button(L"应用到桌面", kApplyId, 590, 482, 130, 32);
+        button(L"关闭", kCloseId, 730, 482, 110, 32);
 
-        favoriteButton = button(L"收藏", kFavoriteId, 20, 494, 100, 32);
-        button(L"移出库", kRemoveId, 130, 494, 100, 32);
-        button(L"应用到桌面", kApplyId, 520, 494, 130, 32);
-        button(L"关闭", kCloseId, 660, 494, 110, 32);
+        label(L"HTTPS Web", 20, 536, 80, 24);
+        webUrl = setFont(CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
+            104, 530, 566, 30, window, ControlId(kWebUrlId), instance, nullptr));
+        SendMessageW(webUrl, EM_SETCUEBANNER, TRUE,
+                     reinterpret_cast<LPARAM>(L"https://example.com/wallpaper"));
+        button(L"导入 Web URL", kImportWebUrlId, 680, 530, 160, 30);
+        label(L"远程 Web 壁纸只接受 HTTPS；本地 Web 请用“导入文件…”选择 .html/.htm。",
+              104, 566, 736, 24);
 
-        status = CreateWindowExW(0, L"STATIC", L"", WS_CHILD | WS_VISIBLE,
-                                 20, 542, 750, 46, window, ControlId(kStatusId), instance, nullptr);
-        SendMessageW(status, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
+        status = setFont(CreateWindowExW(0, L"STATIC", L"", WS_CHILD | WS_VISIBLE,
+            20, 604, 820, 54, window, ControlId(kStatusId), instance, nullptr));
         RebuildTargets();
         return true;
     }
