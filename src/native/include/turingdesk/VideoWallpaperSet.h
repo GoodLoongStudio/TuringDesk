@@ -11,6 +11,11 @@ namespace turingdesk {
 
 class VideoWallpaperPlayer;
 
+struct VideoWallpaperRequest {
+    RECT region{};
+    std::wstring path;
+};
+
 class VideoWallpaperSet {
 public:
     VideoWallpaperSet();
@@ -22,6 +27,9 @@ public:
     bool Start(HWND parentWindow, const std::wstring& path, const std::vector<RECT>& regions,
                wallpaper::ScaleMode scaleMode = wallpaper::ScaleMode::Cover,
                float focalX = 0.5f, float focalY = 0.5f);
+    bool StartMixed(HWND parentWindow, const std::vector<VideoWallpaperRequest>& requests,
+                    wallpaper::ScaleMode scaleMode = wallpaper::ScaleMode::Cover,
+                    float focalX = 0.5f, float focalY = 0.5f);
     void Stop();
     void Tick();
     void SetPaused(bool paused);
@@ -42,6 +50,7 @@ private:
     struct Slot {
         HWND surface{};
         bool ownsSurface{};
+        std::wstring path;
         std::unique_ptr<VideoWallpaperPlayer> player;
     };
 
