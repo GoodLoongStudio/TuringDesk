@@ -1,0 +1,80 @@
+name: Apply Web Wallpaper Activation Migration
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/patch-web-wallpaper-activation.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: patch-web-wallpaper-activation
+  cancel-in-progress: true
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Connect Web library items to runtime
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path('src/native/src/WallpaperEngine.cpp')
+          text = path.read_text(encoding='utf-8')
+
+          def replace_once(old, new):
+              global text
+              if old not in text:
+                  raise SystemExit(f'anchor missing: {old[:160]!r}')
+              text = text.replace(old, new, 1)
+
+          replace_once(
+              '#include "turingdesk/WallpaperScaling.h"\n',
+              '#include "turingdesk/WallpaperScaling.h"\n#include "turingdesk/WallpaperWebRuntimeCoordinator.h"\n')
+
+          replace_once(
+              '    return scene == L"aurora" || scene == L"neon" || scene == L"grid" || scene == L"image" || scene == L"video";\n',
+              '    return scene == L"aurora" || scene == L"neon" || scene == L"grid" || scene == L"image" || scene == L"video" || scene == L"web";\n')
+
+          replace_once(
+              '        if (item.kind == Kind::Video) {\n            next.scene = L"video";\n            next.video = item.source.wstring();\n            return true;\n        }\n        return false;\n',
+              '        if (item.kind == Kind::Video) {\n            next.scene = L"video";\n            next.video = item.source.wstring();\n            return true;\n        }\n        if (item.kind == Kind::Web) {\n            next.scene = L"web";\n            next.image = item.source.wstring();\n            return true;\n        }\n        return false;\n')
+
+          replace_once(
+              '        if (item.kind == Kind::Web) {\n            libraryError_ = L"Web 壁纸已入库；运行后端将在路线第 9 项启用。";\n            RefreshSettings();\n            return;\n        }\n        if (item.kind == Kind::Unknown) return;\n\n        std::wstring error;\n',
+              '        if (item.kind == Kind::Unknown) return;\n\n        std::wstring error;\n        if (item.kind == Kind::Web) {\n            if (!turingdesk::wallpaper::ActivateWebWallpaperItem(item, targetMonitorId, &error)) {\n                libraryError_ = error.empty() ? L"Web 壁纸应用失败" : error;\n                RefreshSettings();\n                return;\n            }\n            config_ = LoadConfig();\n            ApplyConfig(config_, false);\n            error.clear();\n            library_.MarkUsed(item.id, &error);\n            libraryError_ = error;\n            libraryWindow_.Refresh();\n            automationWindow_.Refresh();\n            RefreshSettings();\n            return;\n        }\n')
+
+          replace_once(
+              '        const std::wstring source = config_.scene == L"image" ? config_.image :\n                                    config_.scene == L"video" ? config_.video : L"";\n',
+              '        const std::wstring source = (config_.scene == L"image" || config_.scene == L"web") ? config_.image :\n                                    config_.scene == L"video" ? config_.video : L"";\n')
+
+          replace_once(
+              '            const bool kindMatches = (config_.scene == L"image" && item.kind == turingdesk::wallpaper::LibraryWallpaperKind::Image) ||\n                                     (config_.scene == L"video" && item.kind == turingdesk::wallpaper::LibraryWallpaperKind::Video);\n',
+              '            const bool kindMatches = (config_.scene == L"image" && item.kind == turingdesk::wallpaper::LibraryWallpaperKind::Image) ||\n                                     (config_.scene == L"video" && item.kind == turingdesk::wallpaper::LibraryWallpaperKind::Video) ||\n                                     (config_.scene == L"web" && item.kind == turingdesk::wallpaper::LibraryWallpaperKind::Web);\n')
+
+          replace_once(
+              '        } else {\n            descriptor.kind = turingdesk::wallpaper::ResolvedWallpaperKind::Scene;\n            descriptor.sceneKey = config_.scene == L"neon" ? L"neon" : config_.scene == L"grid" ? L"grid" : L"aurora";\n        }\n',
+              '        } else if (config_.scene == L"web" && !config_.image.empty()) {\n            descriptor.kind = turingdesk::wallpaper::ResolvedWallpaperKind::Web;\n            descriptor.source = config_.image;\n        } else {\n            descriptor.kind = turingdesk::wallpaper::ResolvedWallpaperKind::Scene;\n            descriptor.sceneKey = config_.scene == L"neon" ? L"neon" : config_.scene == L"grid" ? L"grid" : L"aurora";\n        }\n')
+
+          path.write_text(text, encoding='utf-8', newline='\n')
+
+      - name: Commit migration
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/native/src/WallpaperEngine.cpp
+          git commit -m "wallpaper: activate Web library items" || exit 0
+          for i in 1 2 3 4 5; do
+            git pull --rebase origin main || true
+            if git push origin HEAD:main; then exit 0; fi
+            sleep 2
+          done
+          exit 1
