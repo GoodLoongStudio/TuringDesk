@@ -11,12 +11,13 @@ Already present on `main`:
 - Image wallpaper via WIC.
 - Video wallpaper via Media Foundation.
 - Enable / stop / resume and tray controls.
-- Pause dynamic/video wallpaper while a foreground application is fullscreen.
 - Display-change reattachment and mount diagnostics.
 - Per-monitor DPI awareness.
 - Multi-monitor topology with Span / Clone / Primary-only layout and negative-coordinate support.
 - Image Cover / Contain / Stretch / Center / Tile with focal alignment.
-- Video Cover / Contain / Stretch / Center via MFPlay source crop/aspect policy; video Tile still uses a safe Center fallback pending a bounded multi-surface implementation.
+- Video Cover / Contain / Stretch / Center via MFPlay source crop/aspect policy; video Tile still uses a safe Center fallback pending a bounded implementation.
+- Adaptive wallpaper performance policy with configurable FPS, fullscreen/maximized actions, Remote Desktop, battery saver, lock and idle handling.
+- Video loop, mute/volume, playback rate and restart controls synchronized across monitor surfaces.
 
 ## Delivery order
 
@@ -37,15 +38,20 @@ Each item is completed in `main`, with native self-test/CI coverage added or upd
   - [x] Horizontal/vertical focal alignment and persisted crop semantics.
   - [ ] Bounded video tile mode without unbounded decoder duplication.
 
-- [ ] 3. Performance / playback rules
-  - User-selectable FPS caps (15/30/45/60/120 where meaningful).
-  - Pause/stop/throttle rules for fullscreen, maximized windows, Remote Desktop, lock screen and battery saver.
-  - Adaptive render throttling when desktop is occluded or idle.
+- [x] 3. Performance / playback rules
+  - [x] User-selectable FPS caps: 15/30/45/60/120.
+  - [x] Continue/throttle/pause/stop policy for fullscreen and maximized applications.
+  - [x] Remote Desktop, Windows battery saver, session lock/unlock and idle rules.
+  - [x] Dynamic render-timer throttling and active-rule diagnostics.
+  - [x] ARM64/x64 native CI green at `2a52fff7`.
 
 - [ ] 4. Video playback controls
-  - Loop policy, mute/volume, playback rate and seek/restart behavior.
-  - Hardware-decoding diagnostics and clean device-loss recovery.
-  - Smooth pause/resume without restarting the video.
+  - [x] Loop policy, mute/volume, playback rate and restart behavior.
+  - [x] Smooth pause/resume without rebuilding the player.
+  - [x] Synchronized controls across Clone monitor surfaces.
+  - [ ] Seek controls and timeline diagnostics.
+  - [ ] Controlled media/device failure recovery.
+  - [ ] Exact hardware/software decoder diagnostics; MFPlay currently reports Windows Media Foundation/EVR system-managed negotiation.
 
 ### P1 — Wallpaper Engine-class daily use
 
