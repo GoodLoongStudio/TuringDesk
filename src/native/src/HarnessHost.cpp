@@ -74,8 +74,12 @@ public:
                                 nullptr, nullptr, instance_, this);
         if (!hwnd_) return false;
 
-        status_ = CreateWindowExW(0, L"STATIC", L"正在启动 DeepSeek Harness…",
-                                  WS_CHILD | WS_VISIBLE | SS_CENTER,
+        // Use a borderless read-only EDIT instead of STATIC so every startup/error
+        // message and the log path can be selected with the mouse and copied with
+        // Ctrl+C. ES_NOHIDESEL keeps a useful selection visible when focus moves.
+        status_ = CreateWindowExW(0, L"EDIT", L"正在启动 DeepSeek Harness…",
+                                  WS_CHILD | WS_VISIBLE | WS_TABSTOP |
+                                      ES_MULTILINE | ES_CENTER | ES_READONLY | ES_NOHIDESEL,
                                   24, 24, 1100, 120, hwnd_, nullptr, instance_, nullptr);
         HFONT font = CreateFontW(-20, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
                                  DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
@@ -182,7 +186,9 @@ private:
 
         const ULONGLONG now = GetTickCount64();
         if (now >= nextStatusUpdate_) {
-            UpdateStartingStatus(now);
+            // Do not replace the text while the user is selecting/copying it.
+            // Harness readiness polling continues normally in the background.
+            if (GetFocus() != status_) UpdateStartingStatus(now);
             nextStatusUpdate_ = now + 1000;
         }
     }
@@ -264,6 +270,9 @@ private:
         if (!status_ || !IsWindow(status_)) return;
         ShowWindow(status_, SW_SHOW);
         SetWindowTextW(status_, text.c_str());
+        // Keep the read-only control ready for keyboard selection without
+        // automatically highlighting the full status on every refresh.
+        SendMessageW(status_, EM_SETSEL, 0, 0);
         UpdateWindow(status_);
     }
 
