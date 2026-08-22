@@ -26,8 +26,14 @@ public:
     void Tick();
     void SetPaused(bool paused);
     void SetScaling(wallpaper::ScaleMode scaleMode, float focalX = 0.5f, float focalY = 0.5f);
+    void SetLooping(bool looping);
+    void SetMuted(bool muted);
+    void SetVolume(float volume);
+    void SetPlaybackRate(float rate);
+    bool Restart();
     bool Active() const;
     std::wstring LastErrorText() const;
+    std::wstring DiagnosticsText() const;
 
 private:
     struct Slot {
@@ -45,6 +51,10 @@ private:
     wallpaper::ScaleMode scaleMode_{wallpaper::ScaleMode::Cover};
     float focalX_{0.5f};
     float focalY_{0.5f};
+    bool looping_{true};
+    bool muted_{true};
+    float volume_{0.0f};
+    float playbackRate_{1.0f};
 };
 
 } // namespace turingdesk
