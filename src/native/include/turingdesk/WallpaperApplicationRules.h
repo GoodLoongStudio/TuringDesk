@@ -3,6 +3,7 @@
 #include <windows.h>
 #include <cstdlib>
 #include <filesystem>
+#include <iterator>
 #include <optional>
 #include <string>
 #include <string_view>
