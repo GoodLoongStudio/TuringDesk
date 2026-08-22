@@ -53,11 +53,16 @@ constexpr int kVideoMuteCheckId = 4115;
 constexpr int kVideoVolumeComboId = 4116;
 constexpr int kVideoRateComboId = 4117;
 constexpr int kVideoRestartButtonId = 4118;
+constexpr int kVideoBackButtonId = 4119;
+constexpr int kVideoForwardButtonId = 4120;
 constexpr int kTraySettings = 4201;
 constexpr int kTrayToggle = 4202;
 constexpr int kTrayExit = 4203;
 constexpr int kConfigVersion = 8;
 constexpr LONG_PTR kRaisedDesktopFlag = WS_EX_NOREDIRECTIONBITMAP;
+constexpr ULONGLONG kVideoRecoveryCooldownMs = 3000;
+constexpr ULONGLONG kVideoRecoveryStableResetMs = 30000;
+constexpr unsigned kMaxVideoRecoveryAttempts = 3;
 
 HMENU ControlId(int id) {
     return reinterpret_cast<HMENU>(static_cast<INT_PTR>(id));
@@ -65,7 +70,7 @@ HMENU ControlId(int id) {
 
 struct Config {
     bool enabled{true};
-    bool pauseFullscreen{true}; // V6 compatibility; V7+ uses fullscreenAction.
+    bool pauseFullscreen{true};
     std::wstring scene{L"aurora"};
     std::wstring image;
     std::wstring video;
@@ -498,8 +503,12 @@ public:
                                           552, 374, 100, 150, settings_, ControlId(kVideoRateComboId), instance_, nullptr);
         for (const wchar_t* rate : {L"0.5×", L"1.0×", L"1.5×", L"2.0×"})
             SendMessageW(videoRateCombo_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(rate));
+        videoBackButton_ = CreateWindowExW(0, L"BUTTON", L"后退 10 秒", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+                                            116, 414, 104, 30, settings_, ControlId(kVideoBackButtonId), instance_, nullptr);
         videoRestartButton_ = CreateWindowExW(0, L"BUTTON", L"从头重播", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
-                                               116, 414, 110, 30, settings_, ControlId(kVideoRestartButtonId), instance_, nullptr);
+                                               228, 414, 104, 30, settings_, ControlId(kVideoRestartButtonId), instance_, nullptr);
+        videoForwardButton_ = CreateWindowExW(0, L"BUTTON", L"前进 10 秒", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+                                               340, 414, 104, 30, settings_, ControlId(kVideoForwardButtonId), instance_, nullptr);
 
         status_ = label(L"", 20, 462, 688, 150);
 
@@ -512,7 +521,8 @@ public:
 
         for (HWND control : {sceneCombo_, imageButton_, layoutCombo_, scaleCombo_, horizontalCombo_, verticalCombo_,
                              fpsCombo_, fullscreenActionCombo_, maximizedActionCombo_, videoLoopCheck_, videoMuteCheck_,
-                             videoVolumeCombo_, videoRateCombo_, videoRestartButton_, applyButton_, toggleButton_, closeButton_}) {
+                             videoVolumeCombo_, videoRateCombo_, videoBackButton_, videoRestartButton_, videoForwardButton_,
+                             applyButton_, toggleButton_, closeButton_}) {
             SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
         }
         SendMessageW(status_, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
@@ -620,6 +630,50 @@ private:
         }
     }
 
+    void HandleVideoHealth() {
+        videoSet_.Tick();
+        const ULONGLONG now = GetTickCount64();
+        const std::wstring mediaError = videoSet_.LastErrorText();
+        if (mediaError.empty()) {
+            if (videoHealthySinceMs_ == 0) videoHealthySinceMs_ = now;
+            if (videoRecoveryAttempts_ > 0 && now - videoHealthySinceMs_ >= kVideoRecoveryStableResetMs) {
+                videoRecoveryAttempts_ = 0;
+                lastVideoRecoveryAttemptMs_ = 0;
+                videoRecoveryNote_.clear();
+            }
+            if (!lastMediaError_.empty()) {
+                lastMediaError_.clear();
+                RefreshSettings();
+            }
+            return;
+        }
+
+        videoHealthySinceMs_ = 0;
+        lastMediaError_ = mediaError;
+        if (videoRecoveryAttempts_ >= kMaxVideoRecoveryAttempts) {
+            videoRecoveryNote_ = L"自动恢复已达到 3 次上限；请检查视频文件/编解码器。";
+            RefreshSettings();
+            return;
+        }
+        if (lastVideoRecoveryAttemptMs_ != 0 && now - lastVideoRecoveryAttemptMs_ < kVideoRecoveryCooldownMs) {
+            RefreshSettings();
+            return;
+        }
+
+        ++videoRecoveryAttempts_;
+        lastVideoRecoveryAttemptMs_ = now;
+        const std::wstring originalError = mediaError;
+        if (StartVideo(true)) {
+            lastMediaError_.clear();
+            videoRecoveryNote_ = L"检测到 " + originalError + L"；已自动重建视频管线（第 " +
+                                 std::to_wstring(videoRecoveryAttempts_) + L"/3 次）。";
+        } else {
+            videoRecoveryNote_ = L"自动重建视频管线失败（第 " + std::to_wstring(videoRecoveryAttempts_) +
+                                 L"/3 次）：" + lastMediaError_;
+        }
+        RefreshSettings();
+    }
+
     static LRESULT CALLBACK ControlProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) {
         auto* self = reinterpret_cast<WallpaperApp*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
         if (message == WM_NCCREATE) {
@@ -657,9 +711,21 @@ private:
             case kImageButtonId:
                 if (HIWORD(wParam) == BN_CLICKED) self->ChooseImage();
                 return 0;
+            case kVideoBackButtonId:
+                if (HIWORD(wParam) == BN_CLICKED) {
+                    if (!self->videoSet_.SeekRelativeSeconds(-10.0) && self->status_) SetWindowTextW(self->status_, L"当前视频暂时无法 seek。");
+                    else self->RefreshSettings();
+                }
+                return 0;
             case kVideoRestartButtonId:
                 if (HIWORD(wParam) == BN_CLICKED) {
                     if (!self->videoSet_.Restart() && self->status_) SetWindowTextW(self->status_, L"当前没有可重播的视频壁纸。");
+                    else self->RefreshSettings();
+                }
+                return 0;
+            case kVideoForwardButtonId:
+                if (HIWORD(wParam) == BN_CLICKED) {
+                    if (!self->videoSet_.SeekRelativeSeconds(10.0) && self->status_) SetWindowTextW(self->status_, L"当前视频暂时无法 seek。");
                     else self->RefreshSettings();
                 }
                 return 0;
@@ -693,7 +759,9 @@ private:
             self->videoMuteCheck_ = nullptr;
             self->videoVolumeCombo_ = nullptr;
             self->videoRateCombo_ = nullptr;
+            self->videoBackButton_ = nullptr;
             self->videoRestartButton_ = nullptr;
+            self->videoForwardButton_ = nullptr;
             self->applyButton_ = nullptr;
             self->toggleButton_ = nullptr;
             self->closeButton_ = nullptr;
@@ -742,14 +810,7 @@ private:
                     }
                 }
                 if (config_.enabled) {
-                    if (config_.scene == L"video") {
-                        videoSet_.Tick();
-                        const auto mediaError = videoSet_.LastErrorText();
-                        if (mediaError != lastMediaError_) {
-                            lastMediaError_ = mediaError;
-                            RefreshSettings();
-                        }
-                    }
+                    if (config_.scene == L"video") HandleVideoHealth();
                     ApplyPerformanceSnapshot(performancePolicy_.Evaluate(host_, settings_, CurrentPerformanceConfig()));
                 }
             }
@@ -1129,6 +1190,10 @@ private:
     bool ApplyConfig(const Config& next, bool persist = true) {
         videoSet_.Stop();
         lastMediaError_.clear();
+        videoRecoveryNote_.clear();
+        videoRecoveryAttempts_ = 0;
+        lastVideoRecoveryAttemptMs_ = 0;
+        videoHealthySinceMs_ = 0;
         config_ = next;
         config_.layout = turingdesk::wallpaper::LayoutModeKey(turingdesk::wallpaper::ParseLayoutMode(config_.layout));
         config_.scale = turingdesk::wallpaper::ScaleModeKey(turingdesk::wallpaper::ParseScaleMode(config_.scale));
@@ -1158,7 +1223,13 @@ private:
         return mounted;
     }
 
-    bool StartVideo() {
+    bool StartVideo(bool recovery = false) {
+        if (!recovery) {
+            videoRecoveryAttempts_ = 0;
+            lastVideoRecoveryAttemptMs_ = 0;
+            videoHealthySinceMs_ = 0;
+            videoRecoveryNote_.clear();
+        }
         videoSet_.Stop();
         lastMediaError_.clear();
         if (config_.video.empty() || !fs::exists(config_.video)) {
@@ -1313,11 +1384,12 @@ private:
             if (currentPerformance_.targetFps > 0) status += L" · " + std::to_wstring(currentPerformance_.targetFps) + L" FPS";
             if (!currentPerformance_.reason.empty()) status += L" · 原因：" + currentPerformance_.reason;
             if (selected == 4) {
-                if (!lastMediaError_.empty()) status = L"视频壁纸错误：" + lastMediaError_;
+                if (!lastMediaError_.empty()) status += L"\r\n视频错误：" + lastMediaError_;
                 else {
                     if (scaleMode == turingdesk::wallpaper::ScaleMode::Tile) status += L" · 视频 Tile 当前安全降级为 Center";
                     status += L"\r\n" + videoSet_.DiagnosticsText();
                 }
+                if (!videoRecoveryNote_.empty()) status += L"\r\n恢复：" + videoRecoveryNote_;
             }
             status += L"\r\n" + turingdesk::wallpaper::DescribeMonitorTopology(topology_);
         }
@@ -1342,7 +1414,9 @@ private:
     HWND videoMuteCheck_{};
     HWND videoVolumeCombo_{};
     HWND videoRateCombo_{};
+    HWND videoBackButton_{};
     HWND videoRestartButton_{};
+    HWND videoForwardButton_{};
     HWND applyButton_{};
     HWND toggleButton_{};
     HWND closeButton_{};
@@ -1354,6 +1428,9 @@ private:
     UINT taskbarCreated_{};
     UINT renderTimerIntervalMs_{};
     unsigned healthTicks_{};
+    unsigned videoRecoveryAttempts_{};
+    ULONGLONG lastVideoRecoveryAttemptMs_{};
+    ULONGLONG videoHealthySinceMs_{};
     MountMode mountMode_{MountMode::None};
     std::wstring lastMountError_;
     Config config_;
@@ -1363,6 +1440,7 @@ private:
     std::wstring pendingImage_;
     std::wstring pendingVideo_;
     std::wstring lastMediaError_;
+    std::wstring videoRecoveryNote_;
     turingdesk::VideoWallpaperSet videoSet_;
     float time_{};
     ComPtr<ID2D1Factory> d2dFactory_;
