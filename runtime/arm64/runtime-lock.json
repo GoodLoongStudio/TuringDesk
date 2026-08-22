@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "vendorRevision": 2,
+  "vendorRevision": 3,
   "architecture": "arm64",
   "node": {
     "version": "24.19.0",
@@ -21,7 +21,8 @@
   },
   "codex": {
     "release": "rust-v0.146.0",
-    "archive": "codex-aarch64-pc-windows-msvc.exe.zip",
+    "archive": "codex-aarch64-pc-windows-msvc.exe.zst",
+    "sha256": "3ede06f1890b97fcbfafe6153f07045b340e3c966a2de7d0da188e393a1c90ef",
     "source": "https://github.com/openai/codex/releases/"
   },
   "webview2Sdk": {
@@ -33,7 +34,7 @@
     "This lock drives one-time repository vendoring on Windows ARM64.",
     "Normal ARM64 builds and deployments consume runtime/arm64 only and do not download third-party runtimes.",
     "goz replaces the previous Everything runtime. gozd is the elevated MFT/USN index service and goz.exe is the unprivileged query client.",
-    "The complete Codex CLI is vendored; TuringDesk launches it as codex app-server --stdio for the L3 agent runtime.",
+    "The complete Codex CLI is vendored as the upstream .exe.zst asset so it remains below GitHub's 100 MiB per-file limit; Node 24 materializes codex.exe offline during deployment.",
     "Microsoft Edge WebView2 Runtime is an operating-system prerequisite; only the build SDK/loader is vendored."
   ]
 }
