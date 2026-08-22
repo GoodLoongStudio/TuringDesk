@@ -108,6 +108,7 @@ target_link_libraries(TuringDeskWallpaper PRIVATE
     d2d1
     windowscodecs
     comdlg32
+    wtsapi32
     mf
     mfplat
     mfplay
