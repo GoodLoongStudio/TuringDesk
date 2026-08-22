@@ -8,6 +8,7 @@ on:
       - src/native/**
       - runtime/arm64/**
       - scripts/prepare-third-party-runtime-arm64.ps1
+      - scripts/verify-arm64-runtime-bundle.ps1
       - .github/workflows/native-search-windows.yml
   workflow_dispatch:
 
@@ -21,35 +22,79 @@ concurrency:
 jobs:
   build-arm64:
     runs-on: windows-11-arm
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
-      - name: Configure ARM64
+
+      - name: Verify repository ARM64 RuntimeBundle
+        shell: pwsh
+        run: |
+          .\scripts\verify-arm64-runtime-bundle.ps1
+
+      - name: Configure ARM64 offline
         run: cmake -S . -B build -A ARM64
+
       - name: Build ARM64
         run: cmake --build build --config Release --parallel
+
       - name: Native Search self-test
         shell: pwsh
         run: |
           $p = Start-Process -FilePath ".\build\src\native\Release\TuringDesk.exe" -ArgumentList "--self-test" -Wait -PassThru
           if ($p.ExitCode -ne 0) { throw "Native Search self-test failed: $($p.ExitCode)" }
+
       - name: Native Wallpaper self-test
         shell: pwsh
         run: |
           $p = Start-Process -FilePath ".\build\src\native\Release\TuringDeskWallpaper.exe" -ArgumentList "--self-test" -Wait -PassThru
           if ($p.ExitCode -ne 0) { throw "Native Wallpaper self-test failed: $($p.ExitCode)" }
+
       - name: Native Harness shell self-test
         shell: pwsh
         run: |
           $p = Start-Process -FilePath ".\build\src\native\Release\TuringDeskHarness.exe" -ArgumentList "--self-test" -Wait -PassThru
           if ($p.ExitCode -ne 0) { throw "Native Harness shell self-test failed: $($p.ExitCode)" }
-      - name: Prepare ARM64 artifact
+
+      - name: Prepare self-contained ARM64 smoke package
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path build/package | Out-Null
           Copy-Item build/src/native/Release/TuringDesk.exe build/package/TuringDesk.exe -Force
           Copy-Item build/src/native/Release/TuringDeskWallpaper.exe build/package/TuringDeskWallpaper.exe -Force
           Copy-Item build/src/native/Release/TuringDeskHarness.exe build/package/TuringDeskHarness.exe -Force
+          .\scripts\prepare-third-party-runtime-arm64.ps1 -DeployDir (Resolve-Path build/package).Path
+
+      - name: Validate deployed ARM64 package
+        shell: pwsh
+        run: |
+          foreach ($test in @(
+            @{ Exe = '.\build\package\TuringDesk.exe'; Args = '--self-test'; Name = 'Search' },
+            @{ Exe = '.\build\package\TuringDeskWallpaper.exe'; Args = '--self-test'; Name = 'Wallpaper' },
+            @{ Exe = '.\build\package\TuringDeskHarness.exe'; Args = '--self-test'; Name = 'Harness shell' }
+          )) {
+            $p = Start-Process -FilePath $test.Exe -ArgumentList $test.Args -Wait -PassThru
+            if ($p.ExitCode -ne 0) { throw "$($test.Name) package self-test failed: $($p.ExitCode)" }
+          }
+
+      - name: Real bundled DeepSeek Harness smoke test
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath '.\build\package\TuringDeskHarness.exe' -ArgumentList '--harness-smoke-test' -Wait -PassThru
+          if ($p.ExitCode -ne 0) {
+            $log = Join-Path $env:LOCALAPPDATA 'TuringDesk\Logs\harness.log'
+            if (Test-Path $log) { Get-Content $log -Tail 200 | Out-Host }
+            throw "Bundled DeepSeek Harness smoke test failed: $($p.ExitCode)"
+          }
+
+      - name: Prepare compact ARM64 artifact
+        shell: pwsh
+        run: |
+          # Runtime payloads are already in git under runtime/arm64. Keep CI artifact
+          # compact: the one-click deploy combines these EXEs with the verified repo bundle.
+          Remove-Item build/package/Runtime -Recurse -Force -ErrorAction SilentlyContinue
+          Remove-Item build/package/Everything -Recurse -Force -ErrorAction SilentlyContinue
+          Remove-Item build/package/Codex -Recurse -Force -ErrorAction SilentlyContinue
+
       - uses: actions/upload-artifact@v4
         with:
           name: TuringDesk-Native-Search-ARM64
@@ -73,7 +118,7 @@ jobs:
           cat > "ci/native-${GITHUB_SHA}.json" <<EOF
           {
             "sha": "${GITHUB_SHA}",
-            "mode": "native-arm64-only",
+            "mode": "native-arm64-only-offline-runtime",
             "x64": "disabled",
             "arm64": "${ARM64_RESULT}",
             "run_id": "${GITHUB_RUN_ID}"
