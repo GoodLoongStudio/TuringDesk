@@ -2,12 +2,14 @@
 #include <wincred.h>
 #include <algorithm>
 #include <chrono>
+#include <cstdint>
 #include <cstdio>
 #include <cwctype>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace fs = std::filesystem;
@@ -17,6 +19,9 @@ namespace {
 
 constexpr wchar_t kCredentialTarget[] = L"TuringDesk/ModelApiKey";
 constexpr std::size_t kMaxConversationTurns = 6;
+constexpr std::uint32_t kSessionMagic = 0x334c4454; // TDL3
+constexpr std::uint32_t kSessionVersion = 1;
+constexpr std::uint32_t kMaxSessionFieldBytes = 512 * 1024;
 
 std::wstring Trim(std::wstring value) {
     const auto notSpace = [](wchar_t ch) { return !std::iswspace(ch); };
@@ -184,6 +189,126 @@ fs::path SettingsPath() {
     std::error_code ec;
     fs::create_directories(directory, ec);
     return directory / L"model-settings.json";
+}
+
+std::uint64_t SessionHash(const ModelConfig& config) {
+    const std::wstring key = Lower(config.providerId) + L"\n" + Lower(config.baseUrl) + L"\n" +
+                             config.endpoint + L"\n" + config.model;
+    std::uint64_t hash = 1469598103934665603ull;
+    for (wchar_t ch : key) {
+        hash ^= static_cast<std::uint16_t>(ch);
+        hash *= 1099511628211ull;
+    }
+    return hash;
+}
+
+fs::path ConversationPath(const ModelConfig& config) {
+    auto directory = SettingsPath().parent_path() / L"l3-sessions";
+    std::error_code ec;
+    fs::create_directories(directory, ec);
+    wchar_t fileName[32]{};
+    swprintf_s(fileName, L"%016llx.bin", static_cast<unsigned long long>(SessionHash(config)));
+    return directory / fileName;
+}
+
+void WriteU32(std::ostream& stream, std::uint32_t value) {
+    stream.write(reinterpret_cast<const char*>(&value), sizeof(value));
+}
+
+bool ReadU32(std::istream& stream, std::uint32_t& value) {
+    stream.read(reinterpret_cast<char*>(&value), sizeof(value));
+    return static_cast<bool>(stream);
+}
+
+bool WriteSessionField(std::ostream& stream, const std::wstring& value) {
+    const auto utf8 = WideToUtf8(value);
+    if (utf8.size() > kMaxSessionFieldBytes) return false;
+    WriteU32(stream, static_cast<std::uint32_t>(utf8.size()));
+    if (!utf8.empty()) stream.write(utf8.data(), static_cast<std::streamsize>(utf8.size()));
+    return static_cast<bool>(stream);
+}
+
+bool ReadSessionField(std::istream& stream, std::wstring& value) {
+    std::uint32_t size = 0;
+    if (!ReadU32(stream, size) || size > kMaxSessionFieldBytes) return false;
+    std::string utf8(size, '\0');
+    if (size) stream.read(utf8.data(), static_cast<std::streamsize>(size));
+    if (!stream) return false;
+    value = Utf8ToWide(utf8);
+    return size == 0 || !value.empty();
+}
+
+using PersistedTurn = std::pair<std::wstring, std::wstring>;
+
+std::vector<PersistedTurn> LoadPersistedConversation(const ModelConfig& config) {
+    std::vector<PersistedTurn> turns;
+    if (config.baseUrl.empty() || config.model.empty()) return turns;
+    std::ifstream stream(ConversationPath(config), std::ios::binary);
+    if (!stream) return turns;
+
+    std::uint32_t magic = 0;
+    std::uint32_t version = 0;
+    std::uint32_t count = 0;
+    if (!ReadU32(stream, magic) || !ReadU32(stream, version) || !ReadU32(stream, count) ||
+        magic != kSessionMagic || version != kSessionVersion || count > kMaxConversationTurns) {
+        return {};
+    }
+
+    turns.reserve(count);
+    for (std::uint32_t i = 0; i < count; ++i) {
+        std::wstring user;
+        std::wstring assistant;
+        if (!ReadSessionField(stream, user) || !ReadSessionField(stream, assistant)) return {};
+        if (!user.empty() && !assistant.empty()) turns.emplace_back(std::move(user), std::move(assistant));
+    }
+    return turns;
+}
+
+bool SavePersistedConversation(const ModelConfig& config, const std::vector<PersistedTurn>& turns) {
+    if (config.baseUrl.empty() || config.model.empty()) return false;
+    const auto path = ConversationPath(config);
+    auto tempPath = path;
+    tempPath += L".tmp";
+
+    std::ofstream stream(tempPath, std::ios::binary | std::ios::trunc);
+    if (!stream) return false;
+    WriteU32(stream, kSessionMagic);
+    WriteU32(stream, kSessionVersion);
+    WriteU32(stream, static_cast<std::uint32_t>(std::min(turns.size(), kMaxConversationTurns)));
+    const auto start = turns.size() > kMaxConversationTurns ? turns.size() - kMaxConversationTurns : 0;
+    for (std::size_t i = start; i < turns.size(); ++i) {
+        if (!WriteSessionField(stream, turns[i].first) || !WriteSessionField(stream, turns[i].second)) {
+            stream.close();
+            std::error_code ec;
+            fs::remove(tempPath, ec);
+            return false;
+        }
+    }
+    stream.flush();
+    const bool ok = static_cast<bool>(stream);
+    stream.close();
+    if (!ok) {
+        std::error_code ec;
+        fs::remove(tempPath, ec);
+        return false;
+    }
+
+    if (!MoveFileExW(tempPath.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+        std::error_code ec;
+        fs::remove(tempPath, ec);
+        return false;
+    }
+    return true;
+}
+
+void DeletePersistedConversation(const ModelConfig& config) {
+    if (config.baseUrl.empty() || config.model.empty()) return;
+    const auto path = ConversationPath(config);
+    std::error_code ec;
+    fs::remove(path, ec);
+    auto tempPath = path;
+    tempPath += L".tmp";
+    fs::remove(tempPath, ec);
 }
 
 std::wstring ConfigValue(const std::string& json, std::string_view key) {
@@ -504,7 +629,11 @@ void FillProbeMetadata(ModelProbeResult& result, const ProviderCandidate& candid
 
 } // namespace
 
-L3Agent::L3Agent() : config_(LoadConfig()) {}
+L3Agent::L3Agent() : config_(LoadConfig()) {
+    for (auto& [user, assistant] : LoadPersistedConversation(config_)) {
+        conversation_.push_back({std::move(user), std::move(assistant)});
+    }
+}
 
 L3Agent::~L3Agent() {
     Stop();
@@ -683,11 +812,20 @@ bool L3Agent::ApplyModelConfig(const ModelProbeResult& probe,
 
     const bool changed = config_.providerId != probe.providerId || config_.baseUrl != probe.baseUrl ||
                          config_.endpoint != probe.endpoint || config_.model != model;
+    if (changed) {
+        Stop();
+        if (worker_.joinable()) worker_.join();
+    }
     config_.providerId = probe.providerId.empty() ? L"openai-compatible" : probe.providerId;
     config_.baseUrl = probe.baseUrl;
     config_.endpoint = probe.endpoint;
     config_.model = model;
-    if (changed) ClearConversation();
+    if (changed) {
+        const auto restored = LoadPersistedConversation(config_);
+        std::scoped_lock lock(conversationMutex_);
+        conversation_.clear();
+        for (const auto& turn : restored) conversation_.push_back({turn.first, turn.second});
+    }
 
     if (!SaveConfig(config_)) {
         reply = L"模型配置保存失败。";
@@ -698,8 +836,11 @@ bool L3Agent::ApplyModelConfig(const ModelProbeResult& probe,
 }
 
 void L3Agent::ClearConversation() {
-    std::scoped_lock lock(conversationMutex_);
-    conversation_.clear();
+    {
+        std::scoped_lock lock(conversationMutex_);
+        conversation_.clear();
+    }
+    DeletePersistedConversation(config_);
 }
 
 bool L3Agent::TryHandleLocal(const std::wstring& raw, std::wstring& reply, bool& consumedSecret) {
@@ -756,8 +897,17 @@ bool L3Agent::TryHandleLocal(const std::wstring& raw, std::wstring& reply, bool&
         if (endpoint == L"-") endpoint.clear();
         if (!endpoint.empty() && endpoint.front() != L'/') endpoint.insert(endpoint.begin(), L'/');
         const bool changed = config_.endpoint != endpoint;
+        if (changed) {
+            Stop();
+            if (worker_.joinable()) worker_.join();
+        }
         config_.endpoint = endpoint;
-        if (changed) ClearConversation();
+        if (changed) {
+            const auto restored = LoadPersistedConversation(config_);
+            std::scoped_lock lock(conversationMutex_);
+            conversation_.clear();
+            for (const auto& turn : restored) conversation_.push_back({turn.first, turn.second});
+        }
         reply = SaveConfig(config_) ? L"Endpoint 已保存。" : L"Endpoint 保存失败。";
         return true;
     }
@@ -776,12 +926,21 @@ bool L3Agent::TryHandleLocal(const std::wstring& raw, std::wstring& reply, bool&
         }
         const auto lowerBase = Lower(baseUrl);
         const bool changed = config_.baseUrl != baseUrl || config_.model != model;
+        if (changed) {
+            Stop();
+            if (worker_.joinable()) worker_.join();
+        }
         config_.baseUrl = baseUrl;
         config_.model = model;
         if (lowerBase.find(L"anthropic") != std::wstring::npos) config_.providerId = L"anthropic";
         else if (lowerBase.find(L"deepseek") != std::wstring::npos) config_.providerId = L"deepseek";
         else config_.providerId = L"openai-compatible";
-        if (changed) ClearConversation();
+        if (changed) {
+            const auto restored = LoadPersistedConversation(config_);
+            std::scoped_lock lock(conversationMutex_);
+            conversation_.clear();
+            for (const auto& turn : restored) conversation_.push_back({turn.first, turn.second});
+        }
         reply = SaveConfig(config_) ? L"模型配置已保存。" : L"模型配置保存失败。";
         return true;
     }
@@ -1000,11 +1159,17 @@ void L3Agent::RunRequest(std::wstring prompt, DeltaCallback onDelta, DoneCallbac
     }
 
     if (emitted && !assistantText.empty()) {
-        std::scoped_lock lock(conversationMutex_);
-        conversation_.push_back({std::move(prompt), std::move(assistantText)});
-        if (conversation_.size() > kMaxConversationTurns) {
-            conversation_.erase(conversation_.begin(), conversation_.begin() + (conversation_.size() - kMaxConversationTurns));
+        std::vector<PersistedTurn> snapshot;
+        {
+            std::scoped_lock lock(conversationMutex_);
+            conversation_.push_back({std::move(prompt), std::move(assistantText)});
+            if (conversation_.size() > kMaxConversationTurns) {
+                conversation_.erase(conversation_.begin(), conversation_.begin() + (conversation_.size() - kMaxConversationTurns));
+            }
+            snapshot.reserve(conversation_.size());
+            for (const auto& turn : conversation_) snapshot.emplace_back(turn.user, turn.assistant);
         }
+        SavePersistedConversation(config_, snapshot);
     }
     onDone(emitted ? L"" : L"模型返回成功，但没有可显示的文本内容。请检查服务的兼容格式。");
 }
