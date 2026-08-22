@@ -16,6 +16,7 @@ public:
     bool Start();
     void Stop();
     bool Running() const;
+    DWORD ExitCode() const;
     bool ServiceReady() const;
     bool WaitUntilReady(DWORD timeoutMs);
     const std::wstring& LastError() const;
