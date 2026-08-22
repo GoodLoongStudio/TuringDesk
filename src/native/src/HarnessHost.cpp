@@ -19,9 +19,10 @@ constexpr wchar_t kWindowClass[] = L"TuringDesk.Native.HarnessWindow";
 constexpr wchar_t kMutexName[] = L"Local\\TuringDesk.Native.Harness.Singleton";
 constexpr UINT_PTR kReadyTimerId = 1;
 constexpr UINT kReadyPollMs = 250;
-// The first official npx launch may need to populate npm's own cache. Do not
-// mistake that one-time package preparation for a dead Harness process.
-constexpr ULONGLONG kReadyTimeoutMs = 600000;
+// Keep automated smoke tests bounded, but never impose this deadline on the
+// interactive shell. Upstream's first Windows npx launch is known to spend many
+// minutes preparing npm state before port 3080 appears.
+constexpr DWORD kSmokeTimeoutMs = 600000;
 
 fs::path UserDataDirectory() {
     wchar_t localAppData[32768]{};
@@ -48,7 +49,7 @@ std::wstring HarnessLogHint() {
 int RunHarnessSmokeTest() {
     turingdesk::HarnessProcessManager harness;
     if (!harness.Start()) return 6;
-    const bool ready = harness.WaitUntilReady(static_cast<DWORD>(kReadyTimeoutMs));
+    const bool ready = harness.WaitUntilReady(kSmokeTimeoutMs);
     harness.Stop();
     return ready ? 0 : 7;
 }
@@ -75,7 +76,7 @@ public:
 
         status_ = CreateWindowExW(0, L"STATIC", L"正在启动 DeepSeek Harness…",
                                   WS_CHILD | WS_VISIBLE | SS_CENTER,
-                                  24, 24, 1100, 80, hwnd_, nullptr, instance_, nullptr);
+                                  24, 24, 1100, 120, hwnd_, nullptr, instance_, nullptr);
         HFONT font = CreateFontW(-20, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
                                  DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
                                  CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
@@ -98,8 +99,9 @@ public:
             return true;
         }
 
-        SetStatus(L"正在启动官方 DeepSeek Harness…首次运行可能需要准备 npm 缓存。" + HarnessLogHint());
-        readyDeadline_ = GetTickCount64() + kReadyTimeoutMs;
+        startedAt_ = GetTickCount64();
+        nextStatusUpdate_ = startedAt_;
+        UpdateStartingStatus(startedAt_);
         SetTimer(hwnd_, kReadyTimerId, kReadyPollMs, nullptr);
         return true;
     }
@@ -170,15 +172,27 @@ private:
 
         if (!harness_.Running()) {
             KillTimer(hwnd_, kReadyTimerId);
-            SetStatus(L"DeepSeek 官方 Harness 在 Web UI 就绪前退出。请查看 harness.log；日志现在会包含实际 Node/npx 启动命令和上游错误。" + HarnessLogHint());
+            const DWORD exitCode = harness_.ExitCode();
+            std::wstring text = L"DeepSeek 官方 Harness 在 Web UI 就绪前退出";
+            if (exitCode != STILL_ACTIVE) text += L"，ExitCode=" + std::to_wstring(exitCode);
+            text += L"。请查看下方日志中的 npm/DSH 原始错误。" + HarnessLogHint();
+            SetStatus(text);
             return;
         }
 
-        if (GetTickCount64() >= readyDeadline_) {
-            KillTimer(hwnd_, kReadyTimerId);
-            harness_.Stop();
-            SetStatus(L"DeepSeek 官方 Harness 10 分钟内仍未就绪，已停止本次进程树。请查看 harness.log。" + HarnessLogHint());
+        const ULONGLONG now = GetTickCount64();
+        if (now >= nextStatusUpdate_) {
+            UpdateStartingStatus(now);
+            nextStatusUpdate_ = now + 1000;
         }
+    }
+
+    void UpdateStartingStatus(ULONGLONG now) {
+        const ULONGLONG elapsedSeconds = startedAt_ == 0 ? 0 : (now - startedAt_) / 1000;
+        std::wstring text = L"正在启动官方 DeepSeek Harness… 已等待 " + std::to_wstring(elapsedSeconds) + L" 秒。";
+        text += L"\r\n首次 npx 在 Windows 上可能需要较长时间；只要进程仍在运行就继续等待，关闭此窗口即可取消。";
+        text += HarnessLogHint();
+        SetStatus(text);
     }
 
     void InitializeWebView() {
@@ -242,7 +256,7 @@ private:
         if (!status_ || !hwnd_) return;
         RECT bounds{};
         if (!GetClientRect(hwnd_, &bounds)) return;
-        SetWindowPos(status_, nullptr, 24, 24, (bounds.right - bounds.left) - 48, 96,
+        SetWindowPos(status_, nullptr, 24, 24, (bounds.right - bounds.left) - 48, 140,
                      SWP_NOZORDER | SWP_NOACTIVATE);
     }
 
@@ -257,7 +271,8 @@ private:
     HWND hwnd_{};
     HWND status_{};
     HFONT statusFont_{};
-    ULONGLONG readyDeadline_{};
+    ULONGLONG startedAt_{};
+    ULONGLONG nextStatusUpdate_{};
     bool webviewInitializing_{};
     turingdesk::HarnessProcessManager harness_;
     ComPtr<ICoreWebView2Controller> webviewController_;
