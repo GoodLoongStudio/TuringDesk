@@ -60,6 +60,27 @@ fs::path ModuleDirectory() {
     return fs::path(std::wstring(value, length)).parent_path();
 }
 
+fs::path LocalAppDataDirectory() {
+    wchar_t value[32768]{};
+    const DWORD length = GetEnvironmentVariableW(L"LOCALAPPDATA", value, static_cast<DWORD>(std::size(value)));
+    if (length > 0 && length < std::size(value)) return fs::path(std::wstring(value, length));
+
+    wchar_t tempPath[32768]{};
+    const DWORD tempLength = GetTempPathW(static_cast<DWORD>(std::size(tempPath)), tempPath);
+    if (tempLength > 0 && tempLength < std::size(tempPath)) return fs::path(std::wstring(tempPath, tempLength));
+    return {};
+}
+
+fs::path HarnessLogPathFs() {
+    const fs::path root = LocalAppDataDirectory();
+    if (root.empty()) return {};
+    const fs::path directory = root / L"TuringDesk" / L"Logs";
+    std::error_code ec;
+    fs::create_directories(directory, ec);
+    if (ec) return {};
+    return directory / L"harness.log";
+}
+
 std::wstring UserHomeDirectory() {
     wchar_t value[32768]{};
     const DWORD length = GetEnvironmentVariableW(L"USERPROFILE", value, static_cast<DWORD>(std::size(value)));
@@ -217,6 +238,36 @@ bool HarnessProcessManager::Start() {
         return false;
     }
 
+    const fs::path logPath = HarnessLogPathFs();
+    if (logPath.empty()) {
+        impl_->lastError = L"无法创建 Harness 日志目录。";
+        CloseHandle(job);
+        return false;
+    }
+
+    SECURITY_ATTRIBUTES security{};
+    security.nLength = sizeof(security);
+    security.bInheritHandle = TRUE;
+
+    HANDLE logHandle = CreateFileW(logPath.c_str(), GENERIC_WRITE,
+                                   FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                                   &security, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (logHandle == INVALID_HANDLE_VALUE) {
+        impl_->lastError = L"无法创建 Harness 日志：" + Win32ErrorText(GetLastError()) + L" · " + logPath.wstring();
+        CloseHandle(job);
+        return false;
+    }
+
+    HANDLE inputHandle = CreateFileW(L"NUL", GENERIC_READ | GENERIC_WRITE,
+                                     FILE_SHARE_READ | FILE_SHARE_WRITE,
+                                     &security, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (inputHandle == INVALID_HANDLE_VALUE) {
+        impl_->lastError = L"无法初始化 Harness 标准输入：" + Win32ErrorText(GetLastError());
+        CloseHandle(logHandle);
+        CloseHandle(job);
+        return false;
+    }
+
     const std::wstring comspec = ComSpecPath();
     std::wstring command = BuildLaunchCommandFor(npxPath);
     std::vector<wchar_t> commandBuffer(command.begin(), command.end());
@@ -224,21 +275,31 @@ bool HarnessProcessManager::Start() {
 
     STARTUPINFOW startup{};
     startup.cb = sizeof(startup);
-    startup.dwFlags = STARTF_USESHOWWINDOW;
+    startup.dwFlags = STARTF_USESHOWWINDOW | STARTF_USESTDHANDLES;
     startup.wShowWindow = SW_HIDE;
+    startup.hStdInput = inputHandle;
+    startup.hStdOutput = logHandle;
+    startup.hStdError = logHandle;
 
     PROCESS_INFORMATION processInfo{};
     const std::wstring home = UserHomeDirectory();
     const DWORD flags = CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT | CREATE_SUSPENDED;
-    if (!CreateProcessW(comspec.c_str(), commandBuffer.data(), nullptr, nullptr, FALSE, flags,
-                        nullptr, home.empty() ? nullptr : home.c_str(), &startup, &processInfo)) {
-        impl_->lastError = L"无法启动 DeepSeek Harness：" + Win32ErrorText(GetLastError());
+    const BOOL created = CreateProcessW(comspec.c_str(), commandBuffer.data(), nullptr, nullptr, TRUE, flags,
+                                        nullptr, home.empty() ? nullptr : home.c_str(), &startup, &processInfo);
+    const DWORD createError = created ? ERROR_SUCCESS : GetLastError();
+    CloseHandle(inputHandle);
+    CloseHandle(logHandle);
+
+    if (!created) {
+        impl_->lastError = L"无法启动 DeepSeek Harness：" + Win32ErrorText(createError) +
+                           L" · 日志：" + logPath.wstring();
         CloseHandle(job);
         return false;
     }
 
     if (!AssignProcessToJobObject(job, processInfo.hProcess)) {
-        impl_->lastError = L"无法接管 Harness 进程树：" + Win32ErrorText(GetLastError());
+        impl_->lastError = L"无法接管 Harness 进程树：" + Win32ErrorText(GetLastError()) +
+                           L" · 日志：" + logPath.wstring();
         TerminateProcess(processInfo.hProcess, 1);
         CloseHandle(processInfo.hThread);
         CloseHandle(processInfo.hProcess);
@@ -247,7 +308,8 @@ bool HarnessProcessManager::Start() {
     }
 
     if (ResumeThread(processInfo.hThread) == static_cast<DWORD>(-1)) {
-        impl_->lastError = L"无法恢复 Harness 进程：" + Win32ErrorText(GetLastError());
+        impl_->lastError = L"无法恢复 Harness 进程：" + Win32ErrorText(GetLastError()) +
+                           L" · 日志：" + logPath.wstring();
         TerminateJobObject(job, 1);
         CloseHandle(processInfo.hThread);
         CloseHandle(processInfo.hProcess);
@@ -296,13 +358,14 @@ bool HarnessProcessManager::WaitUntilReady(DWORD timeoutMs) {
         if (!Running()) {
             DWORD exitCode = 0;
             GetExitCodeProcess(impl_->process, &exitCode);
-            impl_->lastError = L"Harness 在 Web UI 就绪前退出，ExitCode=" + std::to_wstring(exitCode);
+            impl_->lastError = L"Harness 在 Web UI 就绪前退出，ExitCode=" + std::to_wstring(exitCode) +
+                               L" · 日志：" + LogPath();
             return false;
         }
         Sleep(100);
     } while (GetTickCount64() - start < timeoutMs);
 
-    impl_->lastError = L"等待 Harness Web UI 超时（" + DefaultUrl() + L"）";
+    impl_->lastError = L"等待 Harness Web UI 超时（" + DefaultUrl() + L"） · 日志：" + LogPath();
     return false;
 }
 
@@ -318,6 +381,11 @@ std::wstring HarnessProcessManager::DefaultUrl() {
     return L"http://localhost:3080";
 }
 
+std::wstring HarnessProcessManager::LogPath() {
+    const fs::path path = HarnessLogPathFs();
+    return path.empty() ? std::wstring{} : path.wstring();
+}
+
 std::wstring HarnessProcessManager::BuildLaunchCommand() {
     std::wstring npxPath = ResolveNpxPath();
     if (npxPath.empty()) npxPath = L"npx.cmd";
@@ -330,7 +398,8 @@ bool HarnessProcessManager::SelfTest() {
            command.find(kHarnessPackage) != std::wstring::npos &&
            command.find(L" web") != std::wstring::npos &&
            command.find(L"/d /s /c") != std::wstring::npos &&
-           std::string_view(kHarnessBootMarker) == "window.__DSH_BOOT__";
+           std::string_view(kHarnessBootMarker) == "window.__DSH_BOOT__" &&
+           !LogPath().empty();
 }
 
 } // namespace turingdesk
