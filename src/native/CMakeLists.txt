@@ -77,6 +77,7 @@ set_source_files_properties(src/WallpaperEngine.cpp PROPERTIES
 add_executable(TuringDeskHarness WIN32
     src/HarnessHost.cpp
     src/HarnessProcessManager.cpp
+    src/HarnessBundledRuntimeBootstrap.cpp
 )
 
 target_include_directories(TuringDesk PRIVATE include)
