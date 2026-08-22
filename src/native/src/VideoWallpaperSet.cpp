@@ -189,6 +189,24 @@ bool VideoWallpaperSet::Restart() {
     return ok;
 }
 
+bool VideoWallpaperSet::SeekRelativeSeconds(double seconds) {
+    bool ok = !slots_.empty();
+    for (auto& slot : slots_) {
+        if (!slot.player || !slot.player->SeekRelativeSeconds(seconds)) ok = false;
+    }
+    return ok;
+}
+
+double VideoWallpaperSet::PositionSeconds() const {
+    if (slots_.empty() || !slots_.front().player) return -1.0;
+    return slots_.front().player->PositionSeconds();
+}
+
+double VideoWallpaperSet::DurationSeconds() const {
+    if (slots_.empty() || !slots_.front().player) return -1.0;
+    return slots_.front().player->DurationSeconds();
+}
+
 bool VideoWallpaperSet::Active() const {
     if (slots_.empty()) return false;
     return std::all_of(slots_.begin(), slots_.end(), [](const Slot& slot) {
