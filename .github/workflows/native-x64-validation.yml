@@ -1,0 +1,75 @@
+name: Native Windows x64 Source Validation
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - CMakeLists.txt
+      - src/native/**
+      - .github/workflows/native-x64-validation.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: native-windows-x64-source
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: windows-2025
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Configure x64
+        run: cmake -S . -B build-x64 -A x64
+
+      - name: Build x64
+        run: cmake --build build-x64 --config Release --parallel
+
+      - name: Native source self-tests
+        shell: pwsh
+        run: |
+          foreach ($test in @(
+            @{ Exe = '.\build-x64\src\native\Release\TuringDesk.exe'; Name = 'Search/Agent' },
+            @{ Exe = '.\build-x64\src\native\Release\TuringDeskWallpaper.exe'; Name = 'Wallpaper' },
+            @{ Exe = '.\build-x64\src\native\Release\TuringDeskHarness.exe'; Name = 'Harness shell' }
+          )) {
+            $p = Start-Process -FilePath $test.Exe -ArgumentList '--self-test' -Wait -PassThru
+            if ($p.ExitCode -ne 0) { throw "$($test.Name) self-test failed: $($p.ExitCode)" }
+          }
+
+  report:
+    if: always()
+    needs: [validate]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ci-status
+      - name: Write x64 validation status
+        shell: bash
+        env:
+          RESULT: ${{ needs.validate.result }}
+        run: |
+          mkdir -p ci
+          cat > "ci/native-x64-${GITHUB_SHA}.json" <<EOF
+          {
+            "sha": "${GITHUB_SHA}",
+            "mode": "native-x64-source-validation",
+            "result": "${RESULT}",
+            "run_id": "${GITHUB_RUN_ID}"
+          }
+          EOF
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "ci/native-x64-${GITHUB_SHA}.json"
+          git commit -m "ci: report native x64 source validation ${GITHUB_SHA}" || exit 0
+          for i in 1 2 3; do
+            git pull --rebase origin ci-status || true
+            if git push origin HEAD:ci-status; then exit 0; fi
+            sleep 2
+          done
+          exit 1
