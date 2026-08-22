@@ -5,6 +5,7 @@
 #include <system_error>
 
 #include "turingdesk/WallpaperLibrary.h"
+#include "turingdesk/WallpaperWebRuntimeCoordinator.h"
 #include "turingdesk/WebWallpaperHost.h"
 
 namespace fs = std::filesystem;
@@ -15,6 +16,8 @@ namespace fs = std::filesystem;
 extern "C" int WINAPI TuringDeskWallpaperMain(HINSTANCE instance, HINSTANCE previous, PWSTR commandLine, int showCommand);
 
 namespace {
+
+constexpr wchar_t kWallpaperControlClass[] = L"TuringDesk.Native.WallpaperControl";
 
 bool WebLibrarySelfTest() {
     std::error_code ec;
@@ -51,10 +54,23 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR commandLine, i
     if (webResult >= 0) return webResult;
 
     const std::wstring_view args = commandLine ? std::wstring_view(commandLine) : std::wstring_view{};
-    if (args.find(L"--self-test") != std::wstring_view::npos) {
+    const bool selfTest = args.find(L"--self-test") != std::wstring_view::npos;
+    if (selfTest) {
         if (!turingdesk::wallpaper::WebWallpaperProcessSet::SelfTest()) return 37;
         if (!WebLibrarySelfTest()) return 38;
+        if (!turingdesk::wallpaper::WallpaperWebRuntimeCoordinator::SelfTest()) return 39;
+        return TuringDeskWallpaperMain(instance, previous, commandLine, showCommand);
     }
 
-    return TuringDeskWallpaperMain(instance, previous, commandLine, showCommand);
+    // A second TuringDeskWallpaper invocation is only a command sender for the
+    // already-running singleton. Do not let that short-lived process spawn a
+    // duplicate set of Web wallpaper children.
+    if (FindWindowW(kWallpaperControlClass, nullptr))
+        return TuringDeskWallpaperMain(instance, previous, commandLine, showCommand);
+
+    turingdesk::wallpaper::WallpaperWebRuntimeCoordinator webCoordinator;
+    if (!webCoordinator.Start()) return 40;
+    const int result = TuringDeskWallpaperMain(instance, previous, commandLine, showCommand);
+    webCoordinator.Stop();
+    return result;
 }
