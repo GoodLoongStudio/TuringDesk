@@ -67,6 +67,13 @@ function Test-Binary([string]$Exe, [string]$Name) {
     }
 }
 
+function Test-InstalledHarnessRuntime {
+    $Runtime = Join-Path $DeployDir "HarnessRuntime"
+    $Node = Join-Path $Runtime "Node\node.exe"
+    $Dsh = Join-Path $Runtime "Dsh\node_modules\@deepseek-ai\dsh\lib\bin.js"
+    return (Test-Path $Node -PathType Leaf) -and (Test-Path $Dsh -PathType Leaf)
+}
+
 function Get-MainSha {
     $Sha = ((& gh api "repos/$Repo/commits/main" --jq ".sha") | Select-Object -First 1).Trim()
     if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($Sha)) {
@@ -183,6 +190,27 @@ function Download-Artifact([long]$RunId) {
     }
 }
 
+function Ensure-HarnessRuntimeArtifact([string]$Sha, $Downloaded) {
+    if ($Downloaded.HasHarnessRuntime -or (Test-InstalledHarnessRuntime)) {
+        return $Downloaded
+    }
+
+    Write-Host "QUICK deploy detected that HarnessRuntime is missing on this machine." -ForegroundColor Yellow
+    Write-Host "Bootstrapping the bundled Node + DeepSeek Harness runtime once; later UI deploys stay quick." -ForegroundColor Yellow
+
+    if ($Downloaded.Temp) {
+        Remove-Item $Downloaded.Temp -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
+    $FullRunId = [long](Start-And-WaitForRun -Sha $Sha -FullPackage $true)
+    $FullDownload = Download-Artifact -RunId $FullRunId
+    if (-not $FullDownload.HasHarnessRuntime) {
+        Remove-Item $FullDownload.Temp -Recurse -Force -ErrorAction SilentlyContinue
+        throw "Full ARM64 artifact did not contain HarnessRuntime. Refusing to deploy a broken L4 entry."
+    }
+    return $FullDownload
+}
+
 function Deploy-HarnessRuntime($Downloaded) {
     $DestinationDir = Join-Path $DeployDir "HarnessRuntime"
     $DestinationNode = Join-Path $DestinationDir "Node\node.exe"
@@ -206,8 +234,7 @@ function Deploy-HarnessRuntime($Downloaded) {
         return $true
     }
 
-    Write-Host "QUICK deploy: Harness runtime is not installed yet. UI can be tested now; run this script with -Full before validating L4 Harness." -ForegroundColor Yellow
-    return $false
+    throw "HarnessRuntime is unavailable after bootstrap. Refusing to deploy a broken DeepSeek Harness entry."
 }
 
 function Deploy-BundledEverything([string]$ArtifactRoot) {
@@ -312,10 +339,11 @@ if ($LASTEXITCODE -ne 0) {
 Step "Resolving current main commit"
 $MainSha = Get-MainSha
 Write-Host "main: $MainSha" -ForegroundColor DarkGray
-Write-Host ($(if ($Full) { "Deploy mode: FULL runtime validation" } else { "Deploy mode: QUICK native validation" })) -ForegroundColor DarkGray
+Write-Host ($(if ($Full) { "Deploy mode: FULL runtime validation" } else { "Deploy mode: QUICK native validation with automatic first-run runtime bootstrap" })) -ForegroundColor DarkGray
 
 $RunId = [long](Resolve-Run -Sha $MainSha)
 $Downloaded = Download-Artifact -RunId $RunId
+$Downloaded = Ensure-HarnessRuntimeArtifact -Sha $MainSha -Downloaded $Downloaded
 try {
     Test-Binary -Exe $Downloaded.Exe -Name "Native Search"
     Test-Binary -Exe $Downloaded.WallpaperExe -Name "Native Wallpaper"
@@ -353,14 +381,11 @@ try {
 
     Write-Host "`nDeployment complete. Press Alt+Space to open Search." -ForegroundColor Green
     Write-Host "Use the top-right 设置 button to open the TuringDesk 设置中心." -ForegroundColor Green
-    if ($HarnessReady) {
-        Write-Host "DeepSeek Harness runtime is available from 设置中心 -> DeepSeek Harness (L4)." -ForegroundColor Green
-    }
-    else {
-        Write-Host "For the first real Harness validation, run: .\scripts\deploy-native-arm64.ps1 -Full" -ForegroundColor Yellow
-    }
+    Write-Host "DeepSeek Harness runtime is available from 设置中心 -> DeepSeek Harness (L4)." -ForegroundColor Green
     Write-Host "Path: $DeployDir" -ForegroundColor DarkGray
 }
 finally {
-    Remove-Item $Downloaded.Temp -Recurse -Force -ErrorAction SilentlyContinue
+    if ($Downloaded -and $Downloaded.Temp) {
+        Remove-Item $Downloaded.Temp -Recurse -Force -ErrorAction SilentlyContinue
+    }
 }
