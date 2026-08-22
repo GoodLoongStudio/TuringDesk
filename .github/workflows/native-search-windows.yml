@@ -35,7 +35,12 @@ jobs:
         run: |
           $process = Start-Process -FilePath ".\build\src\native\Release\TuringDeskWallpaper.exe" -ArgumentList "--self-test" -Wait -PassThru
           if ($process.ExitCode -ne 0) { throw "Native Wallpaper self-test failed: $($process.ExitCode)" }
-      - name: Package x64 with Everything and Wallpaper
+      - name: Native Harness host self-test
+        shell: pwsh
+        run: |
+          $process = Start-Process -FilePath ".\build\src\native\Release\TuringDeskHarness.exe" -ArgumentList "--self-test" -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "Native Harness host self-test failed: $($process.ExitCode)" }
+      - name: Package x64 with Everything, Wallpaper and Harness
         shell: pwsh
         run: |
           $package = "build/package"
@@ -43,6 +48,7 @@ jobs:
           New-Item -ItemType Directory -Force -Path $everything | Out-Null
           Copy-Item "build/src/native/Release/TuringDesk.exe" (Join-Path $package "TuringDesk.exe") -Force
           Copy-Item "build/src/native/Release/TuringDeskWallpaper.exe" (Join-Path $package "TuringDeskWallpaper.exe") -Force
+          Copy-Item "build/src/native/Release/TuringDeskHarness.exe" (Join-Path $package "TuringDeskHarness.exe") -Force
           $zip = Join-Path $env:RUNNER_TEMP "Everything-x64.zip"
           Invoke-WebRequest "https://www.voidtools.com/Everything-$env:EVERYTHING_VERSION.x64.zip" -OutFile $zip
           Expand-Archive $zip -DestinationPath $everything -Force
@@ -54,6 +60,7 @@ jobs:
           $required = @(
             (Join-Path $package "TuringDesk.exe"),
             (Join-Path $package "TuringDeskWallpaper.exe"),
+            (Join-Path $package "TuringDeskHarness.exe"),
             (Join-Path $package "Everything\Everything.exe"),
             (Join-Path $package "Everything\LICENSE.txt")
           )
@@ -64,6 +71,8 @@ jobs:
           if ($search.ExitCode -ne 0) { throw "Packaged TuringDesk self-test failed: $($search.ExitCode)" }
           $wallpaper = Start-Process -FilePath (Join-Path $package "TuringDeskWallpaper.exe") -ArgumentList "--self-test" -Wait -PassThru
           if ($wallpaper.ExitCode -ne 0) { throw "Packaged wallpaper self-test failed: $($wallpaper.ExitCode)" }
+          $harness = Start-Process -FilePath (Join-Path $package "TuringDeskHarness.exe") -ArgumentList "--self-test" -Wait -PassThru
+          if ($harness.ExitCode -ne 0) { throw "Packaged Harness host self-test failed: $($harness.ExitCode)" }
       - uses: actions/upload-artifact@v4
         with:
           name: TuringDesk-Native-Search-x64
@@ -87,7 +96,12 @@ jobs:
         run: |
           $process = Start-Process -FilePath ".\build\src\native\Release\TuringDeskWallpaper.exe" -ArgumentList "--self-test" -Wait -PassThru
           if ($process.ExitCode -ne 0) { throw "Native Wallpaper self-test failed: $($process.ExitCode)" }
-      - name: Package ARM64 with Everything and Wallpaper
+      - name: Native Harness host self-test
+        shell: pwsh
+        run: |
+          $process = Start-Process -FilePath ".\build\src\native\Release\TuringDeskHarness.exe" -ArgumentList "--self-test" -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "Native Harness host self-test failed: $($process.ExitCode)" }
+      - name: Package ARM64 with Everything, Wallpaper and Harness
         shell: pwsh
         run: |
           $package = "build/package"
@@ -95,6 +109,7 @@ jobs:
           New-Item -ItemType Directory -Force -Path $everything | Out-Null
           Copy-Item "build/src/native/Release/TuringDesk.exe" (Join-Path $package "TuringDesk.exe") -Force
           Copy-Item "build/src/native/Release/TuringDeskWallpaper.exe" (Join-Path $package "TuringDeskWallpaper.exe") -Force
+          Copy-Item "build/src/native/Release/TuringDeskHarness.exe" (Join-Path $package "TuringDeskHarness.exe") -Force
           $zip = Join-Path $env:RUNNER_TEMP "Everything-ARM64.zip"
           Invoke-WebRequest "https://www.voidtools.com/Everything-$env:EVERYTHING_VERSION.ARM64.zip" -OutFile $zip
           Expand-Archive $zip -DestinationPath $everything -Force
@@ -106,6 +121,7 @@ jobs:
           $required = @(
             (Join-Path $package "TuringDesk.exe"),
             (Join-Path $package "TuringDeskWallpaper.exe"),
+            (Join-Path $package "TuringDeskHarness.exe"),
             (Join-Path $package "Everything\Everything.exe"),
             (Join-Path $package "Everything\LICENSE.txt")
           )
@@ -116,6 +132,8 @@ jobs:
           if ($search.ExitCode -ne 0) { throw "Packaged TuringDesk self-test failed: $($search.ExitCode)" }
           $wallpaper = Start-Process -FilePath (Join-Path $package "TuringDeskWallpaper.exe") -ArgumentList "--self-test" -Wait -PassThru
           if ($wallpaper.ExitCode -ne 0) { throw "Packaged wallpaper self-test failed: $($wallpaper.ExitCode)" }
+          $harness = Start-Process -FilePath (Join-Path $package "TuringDeskHarness.exe") -ArgumentList "--self-test" -Wait -PassThru
+          if ($harness.ExitCode -ne 0) { throw "Packaged Harness host self-test failed: $($harness.ExitCode)" }
       - uses: actions/upload-artifact@v4
         with:
           name: TuringDesk-Native-Search-ARM64
