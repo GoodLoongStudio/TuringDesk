@@ -27,11 +27,32 @@ function Assert-BundleHash([string]$Path, [string]$Expected) {
     }
 }
 
+function Test-PathInsideRoot([string]$Candidate, [string]$Root) {
+    if ([string]::IsNullOrWhiteSpace($Candidate) -or [string]::IsNullOrWhiteSpace($Root)) { return $false }
+    try {
+        $candidateFull = [IO.Path]::GetFullPath($Candidate).TrimEnd('\')
+        $rootFull = [IO.Path]::GetFullPath($Root).TrimEnd('\')
+        return $candidateFull.Equals($rootFull, [StringComparison]::OrdinalIgnoreCase) -or
+               $candidateFull.StartsWith($rootFull + '\', [StringComparison]::OrdinalIgnoreCase)
+    }
+    catch { return $false }
+}
+
 function Stop-OwnedProcesses {
-    foreach ($name in @('TuringDesk','TuringDeskWallpaper','TuringDeskHarness','node','codex')) {
-        foreach ($process in @(Get-Process -Name $name -ErrorAction SilentlyContinue)) {
-            try { Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue } catch { }
+    # Never kill arbitrary node.exe/codex.exe instances on the machine. Only
+    # terminate processes whose executable actually lives inside this deployment.
+    $ownedNames = @('TuringDesk.exe','TuringDeskWallpaper.exe','TuringDeskHarness.exe','node.exe','codex.exe')
+    try {
+        foreach ($process in @(Get-CimInstance Win32_Process -ErrorAction Stop)) {
+            if ($ownedNames -notcontains [string]$process.Name) { continue }
+            $exe = [string]$process.ExecutablePath
+            if (-not $exe -or -not (Test-PathInsideRoot $exe $DeployDir)) { continue }
+            Write-Host "Stopping TuringDesk-owned $($process.Name) PID $($process.ProcessId)" -ForegroundColor DarkGray
+            & taskkill.exe /PID $process.ProcessId /T /F 2>$null | Out-Null
         }
+    }
+    catch {
+        Write-Host "Process scan warning: $($_.Exception.Message)" -ForegroundColor DarkYellow
     }
     Start-Sleep -Milliseconds 250
 }
@@ -54,7 +75,7 @@ function Ensure-GozService([string]$GozExe, [string]$GozDaemon) {
         Step 'Installing/starting TuringDesk goz index service'
         Invoke-ElevatedGoz $GozDaemon 'install'
     }
-    for ($i = 0; $i -lt 30; $i++) {
+    for ($i = 0; $i -lt 60; $i++) {
         & $GozExe --status *> $null
         if ($LASTEXITCODE -eq 0) {
             Write-Host 'goz index service is reachable.' -ForegroundColor Green
@@ -123,7 +144,7 @@ try {
     if ((Test-Path $GozExe -PathType Leaf) -and (Test-Path $GozDaemon -PathType Leaf)) {
         $replaceGoz = (Sha256 $GozExe) -ne (Sha256 $newGoz.FullName) -or (Sha256 $GozDaemon) -ne (Sha256 $newGozd.FullName)
     }
-    if ($replaceGoz -and (Test-Path $GozDaemon -PathType Leaf)) {
+    if ($replaceGoz -and (Test-Path $GozDaemon -PathType Leaf) -and -not $SkipGozServiceInstall) {
         try { Invoke-ElevatedGoz $GozDaemon 'uninstall' } catch { Write-Host "goz uninstall warning: $($_.Exception.Message)" -ForegroundColor DarkYellow }
     }
     if ($replaceGoz) {
