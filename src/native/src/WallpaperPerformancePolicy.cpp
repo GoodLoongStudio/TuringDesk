@@ -248,8 +248,10 @@ bool WallpaperPerformancePolicy::SelfTest() noexcept {
 
     const auto protectedBase = ResolvePerformanceSnapshot(config, true, false, false, false, true, false);
     const auto protectedResult = ApplyApplicationOverride(config, protectedBase, continueRule, nullptr);
-    return protectedResult.action == PerformanceAction::Stop && protectedResult.targetFps == 0 &&
-           protectedResult.reason.find(L"系统保护") != std::wstring::npos;
+    if (protectedResult.action != PerformanceAction::Stop || protectedResult.targetFps != 0 ||
+        protectedResult.reason.find(L"系统保护") == std::wstring::npos) return false;
+
+    return WallpaperApplicationRules::SelfTest();
 }
 
 } // namespace turingdesk::wallpaper
