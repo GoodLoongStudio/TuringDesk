@@ -1,7 +1,8 @@
 param(
     [string]$DeployDir = (Join-Path $env:LOCALAPPDATA "TuringDesk\NativeTest"),
     [string]$EverythingVersion = "1.5.0.1422b",
-    [string]$CodexRelease = "rust-v0.146.0"
+    [string]$CodexRelease = "rust-v0.146.0",
+    [string]$NodeVersion = "24.19.0"
 )
 
 $ErrorActionPreference = "Stop"
@@ -16,6 +17,65 @@ New-Item -ItemType Directory -Force -Path $CacheRoot | Out-Null
 New-Item -ItemType Directory -Force -Path $DeployDir | Out-Null
 
 function Step([string]$Text) { Write-Host "`n==> $Text" -ForegroundColor Cyan }
+
+function Refresh-ProcessPath {
+    $machine = [Environment]::GetEnvironmentVariable("Path", "Machine")
+    $user = [Environment]::GetEnvironmentVariable("Path", "User")
+    $env:PATH = (($machine, $user) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) -join ";"
+}
+
+function Find-Npx {
+    Refresh-ProcessPath
+    $command = Get-Command npx.cmd -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($command) { return $command.Source }
+    $candidate = Join-Path $env:ProgramFiles "nodejs\npx.cmd"
+    if (Test-Path $candidate -PathType Leaf) { return $candidate }
+    return $null
+}
+
+# DeepSeek's official Windows Web UI path is `npx @deepseek-ai/dsh web`.
+# TuringDesk only guarantees official Node.js/npx exists; it does not build or
+# maintain a private HarnessRuntime/node_modules tree anymore.
+$npx = Find-Npx
+if (-not $npx) {
+    Step "Installing official Node.js $NodeVersion ARM64 for DeepSeek Harness"
+    $fileName = "node-v$NodeVersion-arm64.msi"
+    $msi = Join-Path $CacheRoot $fileName
+    $sums = Join-Path $CacheRoot "node-v$NodeVersion-SHASUMS256.txt"
+
+    Invoke-TuringDeskSmartDownload `
+        -Url "https://nodejs.org/dist/v$NodeVersion/SHASUMS256.txt" `
+        -Destination $sums `
+        -Name "Node.js checksums" `
+        -FileName "SHASUMS256.txt" `
+        -TimeoutSeconds 120 | Out-Null
+
+    $sumLine = Get-Content $sums | Where-Object { $_ -match "\s+$([regex]::Escape($fileName))$" } | Select-Object -First 1
+    if (-not $sumLine) { throw "Node checksum entry not found for $fileName" }
+    $expectedHash = ($sumLine -split '\s+')[0].ToLowerInvariant()
+
+    Invoke-TuringDeskSmartDownload `
+        -Url "https://nodejs.org/dist/v$NodeVersion/$fileName" `
+        -Destination $msi `
+        -Name "Node.js $NodeVersion ARM64 MSI" `
+        -ExpectedSha256 $expectedHash `
+        -FileName $fileName `
+        -TimeoutSeconds 300 | Out-Null
+
+    Write-Host "Installing official Node.js. Windows may show one administrator approval prompt." -ForegroundColor Yellow
+    $installer = Start-Process -FilePath "msiexec.exe" `
+        -ArgumentList @("/i", "`"$msi`"", "/passive", "/norestart") `
+        -Verb RunAs -Wait -PassThru
+    if ($installer.ExitCode -notin @(0, 3010)) {
+        throw "Official Node.js installer failed with exit code $($installer.ExitCode)"
+    }
+
+    $npx = Find-Npx
+    if (-not $npx) { throw "Node.js installation completed but npx.cmd was not found" }
+    Write-Host "Official Node.js/npx ready: $npx" -ForegroundColor Green
+} else {
+    Write-Host "Official/system npx already available: $npx" -ForegroundColor DarkGray
+}
 
 # Everything is a small but important search runtime. Install it once and keep it
 # outside fast native EXE replacements.
@@ -56,8 +116,7 @@ check_for_updates_on_startup=0
     Write-Host "Everything runtime already installed." -ForegroundColor DarkGray
 }
 
-# Codex app-server backs the richer L3 path. Keep it persistent exactly like the
-# Harness runtime so UI-only deploys never download it again.
+# Codex app-server backs the richer L3 path and is independent from DeepSeek Harness.
 $CodexDir = Join-Path $DeployDir "Codex"
 $CodexExe = Join-Path $CodexDir "codex-app-server.exe"
 if (-not (Test-Path $CodexExe -PathType Leaf)) {
@@ -85,8 +144,6 @@ if (-not (Test-Path $CodexExe -PathType Leaf)) {
         finally { Remove-Item $expanded -Recurse -Force -ErrorAction SilentlyContinue }
     }
     catch {
-        # Codex is not required for local Search/Wallpaper/Harness validation. Keep
-        # the one-click deploy usable while making the missing optional runtime clear.
         Write-Host "WARNING: Codex Runtime preparation failed: $($_.Exception.Message)" -ForegroundColor Yellow
     }
 } else {
