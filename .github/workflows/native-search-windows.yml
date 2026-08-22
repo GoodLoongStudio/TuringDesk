@@ -6,7 +6,6 @@ on:
     paths:
       - CMakeLists.txt
       - src/native/**
-      - scripts/deploy-native-arm64.ps1
       - .github/workflows/native-search-windows.yml
   workflow_dispatch:
     inputs:
@@ -71,6 +70,7 @@ jobs:
         if: ${{ inputs.full_package }}
         shell: pwsh
         run: |
+          . .\scripts\smart-download.ps1
           $package = "build/package"
           $everything = Join-Path $package "Everything"
           $nodeTarget = Join-Path $package "HarnessRuntime\Node"
@@ -79,37 +79,34 @@ jobs:
           New-Item -ItemType Directory -Force -Path $nodeTarget | Out-Null
           New-Item -ItemType Directory -Force -Path $dshTarget | Out-Null
 
-          Write-Host "[runtime] Downloading Everything x64..."
-          $everythingZip = Join-Path $env:RUNNER_TEMP "Everything-x64.zip"
-          curl.exe -fL --retry 3 --connect-timeout 20 "https://www.voidtools.com/Everything-$env:EVERYTHING_VERSION.x64.zip" -o $everythingZip
-          if ($LASTEXITCODE -ne 0) { throw "Everything download failed" }
+          Write-Host "[runtime] Preparing Everything x64..."
+          $everythingFile = "Everything-$env:EVERYTHING_VERSION.x64.zip"
+          $everythingZip = Join-Path $env:RUNNER_TEMP $everythingFile
+          Invoke-TuringDeskSmartDownload -Url "https://www.voidtools.com/$everythingFile" -Destination $everythingZip -Name "Everything x64" -FileName $everythingFile -TimeoutSeconds 180 | Out-Null
           Expand-Archive $everythingZip -DestinationPath $everything -Force
-          curl.exe -fL --retry 3 --connect-timeout 20 "https://www.voidtools.com/License.txt" -o (Join-Path $everything "LICENSE.txt")
-          if ($LASTEXITCODE -ne 0) { throw "Everything license download failed" }
+          Invoke-TuringDeskSmartDownload -Url "https://www.voidtools.com/License.txt" -Destination (Join-Path $everything "LICENSE.txt") -Name "Everything license" -FileName "LICENSE.txt" -TimeoutSeconds 60 | Out-Null
 
-          Write-Host "[runtime] Downloading Node x64..."
+          Write-Host "[runtime] Preparing Node x64..."
           $nodeFile = "node-v$env:NODE_VERSION-win-x64.zip"
           $nodeZip = Join-Path $env:RUNNER_TEMP $nodeFile
-          $nodeSums = Join-Path $env:RUNNER_TEMP "node-SHASUMS256.txt"
+          $nodeSums = Join-Path $env:RUNNER_TEMP "node-$env:NODE_VERSION-SHASUMS256.txt"
           $nodeExtract = Join-Path $env:RUNNER_TEMP "node-x64"
-          curl.exe -fL --retry 3 --connect-timeout 20 "https://nodejs.org/dist/v$env:NODE_VERSION/$nodeFile" -o $nodeZip
-          if ($LASTEXITCODE -ne 0) { throw "Node download failed" }
-          curl.exe -fL --retry 3 --connect-timeout 20 "https://nodejs.org/dist/v$env:NODE_VERSION/SHASUMS256.txt" -o $nodeSums
-          if ($LASTEXITCODE -ne 0) { throw "Node checksum download failed" }
+          Invoke-TuringDeskSmartDownload -Url "https://nodejs.org/dist/v$env:NODE_VERSION/SHASUMS256.txt" -Destination $nodeSums -Name "Node checksums" -FileName "SHASUMS256.txt" -TimeoutSeconds 120 | Out-Null
           $sumLine = Get-Content $nodeSums | Where-Object { $_ -match "\s+$([regex]::Escape($nodeFile))$" } | Select-Object -First 1
           if (-not $sumLine) { throw "Node checksum entry not found for $nodeFile" }
           $expectedHash = ($sumLine -split '\s+')[0].ToLowerInvariant()
-          $actualHash = (Get-FileHash $nodeZip -Algorithm SHA256).Hash.ToLowerInvariant()
-          if ($actualHash -ne $expectedHash) { throw "Node SHA256 mismatch: expected $expectedHash, got $actualHash" }
+          Invoke-TuringDeskSmartDownload -Url "https://nodejs.org/dist/v$env:NODE_VERSION/$nodeFile" -Destination $nodeZip -Name "Node $env:NODE_VERSION x64" -ExpectedSha256 $expectedHash -FileName $nodeFile -TimeoutSeconds 300 | Out-Null
           Expand-Archive $nodeZip -DestinationPath $nodeExtract -Force
           $nodeSource = Join-Path $nodeExtract "node-v$env:NODE_VERSION-win-x64"
           Copy-Item (Join-Path $nodeSource "*") $nodeTarget -Recurse -Force
 
           Write-Host "[runtime] Installing DeepSeek Harness x64 dependencies..."
+          $npmCache = Join-Path $env:RUNNER_TEMP "npm-cache-x64"
+          New-Item -ItemType Directory -Force -Path $npmCache | Out-Null
           $oldPath = $env:PATH
           try {
             $env:PATH = "$((Resolve-Path $nodeTarget).Path);$oldPath"
-            & (Join-Path $nodeTarget "npm.cmd") install --prefix $dshTarget --omit=dev --no-audit --no-fund --save-exact --loglevel=notice --fetch-retries=2 --fetch-timeout=60000 "@deepseek-ai/dsh@$env:DSH_VERSION"
+            & (Join-Path $nodeTarget "npm.cmd") install --prefix $dshTarget --omit=dev --no-audit --no-fund --save-exact --cache $npmCache --prefer-offline --loglevel=notice --fetch-retries=3 --fetch-retry-mintimeout=1000 --fetch-retry-maxtimeout=10000 --fetch-timeout=60000 "@deepseek-ai/dsh@$env:DSH_VERSION"
             if ($LASTEXITCODE -ne 0) { throw "Bundled DeepSeek Harness install failed: $LASTEXITCODE" }
           } finally {
             $env:PATH = $oldPath
@@ -192,40 +189,36 @@ jobs:
         uses: actions/cache@v4
         with:
           path: build/runtime-cache-arm64
-          key: turingdesk-runtime-arm64-v2-node-${{ env.NODE_VERSION }}-dsh-${{ env.DSH_VERSION }}-everything-${{ env.EVERYTHING_VERSION }}
+          key: turingdesk-runtime-arm64-v3-node-${{ env.NODE_VERSION }}-dsh-${{ env.DSH_VERSION }}-everything-${{ env.EVERYTHING_VERSION }}
 
       - name: Download ARM64 runtime prerequisites
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.full_package && steps.runtime-cache-arm64.outputs.cache-hit != 'true' }}
         shell: pwsh
         run: |
+          . .\scripts\smart-download.ps1
           $cache = "build/runtime-cache-arm64"
           $everything = Join-Path $cache "Everything"
           $nodeTarget = Join-Path $cache "HarnessRuntime\Node"
           New-Item -ItemType Directory -Force -Path $everything | Out-Null
           New-Item -ItemType Directory -Force -Path $nodeTarget | Out-Null
 
-          Write-Host "[1/3] Downloading Everything ARM64..."
-          $everythingZip = Join-Path $env:RUNNER_TEMP "Everything-ARM64.zip"
-          curl.exe -fL --retry 3 --connect-timeout 20 "https://www.voidtools.com/Everything-$env:EVERYTHING_VERSION.ARM64.zip" -o $everythingZip
-          if ($LASTEXITCODE -ne 0) { throw "Everything ARM64 download failed" }
+          Write-Host "[1/3] Preparing Everything ARM64..."
+          $everythingFile = "Everything-$env:EVERYTHING_VERSION.ARM64.zip"
+          $everythingZip = Join-Path $env:RUNNER_TEMP $everythingFile
+          Invoke-TuringDeskSmartDownload -Url "https://www.voidtools.com/$everythingFile" -Destination $everythingZip -Name "Everything ARM64" -FileName $everythingFile -TimeoutSeconds 180 | Out-Null
           Expand-Archive $everythingZip -DestinationPath $everything -Force
-          curl.exe -fL --retry 3 --connect-timeout 20 "https://www.voidtools.com/License.txt" -o (Join-Path $everything "LICENSE.txt")
-          if ($LASTEXITCODE -ne 0) { throw "Everything license download failed" }
+          Invoke-TuringDeskSmartDownload -Url "https://www.voidtools.com/License.txt" -Destination (Join-Path $everything "LICENSE.txt") -Name "Everything license" -FileName "LICENSE.txt" -TimeoutSeconds 60 | Out-Null
 
-          Write-Host "[2/3] Downloading Node $env:NODE_VERSION ARM64..."
+          Write-Host "[2/3] Preparing Node $env:NODE_VERSION ARM64..."
           $nodeFile = "node-v$env:NODE_VERSION-win-arm64.zip"
           $nodeZip = Join-Path $env:RUNNER_TEMP $nodeFile
-          $nodeSums = Join-Path $env:RUNNER_TEMP "node-SHASUMS256.txt"
+          $nodeSums = Join-Path $env:RUNNER_TEMP "node-$env:NODE_VERSION-SHASUMS256.txt"
           $nodeExtract = Join-Path $env:RUNNER_TEMP "node-arm64"
-          curl.exe -fL --retry 3 --connect-timeout 20 "https://nodejs.org/dist/v$env:NODE_VERSION/$nodeFile" -o $nodeZip
-          if ($LASTEXITCODE -ne 0) { throw "Node ARM64 download failed" }
-          curl.exe -fL --retry 3 --connect-timeout 20 "https://nodejs.org/dist/v$env:NODE_VERSION/SHASUMS256.txt" -o $nodeSums
-          if ($LASTEXITCODE -ne 0) { throw "Node checksum download failed" }
+          Invoke-TuringDeskSmartDownload -Url "https://nodejs.org/dist/v$env:NODE_VERSION/SHASUMS256.txt" -Destination $nodeSums -Name "Node checksums" -FileName "SHASUMS256.txt" -TimeoutSeconds 120 | Out-Null
           $sumLine = Get-Content $nodeSums | Where-Object { $_ -match "\s+$([regex]::Escape($nodeFile))$" } | Select-Object -First 1
           if (-not $sumLine) { throw "Node checksum entry not found for $nodeFile" }
           $expectedHash = ($sumLine -split '\s+')[0].ToLowerInvariant()
-          $actualHash = (Get-FileHash $nodeZip -Algorithm SHA256).Hash.ToLowerInvariant()
-          if ($actualHash -ne $expectedHash) { throw "Node SHA256 mismatch: expected $expectedHash, got $actualHash" }
+          Invoke-TuringDeskSmartDownload -Url "https://nodejs.org/dist/v$env:NODE_VERSION/$nodeFile" -Destination $nodeZip -Name "Node $env:NODE_VERSION ARM64" -ExpectedSha256 $expectedHash -FileName $nodeFile -TimeoutSeconds 300 | Out-Null
           Expand-Archive $nodeZip -DestinationPath $nodeExtract -Force
           $nodeSource = Join-Path $nodeExtract "node-v$env:NODE_VERSION-win-arm64"
           Copy-Item (Join-Path $nodeSource "*") $nodeTarget -Recurse -Force
@@ -238,12 +231,14 @@ jobs:
           $cache = "build/runtime-cache-arm64"
           $nodeTarget = Join-Path $cache "HarnessRuntime\Node"
           $dshTarget = Join-Path $cache "HarnessRuntime\Dsh"
+          $npmCache = Join-Path $cache "NpmCache"
           New-Item -ItemType Directory -Force -Path $dshTarget | Out-Null
+          New-Item -ItemType Directory -Force -Path $npmCache | Out-Null
           Write-Host "[3/3] Installing @deepseek-ai/dsh@$env:DSH_VERSION production dependencies..."
           $oldPath = $env:PATH
           try {
             $env:PATH = "$((Resolve-Path $nodeTarget).Path);$oldPath"
-            & (Join-Path $nodeTarget "npm.cmd") install --prefix $dshTarget --omit=dev --no-audit --no-fund --save-exact --loglevel=notice --fetch-retries=2 --fetch-timeout=60000 "@deepseek-ai/dsh@$env:DSH_VERSION"
+            & (Join-Path $nodeTarget "npm.cmd") install --prefix $dshTarget --omit=dev --no-audit --no-fund --save-exact --cache $npmCache --prefer-offline --loglevel=notice --fetch-retries=3 --fetch-retry-mintimeout=1000 --fetch-retry-maxtimeout=10000 --fetch-timeout=60000 "@deepseek-ai/dsh@$env:DSH_VERSION"
             if ($LASTEXITCODE -ne 0) { throw "Bundled DeepSeek Harness install failed: $LASTEXITCODE" }
           } finally {
             $env:PATH = $oldPath
