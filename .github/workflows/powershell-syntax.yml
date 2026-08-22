@@ -1,0 +1,49 @@
+name: PowerShell Syntax
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/**/*.ps1'
+      - '.github/workflows/powershell-syntax.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: powershell-syntax-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  parse:
+    runs-on: windows-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v5
+      - name: Parse PowerShell scripts
+        shell: pwsh
+        run: |
+          $failed = $false
+          $files = Get-ChildItem -Path scripts -Filter *.ps1 -Recurse
+          foreach ($file in $files) {
+            $tokens = $null
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile(
+              $file.FullName,
+              [ref]$tokens,
+              [ref]$errors
+            ) | Out-Null
+
+            if ($errors.Count -gt 0) {
+              $failed = $true
+              Write-Host "::error file=$($file.FullName)::PowerShell parser found $($errors.Count) error(s)"
+              foreach ($error in $errors) {
+                Write-Host "  line $($error.Extent.StartLineNumber): $($error.Message)"
+              }
+            } else {
+              Write-Host "OK  $($file.FullName)"
+            }
+          }
+
+          if ($failed) { throw 'PowerShell syntax validation failed.' }
