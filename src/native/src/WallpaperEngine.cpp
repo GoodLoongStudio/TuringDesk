@@ -1,17 +1,21 @@
 #include <windows.h>
 #include <shellapi.h>
-#include <commdlg.h>
 #include <d2d1.h>
 #include <wincodec.h>
 #include <wrl/client.h>
 #include <wtsapi32.h>
+
+#include "turingdesk/IndependentWallpaperHost.h"
 #include "turingdesk/VideoWallpaperPlayer.h"
 #include "turingdesk/VideoWallpaperSet.h"
-#include "turingdesk/WallpaperMonitorLayout.h"
-#include "turingdesk/WallpaperScaling.h"
-#include "turingdesk/WallpaperPerformancePolicy.h"
+#include "turingdesk/WallpaperIndependentLayout.h"
 #include "turingdesk/WallpaperLibrary.h"
 #include "turingdesk/WallpaperLibraryWindow.h"
+#include "turingdesk/WallpaperMonitorAssignments.h"
+#include "turingdesk/WallpaperMonitorLayout.h"
+#include "turingdesk/WallpaperPerformancePolicy.h"
+#include "turingdesk/WallpaperScaling.h"
+
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -20,6 +24,7 @@
 #include <iterator>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <vector>
 
 using Microsoft::WRL::ComPtr;
@@ -38,11 +43,10 @@ constexpr UINT kSetEnabled = WM_APP + 83;
 constexpr UINT_PTR kRenderTimer = 1;
 constexpr UINT kTrayId = 1;
 constexpr int kSceneComboId = 4101;
-constexpr int kImageButtonId = 4102;
+constexpr int kLibraryButtonId = 4102;
 constexpr int kApplyButtonId = 4103;
 constexpr int kToggleButtonId = 4104;
 constexpr int kCloseButtonId = 4105;
-constexpr int kPauseCheckId = 4106;
 constexpr int kLayoutComboId = 4107;
 constexpr int kScaleComboId = 4108;
 constexpr int kHorizontalComboId = 4109;
@@ -60,11 +64,11 @@ constexpr int kVideoForwardButtonId = 4120;
 constexpr int kTraySettings = 4201;
 constexpr int kTrayToggle = 4202;
 constexpr int kTrayExit = 4203;
-constexpr int kConfigVersion = 8;
+constexpr int kConfigVersion = 9;
 constexpr LONG_PTR kRaisedDesktopFlag = WS_EX_NOREDIRECTIONBITMAP;
-constexpr ULONGLONG kVideoRecoveryCooldownMs = 3000;
-constexpr ULONGLONG kVideoRecoveryStableResetMs = 30000;
-constexpr unsigned kMaxVideoRecoveryAttempts = 3;
+constexpr ULONGLONG kMediaRecoveryCooldownMs = 3000;
+constexpr ULONGLONG kMediaRecoveryStableResetMs = 30000;
+constexpr unsigned kMaxMediaRecoveryAttempts = 3;
 
 HMENU ControlId(int id) {
     return reinterpret_cast<HMENU>(static_cast<INT_PTR>(id));
@@ -146,9 +150,9 @@ float ReadProfileFloat(const std::wstring& path, const wchar_t* key, float fallb
 }
 
 std::wstring ReadProfileText(const std::wstring& path, const wchar_t* key, const wchar_t* fallback) {
-    wchar_t text[256]{};
-    GetPrivateProfileStringW(L"Wallpaper", key, fallback, text, static_cast<DWORD>(std::size(text)), path.c_str());
-    return text;
+    std::vector<wchar_t> text(32768);
+    GetPrivateProfileStringW(L"Wallpaper", key, fallback, text.data(), static_cast<DWORD>(text.size()), path.c_str());
+    return text.data();
 }
 
 void SaveConfig(const Config& config) {
@@ -191,10 +195,10 @@ void SaveConfig(const Config& config) {
 Config LoadConfig() {
     Config config;
     const auto path = ConfigPath().wstring();
-    const int version = GetPrivateProfileIntW(L"Wallpaper", L"Version", 0, path.c_str());
+    const UINT versionRaw = GetPrivateProfileIntW(L"Wallpaper", L"Version", 0, path.c_str());
+    const int version = static_cast<int>(versionRaw);
     config.enabled = GetPrivateProfileIntW(L"Wallpaper", L"Enabled", 1, path.c_str()) != 0;
     config.pauseFullscreen = GetPrivateProfileIntW(L"Wallpaper", L"PauseFullscreen", 1, path.c_str()) != 0;
-
     config.scene = ReadProfileText(path, L"Scene", L"aurora");
     config.image = ReadProfileText(path, L"Image", L"");
     config.video = ReadProfileText(path, L"Video", L"");
@@ -204,8 +208,10 @@ Config LoadConfig() {
         turingdesk::wallpaper::ParseScaleMode(ReadProfileText(path, L"Scale", L"cover")));
     config.focalX = ReadProfileFloat(path, L"FocalX", 0.5f);
     config.focalY = ReadProfileFloat(path, L"FocalY", 0.5f);
-    config.fpsCap = turingdesk::wallpaper::NormalizeFpsCap(GetPrivateProfileIntW(L"Wallpaper", L"FpsCap", 30, path.c_str()));
-    config.throttleFps = turingdesk::wallpaper::NormalizeFpsCap(GetPrivateProfileIntW(L"Wallpaper", L"ThrottleFps", 15, path.c_str()));
+    config.fpsCap = turingdesk::wallpaper::NormalizeFpsCap(
+        static_cast<int>(GetPrivateProfileIntW(L"Wallpaper", L"FpsCap", 30, path.c_str())));
+    config.throttleFps = turingdesk::wallpaper::NormalizeFpsCap(
+        static_cast<int>(GetPrivateProfileIntW(L"Wallpaper", L"ThrottleFps", 15, path.c_str())));
     const int idleSeconds = static_cast<int>(GetPrivateProfileIntW(L"Wallpaper", L"IdleThresholdSeconds", 120, path.c_str()));
     config.idleThresholdSeconds = static_cast<DWORD>(std::clamp(idleSeconds, 30, 3600));
 
@@ -232,14 +238,12 @@ Config LoadConfig() {
     if (!ValidScene(config.scene)) config.scene = L"aurora";
     if (config.scene == L"image" && config.image.empty()) config.scene = L"aurora";
     if (config.scene == L"video" && config.video.empty()) config.scene = L"aurora";
-
     if (version < kConfigVersion) SaveConfig(config);
     return config;
 }
 
 bool HasExtendedStyle(HWND hwnd, LONG_PTR flag) {
-    if (!hwnd) return false;
-    return (GetWindowLongPtrW(hwnd, GWL_EXSTYLE) & flag) != 0;
+    return hwnd && (GetWindowLongPtrW(hwnd, GWL_EXSTYLE) & flag) != 0;
 }
 
 void SpawnWallpaperLayer(HWND progman, bool raised) {
@@ -257,7 +261,6 @@ DesktopLayer DiscoverDesktopLayer() {
     DesktopLayer layer;
     layer.progman = FindWindowW(L"Progman", nullptr);
     if (!layer.progman) return layer;
-
     layer.raised = HasExtendedStyle(layer.progman, kRaisedDesktopFlag);
     SpawnWallpaperLayer(layer.progman, layer.raised);
 
@@ -267,13 +270,11 @@ DesktopLayer DiscoverDesktopLayer() {
             layer.workerW = FindWindowExW(layer.progman, nullptr, L"WorkerW", nullptr);
             if (layer.defView && layer.workerW) return layer;
         }
-
         struct LegacySearch {
             HWND defView{};
             HWND defViewParent{};
             HWND worker{};
         } search;
-
         EnumWindows([](HWND top, LPARAM raw) -> BOOL {
             auto* result = reinterpret_cast<LegacySearch*>(raw);
             const HWND defView = FindWindowExW(top, nullptr, L"SHELLDLL_DefView", nullptr);
@@ -283,11 +284,9 @@ DesktopLayer DiscoverDesktopLayer() {
             result->worker = FindWindowExW(nullptr, top, L"WorkerW", nullptr);
             return result->worker ? FALSE : TRUE;
         }, reinterpret_cast<LPARAM>(&search));
-
         if (!layer.defView) layer.defView = search.defView;
         layer.legacyDefViewParent = search.defViewParent;
         if (!layer.workerW) layer.workerW = search.worker;
-
         if ((layer.raised && layer.defView) || (!layer.raised && layer.workerW)) return layer;
         Sleep(50);
         SpawnWallpaperLayer(layer.progman, layer.raised);
@@ -310,8 +309,7 @@ HWND LastChildWindow(HWND parent) {
 void EnsureWorkerBottom(const DesktopLayer& layer) {
     if (!layer.raised || !layer.progman || !layer.workerW) return;
     if (LastChildWindow(layer.progman) == layer.workerW) return;
-    SetWindowPos(layer.workerW, HWND_BOTTOM, 0, 0, 0, 0,
-                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+    SetWindowPos(layer.workerW, HWND_BOTTOM, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
 }
 
 std::wstring MountModeText(MountMode mode) {
@@ -346,7 +344,9 @@ public:
 
     ~WallpaperApp() {
         if (control_) WTSUnRegisterSessionNotification(control_);
+        independentHost_.Stop();
         videoSet_.Stop();
+        libraryWindow_.Close();
         RemoveTray();
         if (settings_ && IsWindow(settings_)) DestroyWindow(settings_);
         if (host_ && IsWindow(host_)) DestroyWindow(host_);
@@ -358,9 +358,10 @@ public:
         if (FAILED(CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER,
                                     IID_PPV_ARGS(wicFactory_.GetAddressOf())))) return false;
 
-        InitializeLibrary();
+        InitializeLibraryAndAssignments();
         taskbarCreated_ = RegisterWindowMessageW(L"TaskbarCreated");
         topology_ = turingdesk::wallpaper::QueryMonitorTopology();
+        TouchAssignments();
 
         WNDCLASSEXW controlClass{};
         controlClass.cbSize = sizeof(controlClass);
@@ -425,7 +426,7 @@ public:
 
         settings_ = CreateWindowExW(WS_EX_TOOLWINDOW, kSettingsClass, L"TuringDesk 壁纸",
                                     WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU,
-                                    CW_USEDEFAULT, CW_USEDEFAULT, 760, 800,
+                                    CW_USEDEFAULT, CW_USEDEFAULT, 780, 820,
                                     nullptr, nullptr, instance_, this);
         if (!settings_) return;
 
@@ -446,15 +447,16 @@ public:
         SendMessageW(sceneCombo_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Quiet Grid · 静谧网格"));
         SendMessageW(sceneCombo_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"图片壁纸"));
         SendMessageW(sceneCombo_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"视频壁纸 · Media Foundation"));
-        imageButton_ = CreateWindowExW(0, L"BUTTON", L"打开壁纸库…", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
-                                       486, 58, 210, 30, settings_, ControlId(kImageButtonId), instance_, nullptr);
+        libraryButton_ = CreateWindowExW(0, L"BUTTON", L"打开壁纸库…", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+                                         486, 58, 230, 30, settings_, ControlId(kLibraryButtonId), instance_, nullptr);
 
         label(L"多屏布局", 20, 106, 88, 24);
         layoutCombo_ = CreateWindowExW(0, L"COMBOBOX", L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST,
-                                       116, 102, 350, 150, settings_, ControlId(kLayoutComboId), instance_, nullptr);
+                                       116, 102, 350, 180, settings_, ControlId(kLayoutComboId), instance_, nullptr);
         SendMessageW(layoutCombo_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"跨屏延展 · Span"));
-        SendMessageW(layoutCombo_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"每屏独立填充 · Clone"));
+        SendMessageW(layoutCombo_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"每屏同壁纸 · Clone"));
         SendMessageW(layoutCombo_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"仅主显示器 · Primary"));
+        SendMessageW(layoutCombo_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"每屏不同壁纸 · Independent"));
 
         label(L"缩放", 20, 150, 72, 24);
         scaleCombo_ = CreateWindowExW(0, L"COMBOBOX", L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST,
@@ -489,7 +491,7 @@ public:
         maximizedActionCombo_ = CreateActionCombo(438, 278, kMaximizedActionComboId);
 
         label(L"系统策略", 20, 326, 88, 24);
-        label(L"远程桌面/节能/Idle 默认降频；锁屏默认停止。降频目标 15 FPS。", 116, 326, 580, 42);
+        label(L"远程桌面/节能/Idle 默认降频；锁屏默认停止。Independent 同步遵循同一策略。", 116, 326, 600, 42);
 
         label(L"视频播放", 20, 378, 88, 24);
         videoLoopCheck_ = CreateWindowExW(0, L"BUTTON", L"循环", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
@@ -513,16 +515,15 @@ public:
         videoForwardButton_ = CreateWindowExW(0, L"BUTTON", L"前进 10 秒", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
                                                340, 414, 104, 30, settings_, ControlId(kVideoForwardButtonId), instance_, nullptr);
 
-        status_ = label(L"", 20, 462, 688, 150);
-
+        status_ = label(L"", 20, 462, 716, 170);
         applyButton_ = CreateWindowExW(0, L"BUTTON", L"应用到桌面", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON,
-                                       408, 674, 112, 36, settings_, ControlId(kApplyButtonId), instance_, nullptr);
+                                       436, 696, 112, 36, settings_, ControlId(kApplyButtonId), instance_, nullptr);
         toggleButton_ = CreateWindowExW(0, L"BUTTON", L"停止", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
-                                        530, 674, 84, 36, settings_, ControlId(kToggleButtonId), instance_, nullptr);
+                                        558, 696, 84, 36, settings_, ControlId(kToggleButtonId), instance_, nullptr);
         closeButton_ = CreateWindowExW(0, L"BUTTON", L"关闭", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
-                                       624, 674, 84, 36, settings_, ControlId(kCloseButtonId), instance_, nullptr);
+                                       652, 696, 84, 36, settings_, ControlId(kCloseButtonId), instance_, nullptr);
 
-        for (HWND control : {sceneCombo_, imageButton_, layoutCombo_, scaleCombo_, horizontalCombo_, verticalCombo_,
+        for (HWND control : {sceneCombo_, libraryButton_, layoutCombo_, scaleCombo_, horizontalCombo_, verticalCombo_,
                              fpsCombo_, fullscreenActionCombo_, maximizedActionCombo_, videoLoopCheck_, videoMuteCheck_,
                              videoVolumeCombo_, videoRateCombo_, videoBackButton_, videoRestartButton_, videoForwardButton_,
                              applyButton_, toggleButton_, closeButton_}) {
@@ -542,34 +543,37 @@ public:
             AttachToDesktop();
             ShowWindow(host_, SW_SHOWNOACTIVATE);
             performanceStopped_ = false;
-            if (config_.scene == L"video") {
-                if (!videoSet_.Active()) StartVideo();
-                videoSet_.SetPaused(false);
-            } else {
-                InvalidateRect(host_, nullptr, FALSE);
-                UpdateWindow(host_);
-            }
+            EnsureRuntimeActive();
+            videoSet_.SetPaused(false);
+            independentHost_.SetPaused(false);
+            InvalidateRect(host_, nullptr, FALSE);
         } else {
             videoSet_.SetPaused(true);
+            independentHost_.SetPaused(true);
             ShowWindow(host_, SW_HIDE);
         }
         RefreshSettings();
     }
 
 private:
-    void InitializeLibrary() {
-        libraryError_.clear();
-        if (!library_.Load(&libraryError_)) return;
-        std::wstring error;
-        library_.UpsertScene(L"scene-aurora", L"Aurora Flow", &error);
-        if (libraryError_.empty() && !error.empty()) libraryError_ = error;
-        error.clear();
-        library_.UpsertScene(L"scene-neon", L"Neon Flow", &error);
-        if (libraryError_.empty() && !error.empty()) libraryError_ = error;
-        error.clear();
-        library_.UpsertScene(L"scene-grid", L"Quiet Grid", &error);
-        if (libraryError_.empty() && !error.empty()) libraryError_ = error;
+    bool IsIndependent() const noexcept {
+        return turingdesk::wallpaper::ParseLayoutMode(config_.layout) == turingdesk::wallpaper::LayoutMode::Independent;
+    }
 
+    void InitializeLibraryAndAssignments() {
+        libraryError_.clear();
+        std::wstring error;
+        if (!library_.Load(&error)) libraryError_ = error;
+        if (!assignments_.Load(&error) && libraryError_.empty()) libraryError_ = error;
+
+        for (const auto& scene : std::array<std::pair<const wchar_t*, const wchar_t*>, 3>{
+                 std::pair{L"scene-aurora", L"Aurora Flow"},
+                 std::pair{L"scene-neon", L"Neon Flow"},
+                 std::pair{L"scene-grid", L"Quiet Grid"}}) {
+            error.clear();
+            library_.UpsertScene(scene.first, scene.second, &error);
+            if (libraryError_.empty() && !error.empty()) libraryError_ = error;
+        }
         if (!config_.image.empty() && fs::exists(config_.image)) {
             error.clear();
             library_.ImportFile(config_.image, {}, &error);
@@ -582,50 +586,79 @@ private:
         }
     }
 
-    void ShowLibrary() {
-        if (!libraryError_.empty()) {
-            std::wstring retryError;
-            if (!library_.Load(&retryError)) {
-                libraryError_ = retryError;
-                if (status_) SetWindowTextW(status_, (L"壁纸库无法打开：" + libraryError_).c_str());
-                return;
-            }
-            libraryError_.clear();
-        }
-        libraryWindow_.Show(instance_, &library_, [this](const turingdesk::wallpaper::WallpaperLibraryItem& item) {
-            ApplyLibraryItem(item);
-        });
+    void TouchAssignments() {
+        assignments_.TouchTopology(topology_);
+        std::wstring error;
+        if (!assignments_.Save(&error) && libraryError_.empty()) libraryError_ = error;
     }
 
-    void ApplyLibraryItem(const turingdesk::wallpaper::WallpaperLibraryItem& item) {
-        Config next = config_;
-        next.enabled = true;
-        next.image.clear();
-        next.video.clear();
+    std::vector<turingdesk::wallpaper::WallpaperLibraryTarget> LibraryTargets() const {
+        std::vector<turingdesk::wallpaper::WallpaperLibraryTarget> targets;
+        targets.reserve(topology_.monitors.size());
+        for (const auto& monitor : topology_.monitors) {
+            turingdesk::wallpaper::WallpaperLibraryTarget target;
+            target.monitorId = turingdesk::wallpaper::StableMonitorKey(monitor);
+            target.displayName = !monitor.friendlyName.empty() ? monitor.friendlyName :
+                                 (!monitor.deviceName.empty() ? monitor.deviceName : L"显示器");
+            target.primary = monitor.primary;
+            targets.push_back(std::move(target));
+        }
+        return targets;
+    }
+
+    void ShowLibrary() {
+        libraryWindow_.Show(
+            instance_, &library_, LibraryTargets(),
+            [this](const turingdesk::wallpaper::WallpaperLibraryItem& item, const std::wstring& targetMonitorId) {
+                ApplyLibraryItem(item, targetMonitorId);
+            });
+    }
+
+    void ApplyLibraryItem(const turingdesk::wallpaper::WallpaperLibraryItem& item, const std::wstring& targetMonitorId) {
         using Kind = turingdesk::wallpaper::LibraryWallpaperKind;
-        if (item.kind == Kind::Scene) {
-            if (_wcsicmp(item.id.c_str(), L"scene-neon") == 0) next.scene = L"neon";
-            else if (_wcsicmp(item.id.c_str(), L"scene-grid") == 0) next.scene = L"grid";
-            else next.scene = L"aurora";
-        } else if (item.kind == Kind::Image) {
-            next.scene = L"image";
-            next.image = item.source.wstring();
-        } else if (item.kind == Kind::Video) {
-            next.scene = L"video";
-            next.video = item.source.wstring();
-        } else if (item.kind == Kind::Web) {
-            libraryError_ = L"Web 壁纸已经进入统一壁纸库，但运行后端将在路线第 9 项接入。";
-            if (status_) SetWindowTextW(status_, libraryError_.c_str());
+        if (item.kind == Kind::Web) {
+            libraryError_ = L"Web 壁纸已入库；运行后端将在路线第 9 项启用。";
+            RefreshSettings();
             return;
+        }
+        if (item.kind == Kind::Unknown) return;
+
+        std::wstring error;
+        if (!targetMonitorId.empty()) {
+            const auto* monitor = turingdesk::wallpaper::FindMonitorByStableId(topology_, targetMonitorId);
+            const std::wstring friendly = monitor ?
+                (!monitor->friendlyName.empty() ? monitor->friendlyName : monitor->deviceName) : L"";
+            if (!assignments_.AssignById(targetMonitorId, item.id, friendly, &error)) {
+                libraryError_ = error;
+                RefreshSettings();
+                return;
+            }
+            config_.layout = L"independent";
+            SaveConfig(config_);
+            ApplyConfig(config_, false);
         } else {
-            return;
+            Config next = config_;
+            next.enabled = true;
+            next.image.clear();
+            next.video.clear();
+            if (item.kind == Kind::Scene) {
+                if (_wcsicmp(item.id.c_str(), L"scene-neon") == 0) next.scene = L"neon";
+                else if (_wcsicmp(item.id.c_str(), L"scene-grid") == 0) next.scene = L"grid";
+                else next.scene = L"aurora";
+            } else if (item.kind == Kind::Image) {
+                next.scene = L"image";
+                next.image = item.source.wstring();
+            } else if (item.kind == Kind::Video) {
+                next.scene = L"video";
+                next.video = item.source.wstring();
+            }
+            ApplyConfig(next);
         }
-        if (ApplyConfig(next)) {
-            std::wstring markError;
-            library_.MarkUsed(item.id, &markError);
-            if (!markError.empty()) libraryError_ = markError;
-            libraryWindow_.Refresh();
-        }
+
+        error.clear();
+        library_.MarkUsed(item.id, &error);
+        if (!error.empty()) libraryError_ = error;
+        libraryWindow_.Refresh();
     }
 
     HWND CreateActionCombo(int x, int y, int id) {
@@ -664,22 +697,127 @@ private:
         return result;
     }
 
+    turingdesk::IndependentVideoSettings CurrentIndependentVideoSettings() const {
+        turingdesk::IndependentVideoSettings settings;
+        settings.looping = config_.videoLoop;
+        settings.muted = config_.videoMuted;
+        settings.volume = config_.videoVolume;
+        settings.rate = config_.videoRate;
+        return settings;
+    }
+
+    turingdesk::wallpaper::GlobalWallpaperDescriptor GlobalFallbackDescriptor() const {
+        turingdesk::wallpaper::GlobalWallpaperDescriptor descriptor;
+        if (config_.scene == L"image" && !config_.image.empty()) {
+            descriptor.kind = turingdesk::wallpaper::ResolvedWallpaperKind::Image;
+            descriptor.source = config_.image;
+        } else if (config_.scene == L"video" && !config_.video.empty()) {
+            descriptor.kind = turingdesk::wallpaper::ResolvedWallpaperKind::Video;
+            descriptor.source = config_.video;
+        } else {
+            descriptor.kind = turingdesk::wallpaper::ResolvedWallpaperKind::Scene;
+            descriptor.sceneKey = config_.scene == L"neon" ? L"neon" : config_.scene == L"grid" ? L"grid" : L"aurora";
+        }
+        return descriptor;
+    }
+
     void SetRenderTimerFps(int fps) {
         if (!control_) return;
-        const UINT interval = fps > 0 ? static_cast<UINT>(std::max(8, 1000 / turingdesk::wallpaper::NormalizeFpsCap(fps))) : 250U;
+        const UINT interval = fps > 0
+            ? static_cast<UINT>(std::max(8, 1000 / turingdesk::wallpaper::NormalizeFpsCap(fps)))
+            : 250U;
         if (renderTimerIntervalMs_ == interval) return;
         KillTimer(control_, kRenderTimer);
         SetTimer(control_, kRenderTimer, interval, nullptr);
         renderTimerIntervalMs_ = interval;
     }
 
+    void ResetRecoveryState() {
+        recoveryAttempts_ = 0;
+        lastRecoveryAttemptMs_ = 0;
+        healthySinceMs_ = 0;
+        recoveryNote_.clear();
+        lastMediaError_.clear();
+    }
+
+    bool StartIndependent(bool recovery = false) {
+        if (!recovery) ResetRecoveryState();
+        independentHost_.Stop();
+        const auto resolved = turingdesk::wallpaper::ResolveIndependentWallpapers(
+            topology_, assignments_, library_, GlobalFallbackDescriptor());
+        if (resolved.empty()) {
+            lastMediaError_ = L"Independent 模式没有可用显示器";
+            return false;
+        }
+        if (!independentHost_.Start(host_, resolved,
+                                    turingdesk::wallpaper::ParseScaleMode(config_.scale),
+                                    config_.focalX, config_.focalY,
+                                    CurrentIndependentVideoSettings())) {
+            lastMediaError_ = independentHost_.LastErrorText();
+            if (lastMediaError_.empty()) lastMediaError_ = L"Independent Surface 启动失败";
+            return false;
+        }
+        lastMediaError_.clear();
+        return true;
+    }
+
+    bool StartGlobalVideo(bool recovery = false) {
+        if (!recovery) ResetRecoveryState();
+        videoSet_.Stop();
+        if (config_.video.empty() || !fs::exists(config_.video)) {
+            lastMediaError_ = L"视频文件不存在";
+            return false;
+        }
+        videoSet_.SetLooping(config_.videoLoop);
+        videoSet_.SetMuted(config_.videoMuted);
+        videoSet_.SetVolume(config_.videoVolume);
+        videoSet_.SetPlaybackRate(config_.videoRate);
+        const auto regions = turingdesk::wallpaper::DrawRegionsInHost(
+            topology_, turingdesk::wallpaper::ParseLayoutMode(config_.layout));
+        if (!videoSet_.Start(host_, config_.video, regions,
+                             turingdesk::wallpaper::ParseScaleMode(config_.scale),
+                             config_.focalX, config_.focalY)) {
+            lastMediaError_ = videoSet_.LastErrorText();
+            if (lastMediaError_.empty()) lastMediaError_ = L"Media Foundation 无法启动该视频";
+            return false;
+        }
+        videoSet_.SetPaused(false);
+        lastMediaError_.clear();
+        return true;
+    }
+
+    void StopRuntime() {
+        independentHost_.Stop();
+        videoSet_.Stop();
+    }
+
+    void EnsureRuntimeActive() {
+        if (!config_.enabled || !mountOk_) return;
+        if (IsIndependent()) {
+            if (!independentHost_.Active()) StartIndependent();
+        } else if (config_.scene == L"video") {
+            if (!videoSet_.Active()) StartGlobalVideo();
+        }
+    }
+
+    void RebuildRuntime() {
+        StopRuntime();
+        imageBitmap_.Reset();
+        if (renderTarget_ && !IsIndependent()) LoadImage();
+        if (!config_.enabled || !mountOk_) return;
+        if (IsIndependent()) StartIndependent();
+        else if (config_.scene == L"video") StartGlobalVideo();
+        InvalidateRect(host_, nullptr, FALSE);
+        UpdateWindow(host_);
+    }
+
     void ApplyPerformanceSnapshot(const turingdesk::wallpaper::PerformanceSnapshot& snapshot) {
         currentPerformance_ = snapshot;
         SetRenderTimerFps(snapshot.targetFps);
-
         const bool stop = snapshot.action == turingdesk::wallpaper::PerformanceAction::Stop;
         const bool pause = snapshot.action == turingdesk::wallpaper::PerformanceAction::Pause || stop;
-        if (config_.scene == L"video") videoSet_.SetPaused(pause);
+        videoSet_.SetPaused(pause);
+        independentHost_.SetPaused(pause);
 
         if (stop) {
             if (!performanceStopped_) {
@@ -693,27 +831,34 @@ private:
             AttachToDesktop();
             ShowWindow(host_, SW_SHOWNOACTIVATE);
             performanceStopped_ = false;
-            if (config_.scene == L"video" && !videoSet_.Active()) StartVideo();
+            EnsureRuntimeActive();
         }
-
         if (snapshot.action == turingdesk::wallpaper::PerformanceAction::Pause) return;
-        if (config_.scene != L"video" && config_.image.empty()) {
+
+        if (IsIndependent()) {
+            independentHost_.Tick(std::max(1, snapshot.targetFps));
+        } else if (config_.scene == L"video") {
+            videoSet_.Tick();
+        } else if (config_.scene != L"image") {
             const int fps = std::max(1, snapshot.targetFps);
             time_ += 1.0f / static_cast<float>(fps);
             InvalidateRect(host_, nullptr, FALSE);
         }
     }
 
-    void HandleVideoHealth() {
-        videoSet_.Tick();
+    void HandleMediaHealth() {
         const ULONGLONG now = GetTickCount64();
-        const std::wstring mediaError = videoSet_.LastErrorText();
+        std::wstring mediaError;
+        if (IsIndependent()) mediaError = independentHost_.LastErrorText();
+        else if (config_.scene == L"video") mediaError = videoSet_.LastErrorText();
+        else return;
+
         if (mediaError.empty()) {
-            if (videoHealthySinceMs_ == 0) videoHealthySinceMs_ = now;
-            if (videoRecoveryAttempts_ > 0 && now - videoHealthySinceMs_ >= kVideoRecoveryStableResetMs) {
-                videoRecoveryAttempts_ = 0;
-                lastVideoRecoveryAttemptMs_ = 0;
-                videoRecoveryNote_.clear();
+            if (healthySinceMs_ == 0) healthySinceMs_ = now;
+            if (recoveryAttempts_ > 0 && now - healthySinceMs_ >= kMediaRecoveryStableResetMs) {
+                recoveryAttempts_ = 0;
+                lastRecoveryAttemptMs_ = 0;
+                recoveryNote_.clear();
             }
             if (!lastMediaError_.empty()) {
                 lastMediaError_.clear();
@@ -722,29 +867,20 @@ private:
             return;
         }
 
-        videoHealthySinceMs_ = 0;
+        healthySinceMs_ = 0;
         lastMediaError_ = mediaError;
-        if (videoRecoveryAttempts_ >= kMaxVideoRecoveryAttempts) {
-            videoRecoveryNote_ = L"自动恢复已达到 3 次上限；请检查视频文件/编解码器。";
-            RefreshSettings();
+        if (recoveryAttempts_ >= kMaxMediaRecoveryAttempts) {
+            recoveryNote_ = L"自动恢复已达到 3 次上限；当前 Surface 保持安全 fallback。";
             return;
         }
-        if (lastVideoRecoveryAttemptMs_ != 0 && now - lastVideoRecoveryAttemptMs_ < kVideoRecoveryCooldownMs) {
-            RefreshSettings();
-            return;
-        }
+        if (lastRecoveryAttemptMs_ != 0 && now - lastRecoveryAttemptMs_ < kMediaRecoveryCooldownMs) return;
 
-        ++videoRecoveryAttempts_;
-        lastVideoRecoveryAttemptMs_ = now;
-        const std::wstring originalError = mediaError;
-        if (StartVideo(true)) {
-            lastMediaError_.clear();
-            videoRecoveryNote_ = L"检测到 " + originalError + L"；已自动重建视频管线（第 " +
-                                 std::to_wstring(videoRecoveryAttempts_) + L"/3 次）。";
-        } else {
-            videoRecoveryNote_ = L"自动重建视频管线失败（第 " + std::to_wstring(videoRecoveryAttempts_) +
-                                 L"/3 次）：" + lastMediaError_;
-        }
+        ++recoveryAttempts_;
+        lastRecoveryAttemptMs_ = now;
+        const bool ok = IsIndependent() ? StartIndependent(true) : StartGlobalVideo(true);
+        recoveryNote_ = ok
+            ? (L"已自动重建壁纸管线（第 " + std::to_wstring(recoveryAttempts_) + L"/3 次）。")
+            : (L"自动重建失败（第 " + std::to_wstring(recoveryAttempts_) + L"/3 次）：" + lastMediaError_);
         RefreshSettings();
     }
 
@@ -782,24 +918,33 @@ private:
 
         if (message == WM_COMMAND) {
             switch (LOWORD(wParam)) {
-            case kImageButtonId:
+            case kLibraryButtonId:
                 if (HIWORD(wParam) == BN_CLICKED) self->ShowLibrary();
                 return 0;
             case kVideoBackButtonId:
                 if (HIWORD(wParam) == BN_CLICKED) {
-                    if (!self->videoSet_.SeekRelativeSeconds(-10.0) && self->status_) SetWindowTextW(self->status_, L"当前视频暂时无法 seek。");
+                    const bool ok = self->IsIndependent()
+                        ? self->independentHost_.SeekVideosRelativeSeconds(-10.0)
+                        : self->videoSet_.SeekRelativeSeconds(-10.0);
+                    if (!ok && self->status_) SetWindowTextW(self->status_, L"当前没有可 seek 的视频壁纸。");
                     else self->RefreshSettings();
                 }
                 return 0;
             case kVideoRestartButtonId:
                 if (HIWORD(wParam) == BN_CLICKED) {
-                    if (!self->videoSet_.Restart() && self->status_) SetWindowTextW(self->status_, L"当前没有可重播的视频壁纸。");
+                    const bool ok = self->IsIndependent()
+                        ? self->independentHost_.RestartVideos()
+                        : self->videoSet_.Restart();
+                    if (!ok && self->status_) SetWindowTextW(self->status_, L"当前没有可重播的视频壁纸。");
                     else self->RefreshSettings();
                 }
                 return 0;
             case kVideoForwardButtonId:
                 if (HIWORD(wParam) == BN_CLICKED) {
-                    if (!self->videoSet_.SeekRelativeSeconds(10.0) && self->status_) SetWindowTextW(self->status_, L"当前视频暂时无法 seek。");
+                    const bool ok = self->IsIndependent()
+                        ? self->independentHost_.SeekVideosRelativeSeconds(10.0)
+                        : self->videoSet_.SeekRelativeSeconds(10.0);
+                    if (!ok && self->status_) SetWindowTextW(self->status_, L"当前没有可 seek 的视频壁纸。");
                     else self->RefreshSettings();
                 }
                 return 0;
@@ -821,7 +966,7 @@ private:
         if (message == WM_DESTROY) {
             self->settings_ = nullptr;
             self->sceneCombo_ = nullptr;
-            self->imageButton_ = nullptr;
+            self->libraryButton_ = nullptr;
             self->layoutCombo_ = nullptr;
             self->scaleCombo_ = nullptr;
             self->horizontalCombo_ = nullptr;
@@ -849,9 +994,7 @@ private:
         if (taskbarCreated_ != 0 && message == taskbarCreated_) {
             trayAdded_ = false;
             AddTray();
-            topology_ = turingdesk::wallpaper::QueryMonitorTopology();
-            AttachToDesktop();
-            if (config_.scene == L"video") StartVideo();
+            HandleTopologyChanged();
             return 0;
         }
 
@@ -877,26 +1020,27 @@ private:
                 if (healthTicks_ >= 150) {
                     healthTicks_ = 0;
                     if (!mountOk_ || !attachedParent_ || !IsWindow(attachedParent_) || GetParent(host_) != attachedParent_) {
-                        topology_ = turingdesk::wallpaper::QueryMonitorTopology();
                         AttachToDesktop();
-                        if (config_.scene == L"video") StartVideo();
-                        RefreshSettings();
+                        RebuildRuntime();
                     }
                 }
                 if (config_.enabled) {
-                    if (config_.scene == L"video") HandleVideoHealth();
-                    ApplyPerformanceSnapshot(performancePolicy_.Evaluate(host_, settings_, CurrentPerformanceConfig()));
+                    const auto snapshot = performancePolicy_.Evaluate(host_, settings_, CurrentPerformanceConfig());
+                    ApplyPerformanceSnapshot(snapshot);
+                    if (snapshot.action != turingdesk::wallpaper::PerformanceAction::Pause &&
+                        snapshot.action != turingdesk::wallpaper::PerformanceAction::Stop) {
+                        HandleMediaHealth();
+                    }
                 }
             }
             return 0;
         case WM_DISPLAYCHANGE:
-            topology_ = turingdesk::wallpaper::QueryMonitorTopology();
-            AttachToDesktop();
-            if (config_.scene == L"video") StartVideo();
-            RefreshSettings();
+            HandleTopologyChanged();
             return 0;
         case WM_CLOSE:
+            libraryWindow_.Close();
             RemoveTray();
+            StopRuntime();
             if (settings_ && IsWindow(settings_)) DestroyWindow(settings_);
             if (host_ && IsWindow(host_)) DestroyWindow(host_);
             DestroyWindow(control_);
@@ -916,8 +1060,7 @@ private:
         case WM_NCHITTEST:
             return HTTRANSPARENT;
         case WM_DISPLAYCHANGE:
-            topology_ = turingdesk::wallpaper::QueryMonitorTopology();
-            AttachToDesktop();
+            HandleTopologyChanged();
             return 0;
         case WM_SIZE:
             if (renderTarget_) renderTarget_->Resize(D2D1::SizeU(LOWORD(lParam), HIWORD(lParam)));
@@ -938,6 +1081,15 @@ private:
         return DefWindowProcW(host_, message, wParam, lParam);
     }
 
+    void HandleTopologyChanged() {
+        topology_ = turingdesk::wallpaper::QueryMonitorTopology();
+        TouchAssignments();
+        AttachToDesktop();
+        RebuildRuntime();
+        libraryWindow_.SetTargets(LibraryTargets());
+        RefreshSettings();
+    }
+
     void ResetGraphics() {
         imageBitmap_.Reset();
         brush_.Reset();
@@ -949,7 +1101,6 @@ private:
         style &= ~static_cast<LONG_PTR>(WS_POPUP);
         style |= WS_CHILD;
         SetWindowLongPtrW(host_, GWL_STYLE, style);
-
         LONG_PTR exStyle = GetWindowLongPtrW(host_, GWL_EXSTYLE);
         exStyle |= WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TRANSPARENT;
         SetWindowLongPtrW(host_, GWL_EXSTYLE, exStyle);
@@ -960,7 +1111,6 @@ private:
         mountOk_ = false;
         lastMountError_.clear();
         const auto layoutMode = turingdesk::wallpaper::ParseLayoutMode(config_.layout);
-
         if (!host_ || !IsWindow(host_)) {
             lastMountError_ = L"Wallpaper host window 不存在";
             SaveMountDiagnostics(MountMode::None, lastMountError_, &topology_, layoutMode);
@@ -990,7 +1140,6 @@ private:
         HWND targetParent = nullptr;
         HWND insertAfter = HWND_BOTTOM;
         MountMode nextMode = MountMode::None;
-
         if (layer.raised && layer.defView) {
             targetParent = layer.progman;
             insertAfter = layer.defView;
@@ -999,25 +1148,20 @@ private:
             targetParent = layer.workerW;
             insertAfter = HWND_TOP;
             nextMode = MountMode::LegacyWorkerW;
-        } else if (layer.progman) {
+        } else {
             targetParent = layer.progman;
             insertAfter = (layer.defView && GetParent(layer.defView) == layer.progman) ? layer.defView : HWND_BOTTOM;
             nextMode = MountMode::ProgmanFallback;
         }
 
         if (!targetParent || !PrepareChildWindow()) {
-            mountMode_ = MountMode::None;
-            attachedParent_ = nullptr;
             lastMountError_ = L"无法准备桌面 Layered HWND";
-            SaveMountDiagnostics(mountMode_, lastMountError_, &topology_, layoutMode);
+            SaveMountDiagnostics(MountMode::None, lastMountError_, &topology_, layoutMode);
             return false;
         }
-
         if (!TrySetParent(host_, targetParent)) {
-            mountMode_ = MountMode::None;
-            attachedParent_ = nullptr;
             lastMountError_ = L"SetParent 失败，Win32=" + std::to_wstring(GetLastError());
-            SaveMountDiagnostics(mountMode_, lastMountError_, &topology_, layoutMode);
+            SaveMountDiagnostics(MountMode::None, lastMountError_, &topology_, layoutMode);
             return false;
         }
 
@@ -1042,9 +1186,7 @@ private:
             SaveMountDiagnostics(mountMode_, lastMountError_, &topology_, layoutMode);
             return false;
         }
-
         if (mountMode_ == MountMode::RaisedDesktop) EnsureWorkerBottom(layer);
-
         if (GetParent(host_) != targetParent) {
             lastMountError_ = L"桌面父窗口校验失败";
             SaveMountDiagnostics(mountMode_, lastMountError_, &topology_, layoutMode);
@@ -1059,13 +1201,8 @@ private:
         }
 
         mountOk_ = true;
-        lastMountError_.clear();
         SaveMountDiagnostics(mountMode_, L"", &topology_, layoutMode);
-        if (config_.enabled && !performanceStopped_) {
-            ShowWindow(host_, SW_SHOWNOACTIVATE);
-            InvalidateRect(host_, nullptr, FALSE);
-            UpdateWindow(host_);
-        }
+        if (config_.enabled && !performanceStopped_) ShowWindow(host_, SW_SHOWNOACTIVATE);
         return true;
     }
 
@@ -1094,14 +1231,12 @@ private:
             return;
         }
         if (mouseMessage != WM_RBUTTONUP && mouseMessage != WM_CONTEXTMENU) return;
-
         HMENU menu = CreatePopupMenu();
         if (!menu) return;
         AppendMenuW(menu, MF_STRING, kTraySettings, L"壁纸设置");
         AppendMenuW(menu, MF_STRING, kTrayToggle, config_.enabled ? L"停止壁纸" : L"恢复壁纸");
         AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
         AppendMenuW(menu, MF_STRING, kTrayExit, L"退出壁纸引擎");
-
         POINT point{};
         GetCursorPos(&point);
         SetForegroundWindow(control_);
@@ -1128,9 +1263,10 @@ private:
 
     void LoadImage() {
         imageBitmap_.Reset();
-        if (!renderTarget_ || config_.image.empty()) return;
+        if (!renderTarget_ || config_.image.empty() || IsIndependent()) return;
         ComPtr<IWICBitmapDecoder> decoder;
-        if (FAILED(wicFactory_->CreateDecoderFromFilename(config_.image.c_str(), nullptr, GENERIC_READ, WICDecodeMetadataCacheOnLoad, decoder.GetAddressOf()))) return;
+        if (FAILED(wicFactory_->CreateDecoderFromFilename(config_.image.c_str(), nullptr, GENERIC_READ,
+                                                          WICDecodeMetadataCacheOnLoad, decoder.GetAddressOf()))) return;
         ComPtr<IWICBitmapFrameDecode> frame;
         if (FAILED(decoder->GetFrame(0, frame.GetAddressOf()))) return;
         ComPtr<IWICFormatConverter> converter;
@@ -1141,37 +1277,34 @@ private:
     }
 
     void Draw() {
+        if (IsIndependent() && independentHost_.Active()) return;
+        if (config_.scene == L"video" && videoSet_.Active()) return;
         EnsureRenderTarget();
         if (!renderTarget_ || !brush_ || !config_.enabled || performanceStopped_) return;
-        if (config_.scene == L"video" && videoSet_.Active()) return;
 
         renderTarget_->BeginDraw();
         renderTarget_->SetTransform(D2D1::Matrix3x2F::Identity());
         renderTarget_->Clear(D2D1::ColorF(0.0f, 0.0f, 0.0f));
-
         auto regions = turingdesk::wallpaper::DrawRegionsInHost(topology_, turingdesk::wallpaper::ParseLayoutMode(config_.layout));
         if (regions.empty()) {
             const auto size = renderTarget_->GetSize();
             regions.push_back(RECT{0, 0, static_cast<LONG>(size.width), static_cast<LONG>(size.height)});
         }
-
         for (const RECT& region : regions) {
             if (region.right <= region.left || region.bottom <= region.top) continue;
             const D2D1_RECT_F clip = D2D1::RectF(static_cast<float>(region.left), static_cast<float>(region.top),
                                                   static_cast<float>(region.right), static_cast<float>(region.bottom));
             renderTarget_->PushAxisAlignedClip(clip, D2D1_ANTIALIAS_MODE_ALIASED);
             renderTarget_->SetTransform(D2D1::Matrix3x2F::Translation(static_cast<float>(region.left), static_cast<float>(region.top)));
-            const D2D1_SIZE_F size = D2D1::SizeF(static_cast<float>(region.right - region.left), static_cast<float>(region.bottom - region.top));
-
+            const D2D1_SIZE_F size = D2D1::SizeF(static_cast<float>(region.right - region.left),
+                                                  static_cast<float>(region.bottom - region.top));
             if (!config_.image.empty() && imageBitmap_) DrawImage(size);
             else if (config_.scene == L"neon") DrawNeon(size);
             else if (config_.scene == L"grid") DrawGrid(size);
             else DrawAurora(size);
-
             renderTarget_->SetTransform(D2D1::Matrix3x2F::Identity());
             renderTarget_->PopAxisAlignedClip();
         }
-
         const HRESULT hr = renderTarget_->EndDraw();
         if (hr == D2DERR_RECREATE_TARGET) ResetGraphics();
     }
@@ -1184,11 +1317,11 @@ private:
     void DrawImage(const D2D1_SIZE_F& target) {
         FillRegionBackground(target, D2D1::ColorF(0.0f, 0.0f, 0.0f));
         const auto sourceSize = imageBitmap_->GetSize();
-        const auto mode = turingdesk::wallpaper::ParseScaleMode(config_.scale);
-        const auto placement = turingdesk::wallpaper::ComputePlacement(sourceSize.width, sourceSize.height, target.width, target.height,
-                                                                        mode, config_.focalX, config_.focalY);
-        const D2D1_RECT_F source = D2D1::RectF(placement.source.left, placement.source.top, placement.source.right, placement.source.bottom);
-
+        const auto placement = turingdesk::wallpaper::ComputePlacement(
+            sourceSize.width, sourceSize.height, target.width, target.height,
+            turingdesk::wallpaper::ParseScaleMode(config_.scale), config_.focalX, config_.focalY);
+        const D2D1_RECT_F source = D2D1::RectF(placement.source.left, placement.source.top,
+                                               placement.source.right, placement.source.bottom);
         if (placement.tiled) {
             const float tileWidth = std::max(1.0f, placement.destination.right - placement.destination.left);
             const float tileHeight = std::max(1.0f, placement.destination.bottom - placement.destination.top);
@@ -1196,17 +1329,17 @@ private:
             int draws = 0;
             for (float y = 0.0f; y < target.height && draws < kMaxTileDraws; y += tileHeight) {
                 for (float x = 0.0f; x < target.width && draws < kMaxTileDraws; x += tileWidth) {
-                    const D2D1_RECT_F destination = D2D1::RectF(x, y, x + tileWidth, y + tileHeight);
-                    renderTarget_->DrawBitmap(imageBitmap_.Get(), destination, 1.0f, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, &source);
+                    renderTarget_->DrawBitmap(imageBitmap_.Get(), D2D1::RectF(x, y, x + tileWidth, y + tileHeight),
+                                               1.0f, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, &source);
                     ++draws;
                 }
             }
             return;
         }
-
-        const D2D1_RECT_F destination = D2D1::RectF(placement.destination.left, placement.destination.top,
-                                                     placement.destination.right, placement.destination.bottom);
-        renderTarget_->DrawBitmap(imageBitmap_.Get(), destination, 1.0f, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, &source);
+        renderTarget_->DrawBitmap(imageBitmap_.Get(),
+            D2D1::RectF(placement.destination.left, placement.destination.top,
+                        placement.destination.right, placement.destination.bottom),
+            1.0f, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, &source);
     }
 
     void DrawAurora(const D2D1_SIZE_F& size) {
@@ -1240,11 +1373,6 @@ private:
         brush_->SetColor(D2D1::ColorF(0.92f, 0.04f, 0.84f, 0.34f));
         for (float y = -spacing + offset; y < size.height + spacing; y += spacing)
             renderTarget_->DrawLine(D2D1::Point2F(0, y), D2D1::Point2F(size.width, y), brush_.Get(), 1.2f);
-        for (int i = 0; i < 7; ++i) {
-            const float x = static_cast<float>(std::fmod(time_ * (82.0f + i * 13.0f) + i * size.width * 0.17f, size.width + 320.0f)) - 160.0f;
-            brush_->SetColor((i % 2) == 0 ? D2D1::ColorF(0.00f, 0.82f, 1.00f, 0.22f) : D2D1::ColorF(1.00f, 0.08f, 0.80f, 0.20f));
-            renderTarget_->FillRectangle(D2D1::RectF(x, size.height * 0.10f, x + 120.0f, size.height * 0.90f), brush_.Get());
-        }
     }
 
     void DrawGrid(const D2D1_SIZE_F& size) {
@@ -1258,16 +1386,13 @@ private:
         const float pulse = 0.5f + 0.5f * static_cast<float>(std::sin(time_ * 0.72f));
         brush_->SetColor(D2D1::ColorF(0.15f, 0.66f, 0.82f, 0.14f + pulse * 0.10f));
         renderTarget_->FillEllipse(D2D1::Ellipse(D2D1::Point2F(size.width * 0.5f, size.height * 0.5f),
-                                                 size.width * (0.18f + pulse * 0.05f), size.height * (0.20f + pulse * 0.05f)), brush_.Get());
+                                                 size.width * (0.18f + pulse * 0.05f),
+                                                 size.height * (0.20f + pulse * 0.05f)), brush_.Get());
     }
 
     bool ApplyConfig(const Config& next, bool persist = true) {
-        videoSet_.Stop();
-        lastMediaError_.clear();
-        videoRecoveryNote_.clear();
-        videoRecoveryAttempts_ = 0;
-        lastVideoRecoveryAttemptMs_ = 0;
-        videoHealthySinceMs_ = 0;
+        StopRuntime();
+        ResetRecoveryState();
         config_ = next;
         config_.layout = turingdesk::wallpaper::LayoutModeKey(turingdesk::wallpaper::ParseLayoutMode(config_.layout));
         config_.scale = turingdesk::wallpaper::ScaleModeKey(turingdesk::wallpaper::ParseScaleMode(config_.scale));
@@ -1278,55 +1403,25 @@ private:
         config_.videoVolume = std::clamp(config_.videoVolume, 0.0f, 1.0f);
         config_.videoRate = std::clamp(config_.videoRate, 0.25f, 4.0f);
         if (persist) SaveConfig(config_);
-        pendingImage_.clear();
-        pendingVideo_.clear();
+
         imageBitmap_.Reset();
-        if (renderTarget_) LoadImage();
         performanceStopped_ = false;
         const bool mounted = AttachToDesktop();
+        if (renderTarget_) LoadImage();
         if (config_.enabled && mounted) {
             ShowWindow(host_, SW_SHOWNOACTIVATE);
-            InvalidateRect(host_, nullptr, FALSE);
-            UpdateWindow(host_);
-            if (config_.scene == L"video") StartVideo();
+            RebuildRuntime();
         } else if (!config_.enabled) {
             ShowWindow(host_, SW_HIDE);
         }
         SetRenderTimerFps(config_.fpsCap);
+        libraryWindow_.SetTargets(LibraryTargets());
         RefreshSettings();
-        libraryWindow_.Refresh();
         return mounted;
     }
 
-    bool StartVideo(bool recovery = false) {
-        if (!recovery) {
-            videoRecoveryAttempts_ = 0;
-            lastVideoRecoveryAttemptMs_ = 0;
-            videoHealthySinceMs_ = 0;
-            videoRecoveryNote_.clear();
-        }
-        videoSet_.Stop();
-        lastMediaError_.clear();
-        if (config_.video.empty() || !fs::exists(config_.video)) {
-            lastMediaError_ = L"视频文件不存在";
-            return false;
-        }
-        videoSet_.SetLooping(config_.videoLoop);
-        videoSet_.SetMuted(config_.videoMuted);
-        videoSet_.SetVolume(config_.videoVolume);
-        videoSet_.SetPlaybackRate(config_.videoRate);
-        auto regions = turingdesk::wallpaper::DrawRegionsInHost(topology_, turingdesk::wallpaper::ParseLayoutMode(config_.layout));
-        if (!videoSet_.Start(host_, config_.video, regions, turingdesk::wallpaper::ParseScaleMode(config_.scale), config_.focalX, config_.focalY)) {
-            lastMediaError_ = videoSet_.LastErrorText();
-            if (lastMediaError_.empty()) lastMediaError_ = L"Media Foundation 无法启动该视频";
-            return false;
-        }
-        videoSet_.SetPaused(false);
-        return true;
-    }
-
     void ApplyFromSettings() {
-        const int selected = static_cast<int>(SendMessageW(sceneCombo_, CB_GETCURSEL, 0, 0));
+        const int selectedScene = static_cast<int>(SendMessageW(sceneCombo_, CB_GETCURSEL, 0, 0));
         const int selectedLayout = static_cast<int>(SendMessageW(layoutCombo_, CB_GETCURSEL, 0, 0));
         const int selectedScale = static_cast<int>(SendMessageW(scaleCombo_, CB_GETCURSEL, 0, 0));
         const int selectedHorizontal = static_cast<int>(SendMessageW(horizontalCombo_, CB_GETCURSEL, 0, 0));
@@ -1340,7 +1435,8 @@ private:
 
         Config next = config_;
         next.enabled = true;
-        next.layout = selectedLayout == 1 ? L"clone" : selectedLayout == 2 ? L"primary" : L"span";
+        next.layout = selectedLayout == 1 ? L"clone" : selectedLayout == 2 ? L"primary" :
+                      selectedLayout == 3 ? L"independent" : L"span";
         next.scale = selectedScale == 1 ? L"contain" : selectedScale == 2 ? L"stretch" :
                      selectedScale == 3 ? L"center" : selectedScale == 4 ? L"tile" : L"cover";
         next.focalX = selectedHorizontal == 0 ? 0.0f : selectedHorizontal == 2 ? 1.0f : 0.5f;
@@ -1354,25 +1450,25 @@ private:
         if (selectedVolume >= 0 && selectedVolume < static_cast<int>(std::size(volumeValues))) next.videoVolume = volumeValues[selectedVolume];
         if (selectedRate >= 0 && selectedRate < static_cast<int>(std::size(rateValues))) next.videoRate = rateValues[selectedRate];
 
-        if (selected == 1) {
+        if (selectedScene == 1) {
             next.scene = L"neon";
             next.image.clear();
             next.video.clear();
-        } else if (selected == 2) {
+        } else if (selectedScene == 2) {
             next.scene = L"grid";
             next.image.clear();
             next.video.clear();
-        } else if (selected == 3) {
+        } else if (selectedScene == 3) {
             next.scene = L"image";
             if (next.image.empty()) {
-                SetWindowTextW(status_, L"请从壁纸库选择或导入一张图片。");
+                if (status_) SetWindowTextW(status_, L"请先从壁纸库选择或导入一张图片。");
                 ShowLibrary();
                 return;
             }
-        } else if (selected == 4) {
+        } else if (selectedScene == 4) {
             next.scene = L"video";
             if (next.video.empty()) {
-                SetWindowTextW(status_, L"请从壁纸库选择或导入一个视频。");
+                if (status_) SetWindowTextW(status_, L"请先从壁纸库选择或导入一个视频。");
                 ShowLibrary();
                 return;
             }
@@ -1381,27 +1477,22 @@ private:
             next.image.clear();
             next.video.clear();
         }
-        if (ApplyConfig(next)) {
-            std::wstring markError;
-            if (next.scene == L"aurora") library_.MarkUsed(L"scene-aurora", &markError);
-            else if (next.scene == L"neon") library_.MarkUsed(L"scene-neon", &markError);
-            else if (next.scene == L"grid") library_.MarkUsed(L"scene-grid", &markError);
-            if (!markError.empty()) libraryError_ = markError;
-        }
+        ApplyConfig(next);
     }
 
     void RefreshSettings() {
         if (!settings_ || !IsWindow(settings_) || !sceneCombo_) return;
-        int selected = 0;
-        if (!config_.video.empty() || config_.scene == L"video") selected = 4;
-        else if (!config_.image.empty() || config_.scene == L"image") selected = 3;
-        else if (config_.scene == L"neon") selected = 1;
-        else if (config_.scene == L"grid") selected = 2;
-        SendMessageW(sceneCombo_, CB_SETCURSEL, selected, 0);
+        int selectedScene = 0;
+        if (config_.scene == L"video") selectedScene = 4;
+        else if (config_.scene == L"image") selectedScene = 3;
+        else if (config_.scene == L"neon") selectedScene = 1;
+        else if (config_.scene == L"grid") selectedScene = 2;
+        SendMessageW(sceneCombo_, CB_SETCURSEL, selectedScene, 0);
 
         const auto layoutMode = turingdesk::wallpaper::ParseLayoutMode(config_.layout);
         const int layoutSelected = layoutMode == turingdesk::wallpaper::LayoutMode::Clone ? 1 :
-                                   layoutMode == turingdesk::wallpaper::LayoutMode::PrimaryOnly ? 2 : 0;
+                                   layoutMode == turingdesk::wallpaper::LayoutMode::PrimaryOnly ? 2 :
+                                   layoutMode == turingdesk::wallpaper::LayoutMode::Independent ? 3 : 0;
         if (layoutCombo_) SendMessageW(layoutCombo_, CB_SETCURSEL, layoutSelected, 0);
 
         const auto scaleMode = turingdesk::wallpaper::ParseScaleMode(config_.scale);
@@ -1432,7 +1523,7 @@ private:
         for (int i = 0; i < static_cast<int>(std::size(rateValues)); ++i)
             if (std::fabs(rateValues[i] - config_.videoRate) < 0.26f) rateSelected = i;
         if (videoRateCombo_) SendMessageW(videoRateCombo_, CB_SETCURSEL, rateSelected, 0);
-        SetWindowTextW(toggleButton_, config_.enabled ? L"停止" : L"恢复");
+        if (toggleButton_) SetWindowTextW(toggleButton_, config_.enabled ? L"停止" : L"恢复");
 
         std::wstring status;
         if (!config_.enabled) {
@@ -1440,25 +1531,30 @@ private:
         } else if (!mountOk_) {
             status = L"应用失败：" + (lastMountError_.empty() ? L"没有挂载到 Windows 桌面层" : lastMountError_);
         } else {
-            const wchar_t* scene = selected == 0 ? L"Aurora Flow" : selected == 1 ? L"Neon Flow" : selected == 2 ? L"Quiet Grid" : selected == 3 ? L"图片壁纸" : L"视频壁纸";
+            const wchar_t* scene = selectedScene == 0 ? L"Aurora Flow" : selectedScene == 1 ? L"Neon Flow" :
+                                   selectedScene == 2 ? L"Quiet Grid" : selectedScene == 3 ? L"图片壁纸" : L"视频壁纸";
             status = std::wstring(scene) + L" · " + turingdesk::wallpaper::LayoutModeDisplayName(layoutMode) + L" · " +
                      turingdesk::wallpaper::ScaleModeDisplayName(scaleMode) + L" · " + std::to_wstring(topology_.monitors.size()) + L" 屏";
             status += L"\r\n性能：" + std::wstring(turingdesk::wallpaper::PerformanceActionDisplayName(currentPerformance_.action));
             if (currentPerformance_.targetFps > 0) status += L" · " + std::to_wstring(currentPerformance_.targetFps) + L" FPS";
             if (!currentPerformance_.reason.empty()) status += L" · 原因：" + currentPerformance_.reason;
-            if (selected == 4) {
-                if (!lastMediaError_.empty()) status += L"\r\n视频错误：" + lastMediaError_;
-                else {
-                    if (scaleMode == turingdesk::wallpaper::ScaleMode::Tile) status += L" · 视频 Tile 当前安全降级为 Center";
-                    status += L"\r\n" + videoSet_.DiagnosticsText();
-                }
-                if (!videoRecoveryNote_.empty()) status += L"\r\n恢复：" + videoRecoveryNote_;
+
+            if (layoutMode == turingdesk::wallpaper::LayoutMode::Independent) {
+                status += L"\r\nIndependent：" + independentHost_.DiagnosticsText();
+                const auto missing = assignments_.MissingFrom(topology_);
+                status += L" · 已保存分配 " + std::to_wstring(assignments_.Items().size()) + L" 项";
+                if (!missing.empty()) status += L" · 离线显示器 " + std::to_wstring(missing.size()) + L" 项（保留配置）";
+            } else if (selectedScene == 4) {
+                status += L"\r\n" + videoSet_.DiagnosticsText();
+                if (scaleMode == turingdesk::wallpaper::ScaleMode::Tile) status += L" · 视频 Tile 当前安全降级为 Center";
             }
+            if (!lastMediaError_.empty()) status += L"\r\n媒体诊断：" + lastMediaError_;
+            if (!recoveryNote_.empty()) status += L"\r\n恢复：" + recoveryNote_;
             status += L"\r\n库：" + std::to_wstring(library_.Items().size()) + L" 项";
             if (!libraryError_.empty()) status += L" · 库诊断：" + libraryError_;
             status += L"\r\n" + turingdesk::wallpaper::DescribeMonitorTopology(topology_);
         }
-        SetWindowTextW(status_, status.c_str());
+        if (status_) SetWindowTextW(status_, status.c_str());
     }
 
     HINSTANCE instance_{};
@@ -1467,7 +1563,7 @@ private:
     HWND attachedParent_{};
     HWND settings_{};
     HWND sceneCombo_{};
-    HWND imageButton_{};
+    HWND libraryButton_{};
     HWND layoutCombo_{};
     HWND scaleCombo_{};
     HWND horizontalCombo_{};
@@ -1493,23 +1589,23 @@ private:
     UINT taskbarCreated_{};
     UINT renderTimerIntervalMs_{};
     unsigned healthTicks_{};
-    unsigned videoRecoveryAttempts_{};
-    ULONGLONG lastVideoRecoveryAttemptMs_{};
-    ULONGLONG videoHealthySinceMs_{};
+    unsigned recoveryAttempts_{};
+    ULONGLONG lastRecoveryAttemptMs_{};
+    ULONGLONG healthySinceMs_{};
     MountMode mountMode_{MountMode::None};
     std::wstring lastMountError_;
+    std::wstring lastMediaError_;
+    std::wstring recoveryNote_;
+    std::wstring libraryError_;
     Config config_;
     turingdesk::wallpaper::MonitorTopology topology_;
     turingdesk::wallpaper::WallpaperPerformancePolicy performancePolicy_;
     turingdesk::wallpaper::PerformanceSnapshot currentPerformance_;
-    std::wstring pendingImage_;
-    std::wstring pendingVideo_;
-    std::wstring lastMediaError_;
-    std::wstring videoRecoveryNote_;
-    std::wstring libraryError_;
     turingdesk::wallpaper::WallpaperLibrary library_;
     turingdesk::wallpaper::WallpaperLibraryWindow libraryWindow_;
+    turingdesk::wallpaper::WallpaperMonitorAssignments assignments_;
     turingdesk::VideoWallpaperSet videoSet_;
+    turingdesk::IndependentWallpaperHost independentHost_;
     float time_{};
     ComPtr<ID2D1Factory> d2dFactory_;
     ComPtr<ID2D1HwndRenderTarget> renderTarget_;
@@ -1564,12 +1660,15 @@ int RunSelfTest(HINSTANCE instance) {
     const bool scalingGeometryOk = turingdesk::wallpaper::SelfTestScalingGeometry();
     const bool performancePolicyOk = turingdesk::wallpaper::WallpaperPerformancePolicy::SelfTest();
     const bool libraryOk = turingdesk::wallpaper::WallpaperLibrary::SelfTest();
+    const bool assignmentsOk = turingdesk::wallpaper::WallpaperMonitorAssignments::SelfTest();
+    const bool independentResolutionOk = turingdesk::wallpaper::SelfTestIndependentWallpaperResolution();
     const auto topology = turingdesk::wallpaper::QueryMonitorTopology();
     const bool topologyOk = topology.Valid();
     const bool mediaFoundationOk = turingdesk::VideoWallpaperPlayer::MediaFoundationAvailable();
     wic.Reset();
     d2d.Reset();
     if (SUCCEEDED(com)) CoUninitialize();
+
     if (!layered) return 26;
     if (!pathOk) return 27;
     if (!layoutGeometryOk) return 29;
@@ -1577,6 +1676,8 @@ int RunSelfTest(HINSTANCE instance) {
     if (!scalingGeometryOk) return 31;
     if (!performancePolicyOk) return 32;
     if (!libraryOk) return 33;
+    if (!assignmentsOk) return 34;
+    if (!independentResolutionOk) return 35;
     return mediaFoundationOk ? 0 : 28;
 }
 
@@ -1596,7 +1697,6 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR commandLine, int) {
     if (HasArg(args, L"--self-test")) return RunSelfTest(instance);
 
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
-
     HANDLE mutex = CreateMutexW(nullptr, FALSE, kMutexName);
     if (!mutex) return 2;
     if (GetLastError() == ERROR_ALREADY_EXISTS) {
