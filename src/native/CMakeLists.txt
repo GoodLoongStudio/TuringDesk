@@ -42,7 +42,7 @@ add_executable(TuringDesk WIN32
     src/NativeTools.cpp
     src/WallpaperPackage.cpp
     src/AppSearch.cpp
-    src/EverythingSearch.cpp
+    src/GozSearch.cpp
     src/L3Agent.cpp
     src/L3PersistenceSelfTest.cpp
     src/HarnessProcessManager.cpp
