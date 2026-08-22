@@ -13,40 +13,85 @@ function Refresh-ProcessPath {
     $env:PATH = (($machine, $user) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) -join ";"
 }
 
-function Resolve-Dsh {
-    Refresh-ProcessPath
-    $command = Get-Command dsh.cmd -ErrorAction SilentlyContinue | Select-Object -First 1
-    if ($command) { return $command.Source }
+function Get-NpmGlobalBin([string]$NpmPath) {
+    if (-not [string]::IsNullOrWhiteSpace($NpmPath)) {
+        try {
+            $prefix = (& $NpmPath prefix -g 2>$null | Select-Object -First 1)
+            if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($prefix)) {
+                return ([string]$prefix).Trim()
+            }
+        }
+        catch { }
 
-    $appDataBin = Join-Path $env:APPDATA "npm\dsh.cmd"
-    if (Test-Path $appDataBin -PathType Leaf) { return $appDataBin }
+        try {
+            $prefix = (& $NpmPath config get prefix 2>$null | Select-Object -First 1)
+            if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($prefix)) {
+                return ([string]$prefix).Trim()
+            }
+        }
+        catch { }
+    }
+
+    return (Join-Path $env:APPDATA "npm")
+}
+
+function Test-OfficialDshInstall([string]$DshPath) {
+    if ([string]::IsNullOrWhiteSpace($DshPath) -or -not (Test-Path $DshPath -PathType Leaf)) { return $false }
+    try {
+        $binDir = Split-Path $DshPath -Parent
+        $manifest = Join-Path $binDir "node_modules\@deepseek-ai\dsh\package.json"
+        if (-not (Test-Path $manifest -PathType Leaf)) { return $false }
+        $packageJson = Get-Content $manifest -Raw | ConvertFrom-Json
+        return ([string]$packageJson.name -eq "@deepseek-ai/dsh")
+    }
+    catch { return $false }
+}
+
+function Resolve-Dsh([string]$GlobalBin) {
+    Refresh-ProcessPath
+
+    $command = Get-Command dsh.cmd -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($command -and (Test-OfficialDshInstall -DshPath $command.Source)) { return $command.Source }
+
+    if (-not [string]::IsNullOrWhiteSpace($GlobalBin)) {
+        $candidate = Join-Path $GlobalBin "dsh.cmd"
+        if (Test-OfficialDshInstall -DshPath $candidate) { return $candidate }
+    }
+
+    $fallback = Join-Path $env:APPDATA "npm\dsh.cmd"
+    if (Test-OfficialDshInstall -DshPath $fallback) { return $fallback }
 
     return $null
 }
 
-function Ensure-NpmGlobalBinOnUserPath {
-    $globalBin = Join-Path $env:APPDATA "npm"
-    if (-not (Test-Path $globalBin -PathType Container)) { return }
+function Ensure-NpmGlobalBinOnUserPath([string]$GlobalBin) {
+    if ([string]::IsNullOrWhiteSpace($GlobalBin) -or -not (Test-Path $GlobalBin -PathType Container)) { return }
 
     $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
     $parts = @($userPath -split ';' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
     $exists = $false
     foreach ($part in $parts) {
-        if ($part.TrimEnd('\').Equals($globalBin.TrimEnd('\'), [System.StringComparison]::OrdinalIgnoreCase)) {
+        if ($part.TrimEnd('\').Equals($GlobalBin.TrimEnd('\'), [System.StringComparison]::OrdinalIgnoreCase)) {
             $exists = $true
             break
         }
     }
 
     if (-not $exists) {
-        $newPath = (($parts + $globalBin) -join ';')
+        $newPath = (($parts + $GlobalBin) -join ';')
         [Environment]::SetEnvironmentVariable("Path", $newPath, "User")
-        Write-Host "Added official npm global bin to user PATH: $globalBin" -ForegroundColor DarkGray
+        Write-Host "Added npm global bin to user PATH: $GlobalBin" -ForegroundColor DarkGray
     }
 
-    if (($env:PATH -split ';') -notcontains $globalBin) {
-        $env:PATH = "$globalBin;$env:PATH"
+    $currentParts = @($env:PATH -split ';')
+    $inCurrentPath = $false
+    foreach ($part in $currentParts) {
+        if (-not [string]::IsNullOrWhiteSpace($part) -and $part.TrimEnd('\').Equals($GlobalBin.TrimEnd('\'), [System.StringComparison]::OrdinalIgnoreCase)) {
+            $inCurrentPath = $true
+            break
+        }
     }
+    if (-not $inCurrentPath) { $env:PATH = "$GlobalBin;$env:PATH" }
 }
 
 function Invoke-OfficialDshInstall([string]$NpmPath, [string]$CachePath, [switch]$PreferOnline) {
@@ -76,30 +121,35 @@ function Invoke-OfficialDshInstall([string]$NpmPath, [string]$CachePath, [switch
     return $LASTEXITCODE
 }
 
-$dsh = Resolve-Dsh
-if ($dsh) {
-    Write-Host "Official DeepSeek Harness already installed: $dsh" -ForegroundColor Green
-    exit 0
-}
-
+Refresh-ProcessPath
 $npm = Get-Command npm.cmd -ErrorAction SilentlyContinue | Select-Object -First 1
 if (-not $npm) {
     throw "npm.cmd was not found. The prerequisite step should install official Node.js first."
+}
+
+$globalBin = Get-NpmGlobalBin -NpmPath $npm.Source
+Write-Host "npm global prefix: $globalBin" -ForegroundColor DarkGray
+Ensure-NpmGlobalBinOnUserPath -GlobalBin $globalBin
+
+$dsh = Resolve-Dsh -GlobalBin $globalBin
+if ($dsh) {
+    Write-Host "Official DeepSeek Harness already installed: $dsh" -ForegroundColor Green
+    exit 0
 }
 
 Step "Installing official DeepSeek Harness"
 Write-Host "Official project: deepseek-ai/deepseek-harness" -ForegroundColor DarkGray
 Write-Host "Official npm CLI package: $Package" -ForegroundColor DarkGray
 Write-Host "Official command after installation: dsh" -ForegroundColor DarkGray
-Write-Host "This is a one-time installation of the official upstream package. TuringDesk will not create a private HarnessRuntime." -ForegroundColor DarkGray
+Write-Host "This runs only when a complete official global dsh installation is not found." -ForegroundColor DarkGray
 
 $npmCache = Join-Path $env:LOCALAPPDATA "TuringDesk\RuntimeCache\npm-official"
 New-Item -ItemType Directory -Force -Path $npmCache | Out-Null
 
-# The upstream package currently has a large dependency tree. On a 4 GB Windows
-# machine npm can hit V8's ~2 GB default heap while resolving it, so give this
-# one installation process a bounded 3 GB ceiling. Downloaded package data is
-# persisted in npm-official and reused by retries and later installs.
+# The upstream package has a large dependency tree. On a 4 GB Windows machine
+# npm can hit V8's ~2 GB default heap while resolving it, so give this one
+# installation process a bounded 3 GB ceiling. Downloaded package data is kept
+# in npm-official and reused by retries and future official updates.
 $oldNodeOptions = $env:NODE_OPTIONS
 try {
     $env:NODE_OPTIONS = "--max-old-space-size=3072"
@@ -118,10 +168,11 @@ finally {
     $env:NODE_OPTIONS = $oldNodeOptions
 }
 
-Ensure-NpmGlobalBinOnUserPath
-$dsh = Resolve-Dsh
+$globalBin = Get-NpmGlobalBin -NpmPath $npm.Source
+Ensure-NpmGlobalBinOnUserPath -GlobalBin $globalBin
+$dsh = Resolve-Dsh -GlobalBin $globalBin
 if (-not $dsh) {
-    throw "Official DeepSeek Harness installation completed, but dsh.cmd was not found."
+    throw "Official DeepSeek Harness installation completed, but a complete dsh installation was not found under npm global prefix: $globalBin"
 }
 
 Write-Host "Official DeepSeek Harness ready: $dsh" -ForegroundColor Green
