@@ -16,6 +16,9 @@ $HarnessLog = Join-Path $LogRoot "harness-system-install.log"
 $NodeMsi = Join-Path $DownloadRoot "node-v$NodeVersion-arm64.msi"
 $NodeSums = Join-Path $DownloadRoot "node-v$NodeVersion-SHASUMS256.txt"
 $DeployedHarness = Join-Path $Root "NativeTest\TuringDeskHarness.exe"
+$SmartDownload = Join-Path $PSScriptRoot "smart-download.ps1"
+if (-not (Test-Path $SmartDownload -PathType Leaf)) { throw "Smart download helper is missing: $SmartDownload" }
+. $SmartDownload
 
 function Step([string]$Text) {
     Write-Host "`n==> $Text" -ForegroundColor Cyan
@@ -43,30 +46,29 @@ function Find-CommandPath([string]$Name) {
 function Download-VerifiedNodeMsi {
     New-Item -ItemType Directory -Force -Path $DownloadRoot | Out-Null
 
-    if (-not (Test-Path $NodeMsi -PathType Leaf)) {
-        Step "Downloading official Node.js $NodeVersion ARM64 MSI"
-        & curl.exe -fL --retry 3 --retry-delay 2 --connect-timeout 20 --max-time 300 --progress-bar `
-            "https://nodejs.org/dist/v$NodeVersion/node-v$NodeVersion-arm64.msi" -o $NodeMsi
-        if ($LASTEXITCODE -ne 0) { throw "Node ARM64 MSI download failed: curl exit $LASTEXITCODE" }
-    }
-
-    if (-not (Test-Path $NodeSums -PathType Leaf)) {
-        & curl.exe -fL --retry 3 --retry-delay 2 --connect-timeout 20 --max-time 120 `
-            "https://nodejs.org/dist/v$NodeVersion/SHASUMS256.txt" -o $NodeSums
-        if ($LASTEXITCODE -ne 0) { throw "Node checksum download failed: curl exit $LASTEXITCODE" }
-    }
-
-    Step "Verifying official Node.js SHA256"
     $fileName = "node-v$NodeVersion-arm64.msi"
+    Step "Preparing official Node.js $NodeVersion ARM64 installer"
+
+    Invoke-TuringDeskSmartDownload `
+        -Url "https://nodejs.org/dist/v$NodeVersion/SHASUMS256.txt" `
+        -Destination $NodeSums `
+        -Name "Node.js checksums" `
+        -FileName "SHASUMS256.txt" `
+        -TimeoutSeconds 120 | Out-Null
+
     $line = Get-Content $NodeSums | Where-Object { $_ -match "\s+$([regex]::Escape($fileName))$" } | Select-Object -First 1
     if (-not $line) { throw "SHA256 entry not found for $fileName" }
     $expected = ($line -split '\s+')[0].ToLowerInvariant()
-    $actual = (Get-FileHash $NodeMsi -Algorithm SHA256).Hash.ToLowerInvariant()
-    if ($expected -ne $actual) {
-        Remove-Item $NodeMsi -Force -ErrorAction SilentlyContinue
-        throw "Node MSI SHA256 mismatch: expected $expected, got $actual"
-    }
-    Write-Host "Node installer checksum verified." -ForegroundColor Green
+
+    Invoke-TuringDeskSmartDownload `
+        -Url "https://nodejs.org/dist/v$NodeVersion/$fileName" `
+        -Destination $NodeMsi `
+        -Name "Node.js $NodeVersion ARM64 MSI" `
+        -ExpectedSha256 $expected `
+        -FileName $fileName `
+        -TimeoutSeconds 300 | Out-Null
+
+    Write-Host "Node installer checksum verified: $expected" -ForegroundColor Green
 }
 
 function Ensure-Node {
@@ -82,9 +84,6 @@ function Ensure-Node {
 
     if ($SkipNodeInstall) {
         throw "Node.js/npx not found and -SkipNodeInstall was specified."
-    }
-    if (-not (Get-Command curl.exe -ErrorAction SilentlyContinue)) {
-        throw "curl.exe is required to download the official Node installer."
     }
 
     Download-VerifiedNodeMsi
@@ -151,10 +150,11 @@ Test-NpmRegistry -NodeDir $nodeDir
 
 Step "Starting the official pinned DeepSeek Harness package"
 Write-Host "Command: npx --yes @deepseek-ai/dsh@$DshVersion web" -ForegroundColor DarkGray
-Write-Host "First run can be heavy because DSH has a large dependency graph. This run is intentionally visible and logged." -ForegroundColor Yellow
+Write-Host "First run can be heavy because DSH has a large dependency graph. Successful npm downloads stay cached." -ForegroundColor Yellow
 
 $oldPath = $env:PATH
 $env:PATH = "$nodeDir;$oldPath"
+$process = $null
 try {
     $command = "`"$npx`" --yes --cache `"$NpmCache`" --loglevel=notice @deepseek-ai/dsh@$DshVersion web 1>`"$HarnessLog`" 2>&1"
     $process = Start-Process -FilePath "cmd.exe" -ArgumentList @("/d", "/s", "/c", $command) -PassThru -WindowStyle Hidden
