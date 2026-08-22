@@ -19,9 +19,6 @@ constexpr wchar_t kWindowClass[] = L"TuringDesk.Native.HarnessWindow";
 constexpr wchar_t kMutexName[] = L"Local\\TuringDesk.Native.Harness.Singleton";
 constexpr UINT_PTR kReadyTimerId = 1;
 constexpr UINT kReadyPollMs = 250;
-// The pinned Harness dependency tree is already present locally, so smoke tests
-// should become ready quickly. Keep a generous two-minute ceiling for slower
-// ARM64 machines while still surfacing a broken bundle promptly.
 constexpr DWORD kSmokeTimeoutMs = 120000;
 
 fs::path UserDataDirectory() {
@@ -46,6 +43,78 @@ std::wstring HarnessLogHint() {
     return logPath.empty() ? std::wstring{} : L"\r\n日志：" + logPath;
 }
 
+RECT HarnessWorkAreaForCursor() {
+    POINT cursor{};
+    if (!GetCursorPos(&cursor)) cursor = POINT{0, 0};
+    HMONITOR monitor = MonitorFromPoint(cursor, MONITOR_DEFAULTTOPRIMARY);
+    MONITORINFO info{};
+    info.cbSize = sizeof(info);
+    if (monitor && GetMonitorInfoW(monitor, &info)) return info.rcWork;
+
+    RECT work{};
+    if (SystemParametersInfoW(SPI_GETWORKAREA, 0, &work, 0)) return work;
+    work.right = GetSystemMetrics(SM_CXSCREEN);
+    work.bottom = GetSystemMetrics(SM_CYSCREEN);
+    return work;
+}
+
+RECT InitialHarnessWindowRect() {
+    const RECT work = HarnessWorkAreaForCursor();
+    const LONG workWidth = work.right - work.left;
+    const LONG workHeight = work.bottom - work.top;
+
+    LONG width = workWidth * 9 / 10;
+    LONG height = workHeight * 9 / 10;
+    if (width > 1100) width = 1100;
+    if (height > 760) height = 760;
+    if (width <= 0) width = workWidth;
+    if (height <= 0) height = workHeight;
+
+    RECT result{};
+    result.left = work.left + (workWidth - width) / 2;
+    result.top = work.top + (workHeight - height) / 2;
+    result.right = result.left + width;
+    result.bottom = result.top + height;
+    return result;
+}
+
+void ApplyHarnessMaximizedWorkArea(HWND hwnd, MINMAXINFO* minMax) {
+    if (!hwnd || !minMax) return;
+    HMONITOR monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+    MONITORINFO info{};
+    info.cbSize = sizeof(info);
+    if (!monitor || !GetMonitorInfoW(monitor, &info)) return;
+
+    const RECT& work = info.rcWork;
+    const RECT& bounds = info.rcMonitor;
+    minMax->ptMaxPosition.x = work.left - bounds.left;
+    minMax->ptMaxPosition.y = work.top - bounds.top;
+    minMax->ptMaxSize.x = work.right - work.left;
+    minMax->ptMaxSize.y = work.bottom - work.top;
+    minMax->ptMaxTrackSize = minMax->ptMaxSize;
+}
+
+bool HarnessWindowLayoutSelfTest() {
+    const RECT work{100, 50, 1380, 730};
+    const LONG workWidth = work.right - work.left;
+    const LONG workHeight = work.bottom - work.top;
+    LONG width = workWidth * 9 / 10;
+    LONG height = workHeight * 9 / 10;
+    if (width > 1100) width = 1100;
+    if (height > 760) height = 760;
+    RECT result{
+        work.left + (workWidth - width) / 2,
+        work.top + (workHeight - height) / 2,
+        0,
+        0,
+    };
+    result.right = result.left + width;
+    result.bottom = result.top + height;
+    return result.left >= work.left && result.top >= work.top &&
+           result.right <= work.right && result.bottom <= work.bottom &&
+           width == 1100 && height == 612;
+}
+
 int RunHarnessSmokeTest() {
     turingdesk::HarnessProcessManager harness;
     if (!harness.Start()) return 6;
@@ -68,15 +137,15 @@ public:
         wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
         if (!RegisterClassExW(&wc) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS) return false;
 
+        const RECT initialBounds = InitialHarnessWindowRect();
         hwnd_ = CreateWindowExW(0, kWindowClass, L"TuringDesk · DeepSeek Harness",
                                 WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
-                                CW_USEDEFAULT, CW_USEDEFAULT, 1180, 820,
+                                initialBounds.left, initialBounds.top,
+                                initialBounds.right - initialBounds.left,
+                                initialBounds.bottom - initialBounds.top,
                                 nullptr, nullptr, instance_, this);
         if (!hwnd_) return false;
 
-        // Use a borderless read-only EDIT instead of STATIC so every startup/error
-        // message and the log path can be selected with the mouse and copied with
-        // Ctrl+C. ES_NOHIDESEL keeps a useful selection visible when focus moves.
         status_ = CreateWindowExW(0, L"EDIT", L"正在启动 DeepSeek Harness…",
                                   WS_CHILD | WS_VISIBLE | WS_TABSTOP |
                                       ES_MULTILINE | ES_CENTER | ES_READONLY | ES_NOHIDESEL,
@@ -140,6 +209,9 @@ private:
                 return 0;
             }
             break;
+        case WM_GETMINMAXINFO:
+            ApplyHarnessMaximizedWorkArea(hwnd_, reinterpret_cast<MINMAXINFO*>(lParam));
+            return 0;
         case WM_SIZE:
             ResizeWebView();
             ResizeStatus();
@@ -186,8 +258,6 @@ private:
 
         const ULONGLONG now = GetTickCount64();
         if (now >= nextStatusUpdate_) {
-            // Do not replace the text while the user is selecting/copying it.
-            // Harness readiness polling continues normally in the background.
             if (GetFocus() != status_) UpdateStartingStatus(now);
             nextStatusUpdate_ = now + 1000;
         }
@@ -272,8 +342,6 @@ private:
         if (!status_ || !IsWindow(status_)) return;
         ShowWindow(status_, SW_SHOW);
         SetWindowTextW(status_, text.c_str());
-        // Keep the read-only control ready for keyboard selection without
-        // automatically highlighting the full status on every refresh.
         SendMessageW(status_, EM_SETSEL, 0, 0);
         UpdateWindow(status_);
     }
@@ -310,7 +378,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR commandLine, int) {
         return result;
     }
     if (args.find(L"--self-test") != std::wstring_view::npos) {
-        const int result = turingdesk::HarnessProcessManager::SelfTest() ? 0 : 5;
+        const bool healthy = turingdesk::HarnessProcessManager::SelfTest() && HarnessWindowLayoutSelfTest();
+        const int result = healthy ? 0 : 5;
         if (SUCCEEDED(com)) CoUninitialize();
         return result;
     }
