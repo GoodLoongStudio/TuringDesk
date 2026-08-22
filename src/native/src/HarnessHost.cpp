@@ -6,6 +6,7 @@
 #include <filesystem>
 #include <iterator>
 #include <string>
+#include <string_view>
 
 using Microsoft::WRL::Callback;
 using Microsoft::WRL::ComPtr;
@@ -255,9 +256,16 @@ void ActivateExistingHarnessWindow() {
 
 } // namespace
 
-int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
+int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR commandLine, int) {
     const HRESULT com = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
     if (FAILED(com) && com != RPC_E_CHANGED_MODE) return 3;
+
+    const std::wstring_view args = commandLine ? std::wstring_view(commandLine) : std::wstring_view{};
+    if (args.find(L"--self-test") != std::wstring_view::npos) {
+        const int result = turingdesk::HarnessProcessManager::SelfTest() ? 0 : 5;
+        if (SUCCEEDED(com)) CoUninitialize();
+        return result;
+    }
 
     HANDLE mutex = CreateMutexW(nullptr, FALSE, kMutexName);
     if (!mutex) {
