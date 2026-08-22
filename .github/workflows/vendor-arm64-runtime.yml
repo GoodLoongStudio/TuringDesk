@@ -16,7 +16,37 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  announce:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ci-status
+      - name: Publish vendoring run id
+        shell: bash
+        run: |
+          mkdir -p ci
+          cat > "ci/runtime-vendor-${GITHUB_SHA}.json" <<EOF
+          {
+            "sha": "${GITHUB_SHA}",
+            "mode": "runtime-vendor-arm64",
+            "result": "running",
+            "run_id": "${GITHUB_RUN_ID}"
+          }
+          EOF
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "ci/runtime-vendor-${GITHUB_SHA}.json"
+          git commit -m "ci: start ARM64 runtime vendoring ${GITHUB_SHA}" || exit 0
+          for i in 1 2 3; do
+            git pull --rebase origin ci-status || true
+            if git push origin HEAD:ci-status; then exit 0; fi
+            sleep 2
+          done
+          exit 1
+
   vendor:
+    needs: [announce]
     runs-on: windows-11-arm
     timeout-minutes: 30
     steps:
@@ -53,8 +83,6 @@ jobs:
           try {
             $lockHash = Sha256 $lockPath
 
-            # Portable official Node.js ARM64. Keep the original archive in the repo;
-            # deployment extracts it locally and never installs system Node.
             $nodeDir = Join-Path $runtime 'node'
             New-Item -ItemType Directory -Force -Path $nodeDir | Out-Null
             $nodeArchiveName = [string]$lock.node.archive
@@ -79,8 +107,6 @@ jobs:
             & $nodeExe --version
             if ($LASTEXITCODE -ne 0) { throw 'Portable ARM64 Node failed to execute' }
 
-            # Install the exact official DeepSeek Harness release plus its complete
-            # production dependency tree, then store the ready-to-run tree as one zip.
             $harnessDir = Join-Path $runtime 'harness'
             New-Item -ItemType Directory -Force -Path $harnessDir | Out-Null
             $harnessVersion = [string]$lock.deepseekHarness.version
@@ -103,7 +129,6 @@ jobs:
             & tar.exe -a -c -f $harnessZip -C $harnessStage .
             if ($LASTEXITCODE -ne 0 -or -not (Test-Path $harnessZip)) { throw 'Unable to package Harness runtime tree' }
 
-            # Everything ARM64 stays as the official portable archive.
             $everythingDir = Join-Path $runtime 'everything'
             New-Item -ItemType Directory -Force -Path $everythingDir | Out-Null
             $everythingArchiveName = [string]$lock.everything.archive
@@ -112,7 +137,6 @@ jobs:
             $everythingLicense = Join-Path $everythingDir 'LICENSE.txt'
             Download (([string]$lock.everything.source) + 'License.txt') $everythingLicense
 
-            # Codex ARM64 app-server stays as the official release archive.
             $codexDir = Join-Path $runtime 'codex'
             New-Item -ItemType Directory -Force -Path $codexDir | Out-Null
             $codexArchiveName = [string]$lock.codex.archive
@@ -120,8 +144,6 @@ jobs:
             $codexUrl = "https://github.com/openai/codex/releases/download/$($lock.codex.release)/$codexArchiveName"
             Download $codexUrl $codexArchive
 
-            # Vendor only the WebView2 SDK/ARM64 static loader needed at build time.
-            # Windows 11's WebView2 Runtime remains an OS component at execution time.
             $webSdkDir = Join-Path $runtime 'webview2-sdk'
             if (Test-Path $webSdkDir) { Remove-Item $webSdkDir -Recurse -Force }
             New-Item -ItemType Directory -Force -Path $webSdkDir | Out-Null
@@ -140,7 +162,6 @@ jobs:
               Copy-Item $license.FullName (Join-Path $webSdkDir $license.Name) -Force
             }
 
-            # Machine-readable integrity record for normal offline builds/deployments.
             $manifest = [ordered]@{
               schema = 1
               architecture = 'arm64'
@@ -181,7 +202,7 @@ jobs:
 
   report:
     if: always()
-    needs: [vendor]
+    needs: [announce, vendor]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
