@@ -1,6 +1,7 @@
 #include <windows.h>
 
 #include <filesystem>
+#include <string>
 #include <string_view>
 #include <system_error>
 
@@ -19,6 +20,12 @@ namespace {
 
 constexpr wchar_t kWallpaperControlClass[] = L"TuringDesk.Native.WallpaperControl";
 
+std::wstring ReadProfileValue(const fs::path& path, const wchar_t* key) {
+    wchar_t buffer[32768]{};
+    GetPrivateProfileStringW(L"Wallpaper", key, L"", buffer, static_cast<DWORD>(std::size(buffer)), path.c_str());
+    return buffer;
+}
+
 bool WebLibrarySelfTest() {
     std::error_code ec;
     const fs::path root = fs::temp_directory_path() /
@@ -26,9 +33,17 @@ bool WebLibrarySelfTest() {
     fs::create_directories(root, ec);
     if (ec) return false;
 
+    wchar_t previousLocalAppData[32768]{};
+    const DWORD previousLocalAppDataLength = GetEnvironmentVariableW(
+        L"LOCALAPPDATA", previousLocalAppData, static_cast<DWORD>(std::size(previousLocalAppData)));
+    const bool hadLocalAppData = previousLocalAppDataLength > 0 && previousLocalAppDataLength < std::size(previousLocalAppData);
+    const fs::path isolatedLocalAppData = root / L"LocalAppData";
+    fs::create_directories(isolatedLocalAppData, ec);
+    bool ok = !ec && SetEnvironmentVariableW(L"LOCALAPPDATA", isolatedLocalAppData.c_str()) != FALSE;
+
     turingdesk::wallpaper::WallpaperLibrary library(root / L"Library");
     std::wstring error;
-    bool ok = library.Load(&error);
+    ok = ok && library.Load(&error);
     ok = ok && turingdesk::wallpaper::WallpaperLibrary::IsTrustedWebUrl(L"https://example.com/wallpaper");
     ok = ok && !turingdesk::wallpaper::WallpaperLibrary::IsTrustedWebUrl(L"http://example.com/wallpaper");
     ok = ok && !turingdesk::wallpaper::WallpaperLibrary::IsTrustedWebUrl(L"https://user:pass@example.com/wallpaper");
@@ -41,7 +56,19 @@ bool WebLibrarySelfTest() {
     if (imported) {
         const auto persisted = reloaded.Find(imported->id);
         ok = ok && persisted.has_value() && persisted->source.wstring() == L"https://example.com/wallpaper";
+        ok = ok && turingdesk::wallpaper::ActivateWebWallpaperItem(*imported, L"", &error);
+
+        const fs::path wallpaperConfig = isolatedLocalAppData / L"TuringDesk" / L"wallpaper.ini";
+        ok = ok && ReadProfileValue(wallpaperConfig, L"Enabled") == L"1";
+        ok = ok && _wcsicmp(ReadProfileValue(wallpaperConfig, L"Scene").c_str(), L"web") == 0;
+        ok = ok && ReadProfileValue(wallpaperConfig, L"Image") == L"https://example.com/wallpaper";
+        ok = ok && ReadProfileValue(wallpaperConfig, L"Video").empty();
     }
+
+    if (hadLocalAppData)
+        SetEnvironmentVariableW(L"LOCALAPPDATA", previousLocalAppData);
+    else
+        SetEnvironmentVariableW(L"LOCALAPPDATA", nullptr);
 
     fs::remove_all(root, ec);
     return ok;
