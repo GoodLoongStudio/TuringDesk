@@ -19,7 +19,9 @@ constexpr wchar_t kWindowClass[] = L"TuringDesk.Native.HarnessWindow";
 constexpr wchar_t kMutexName[] = L"Local\\TuringDesk.Native.Harness.Singleton";
 constexpr UINT_PTR kReadyTimerId = 1;
 constexpr UINT kReadyPollMs = 250;
-constexpr ULONGLONG kReadyTimeoutMs = 120000;
+// The first official npx launch may need to populate npm's own cache. Do not
+// mistake that one-time package preparation for a dead Harness process.
+constexpr ULONGLONG kReadyTimeoutMs = 600000;
 
 fs::path UserDataDirectory() {
     wchar_t localAppData[32768]{};
@@ -96,7 +98,7 @@ public:
             return true;
         }
 
-        SetStatus(L"正在启动 DeepSeek Harness…" + HarnessLogHint());
+        SetStatus(L"正在启动官方 DeepSeek Harness…首次运行可能需要准备 npm 缓存。" + HarnessLogHint());
         readyDeadline_ = GetTickCount64() + kReadyTimeoutMs;
         SetTimer(hwnd_, kReadyTimerId, kReadyPollMs, nullptr);
         return true;
@@ -168,14 +170,14 @@ private:
 
         if (!harness_.Running()) {
             KillTimer(hwnd_, kReadyTimerId);
-            SetStatus(L"DeepSeek Harness 在 Web UI 就绪前退出。TuringDesk 已使用内置 Node 24 LTS；请查看启动日志定位 npm/Harness 错误。" + HarnessLogHint());
+            SetStatus(L"DeepSeek 官方 Harness 在 Web UI 就绪前退出。请查看 harness.log；日志现在会包含实际 Node/npx 启动命令和上游错误。" + HarnessLogHint());
             return;
         }
 
         if (GetTickCount64() >= readyDeadline_) {
             KillTimer(hwnd_, kReadyTimerId);
             harness_.Stop();
-            SetStatus(L"DeepSeek Harness 启动超时。已停止本次 Harness 进程树，请查看启动日志。" + HarnessLogHint());
+            SetStatus(L"DeepSeek 官方 Harness 10 分钟内仍未就绪，已停止本次进程树。请查看 harness.log。" + HarnessLogHint());
         }
     }
 
