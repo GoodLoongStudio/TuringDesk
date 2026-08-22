@@ -1,7 +1,5 @@
 #include "turingdesk/HarnessProcessManager.h"
 #include <winhttp.h>
-#include <algorithm>
-#include <cwchar>
 #include <filesystem>
 #include <iterator>
 #include <string>
@@ -13,26 +11,17 @@ namespace fs = std::filesystem;
 namespace turingdesk {
 namespace {
 
-// Keep service probing on the literal loopback address so readiness checks never
-// involve name resolution or proxy configuration. The browser-facing URL uses
-// localhost instead (see DefaultUrl) to avoid the current Harness Chromium
-// Origin/Host trust regression on 127.0.0.1:3080.
 constexpr wchar_t kHarnessHost[] = L"127.0.0.1";
 constexpr INTERNET_PORT kHarnessPort = 3080;
 constexpr wchar_t kHarnessPath[] = L"/";
-constexpr wchar_t kHarnessPackage[] = L"@deepseek-ai/dsh@0.1.0-rc.7";
-constexpr wchar_t kHarnessBindArgs[] = L" --host 127.0.0.1 --port 3080";
-constexpr wchar_t kBundledNodeRelativePath[] = L"HarnessRuntime\\Node\\node.exe";
-constexpr wchar_t kBundledNpxRelativePath[] = L"HarnessRuntime\\Node\\npx.cmd";
-constexpr wchar_t kBundledDshBinRelativePath[] = L"HarnessRuntime\\Dsh\\node_modules\\@deepseek-ai\\dsh\\lib\\bin.js";
+constexpr wchar_t kHarnessPackage[] = L"@deepseek-ai/dsh";
+constexpr wchar_t kHarnessArgs[] = L"web --no-open --host 127.0.0.1 --port 3080";
 constexpr char kHarnessBootMarker[] = "window.__DSH_BOOT__";
 constexpr std::size_t kMaxReadinessProbeBytes = 256 * 1024;
 
 struct LaunchSpec {
     std::wstring application;
     std::wstring commandLine;
-    fs::path bundledNodeDirectory;
-
     bool Valid() const { return !application.empty() && !commandLine.empty(); }
 };
 
@@ -65,13 +54,6 @@ std::wstring ComSpecPath() {
     return L"cmd.exe";
 }
 
-fs::path ModuleDirectory() {
-    wchar_t value[32768]{};
-    const DWORD length = GetModuleFileNameW(nullptr, value, static_cast<DWORD>(std::size(value)));
-    if (length == 0 || length >= std::size(value)) return {};
-    return fs::path(std::wstring(value, length)).parent_path();
-}
-
 fs::path LocalAppDataDirectory() {
     wchar_t value[32768]{};
     const DWORD length = GetEnvironmentVariableW(L"LOCALAPPDATA", value, static_cast<DWORD>(std::size(value)));
@@ -100,102 +82,41 @@ std::wstring UserHomeDirectory() {
     return {};
 }
 
-bool IsRegularFile(const fs::path& path) {
-    std::error_code ec;
-    return !path.empty() && fs::is_regular_file(path, ec);
-}
-
-fs::path BundledNodeDirectory() {
-    const fs::path moduleDirectory = ModuleDirectory();
-    if (moduleDirectory.empty()) return {};
-    const fs::path node = moduleDirectory / kBundledNodeRelativePath;
-    return IsRegularFile(node) ? node.parent_path() : fs::path{};
-}
-
-std::wstring ResolveNpxPath() {
-    const fs::path moduleDirectory = ModuleDirectory();
-    if (!moduleDirectory.empty()) {
-        const fs::path bundled = moduleDirectory / kBundledNpxRelativePath;
-        if (IsRegularFile(bundled)) return bundled.wstring();
-    }
-
+std::wstring ResolvePath(const wchar_t* fileName) {
     wchar_t path[32768]{};
-    const DWORD length = SearchPathW(nullptr, L"npx.cmd", nullptr,
+    const DWORD length = SearchPathW(nullptr, fileName, nullptr,
                                      static_cast<DWORD>(std::size(path)), path, nullptr);
     if (length > 0 && length < std::size(path)) return std::wstring(path, length);
     return {};
 }
 
-std::wstring BuildNpxLaunchCommandFor(const std::wstring& npxPath) {
-    // cmd /s /c requires the doubled opening quote when the command itself starts
-    // with a quoted executable path. This keeps portable package paths with spaces safe.
-    return L"cmd.exe /d /s /c \"\"" + npxPath + L"\" --yes " + kHarnessPackage + L" web" + kHarnessBindArgs + L"\"";
+std::wstring BuildCmdLaunchCommand(const std::wstring& commandPath, const std::wstring& arguments) {
+    return L"cmd.exe /d /s /c \"\"" + commandPath + L"\" " + arguments + L"\"";
+}
+
+std::wstring BuildOfficialNpxCommandFor(const std::wstring& npxPath) {
+    return BuildCmdLaunchCommand(npxPath,
+                                 L"--yes " + std::wstring(kHarnessPackage) + L" " + kHarnessArgs);
 }
 
 LaunchSpec ResolveLaunchSpec() {
-    const fs::path moduleDirectory = ModuleDirectory();
-    if (!moduleDirectory.empty()) {
-        const fs::path node = moduleDirectory / kBundledNodeRelativePath;
-        const fs::path dshBin = moduleDirectory / kBundledDshBinRelativePath;
-        if (IsRegularFile(node) && IsRegularFile(dshBin)) {
-            LaunchSpec spec;
-            spec.application = node.wstring();
-            spec.commandLine = L"\"" + node.wstring() + L"\" \"" + dshBin.wstring() + L"\" web" + kHarnessBindArgs;
-            spec.bundledNodeDirectory = node.parent_path();
-            return spec;
-        }
+    // Prefer an already installed official dsh command. This is exactly the package
+    // published by deepseek-ai/deepseek-harness, with TuringDesk only supplying the
+    // process lifetime and WebView2 shell.
+    const std::wstring dsh = ResolvePath(L"dsh.cmd");
+    if (!dsh.empty()) {
+        return {ComSpecPath(), BuildCmdLaunchCommand(dsh, kHarnessArgs)};
     }
 
-    const std::wstring npx = ResolveNpxPath();
-    if (npx.empty()) return {};
-
-    LaunchSpec spec;
-    spec.application = ComSpecPath();
-    spec.commandLine = BuildNpxLaunchCommandFor(npx);
-    spec.bundledNodeDirectory = BundledNodeDirectory();
-    return spec;
-}
-
-std::vector<wchar_t> BuildChildEnvironment(const fs::path& bundledNodeDirectory) {
-    if (bundledNodeDirectory.empty()) return {};
-
-    LPWCH environment = GetEnvironmentStringsW();
-    if (!environment) return {};
-
-    std::vector<std::wstring> entries;
-    std::wstring existingPath;
-    for (const wchar_t* cursor = environment; *cursor != L'\0'; cursor += std::wcslen(cursor) + 1) {
-        std::wstring entry(cursor);
-        const std::size_t equals = entry.find(L'=', entry.starts_with(L'=') ? 1 : 0);
-        if (equals != std::wstring::npos) {
-            const std::wstring name = entry.substr(0, equals);
-            if (_wcsicmp(name.c_str(), L"PATH") == 0) {
-                existingPath = entry.substr(equals + 1);
-                continue;
-            }
-        }
-        entries.push_back(std::move(entry));
+    // Otherwise use the official README path: npx @deepseek-ai/dsh web.
+    // npx owns its own npm cache and package lifecycle; TuringDesk does not copy,
+    // vendor, rebuild, or maintain a private DeepSeek Harness node_modules tree.
+    const std::wstring npx = ResolvePath(L"npx.cmd");
+    if (!npx.empty()) {
+        return {ComSpecPath(), BuildOfficialNpxCommandFor(npx)};
     }
-    FreeEnvironmentStringsW(environment);
 
-    std::wstring pathEntry = L"PATH=" + bundledNodeDirectory.wstring();
-    if (!existingPath.empty()) pathEntry += L";" + existingPath;
-    entries.push_back(std::move(pathEntry));
-
-    std::sort(entries.begin(), entries.end(), [](const std::wstring& left, const std::wstring& right) {
-        return _wcsicmp(left.c_str(), right.c_str()) < 0;
-    });
-
-    std::vector<wchar_t> block;
-    std::size_t characters = 1;
-    for (const auto& entry : entries) characters += entry.size() + 1;
-    block.reserve(characters);
-    for (const auto& entry : entries) {
-        block.insert(block.end(), entry.begin(), entry.end());
-        block.push_back(L'\0');
-    }
-    block.push_back(L'\0');
-    return block;
+    return {};
 }
 
 bool ResponseContainsHarnessBootManifest(HINTERNET request) {
@@ -260,10 +181,6 @@ bool ProbeHarnessHttp() {
                                 WINHTTP_HEADER_NAME_BY_INDEX,
                                 &status, &size, WINHTTP_NO_HEADER_INDEX) &&
             status == 200) {
-            // A bare 200 on port 3080 is not sufficient: another process could
-            // own the port, or Harness may have returned the shell before its
-            // production boot payload is composed. Official dsh web injects
-            // window.__DSH_BOOT__ into the index when the Web UI is truly ready.
             ready = ResponseContainsHarnessBootManifest(request);
         }
     }
@@ -309,7 +226,7 @@ bool HarnessProcessManager::Start() {
 
     const LaunchSpec launch = ResolveLaunchSpec();
     if (!launch.Valid()) {
-        impl_->lastError = L"未找到 Harness 运行时。完整安装包应包含 HarnessRuntime\\Node 与 HarnessRuntime\\Dsh。";
+        impl_->lastError = L"未找到 Node.js / npx。TuringDesk 直接运行 DeepSeek 官方 @deepseek-ai/dsh；请先安装 Node.js。";
         return false;
     }
 
@@ -359,7 +276,6 @@ bool HarnessProcessManager::Start() {
 
     std::vector<wchar_t> commandBuffer(launch.commandLine.begin(), launch.commandLine.end());
     commandBuffer.push_back(L'\0');
-    std::vector<wchar_t> environmentBlock = BuildChildEnvironment(launch.bundledNodeDirectory);
 
     STARTUPINFOW startup{};
     startup.cb = sizeof(startup);
@@ -371,10 +287,9 @@ bool HarnessProcessManager::Start() {
 
     PROCESS_INFORMATION processInfo{};
     const std::wstring home = UserHomeDirectory();
-    const DWORD flags = CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT | CREATE_SUSPENDED;
-    LPVOID childEnvironment = environmentBlock.empty() ? nullptr : environmentBlock.data();
+    const DWORD flags = CREATE_NO_WINDOW | CREATE_SUSPENDED;
     const BOOL created = CreateProcessW(launch.application.c_str(), commandBuffer.data(), nullptr, nullptr, TRUE, flags,
-                                        childEnvironment, home.empty() ? nullptr : home.c_str(), &startup, &processInfo);
+                                        nullptr, home.empty() ? nullptr : home.c_str(), &startup, &processInfo);
     const DWORD createError = created ? ERROR_SUCCESS : GetLastError();
     CloseHandle(inputHandle);
     CloseHandle(logHandle);
@@ -454,7 +369,7 @@ bool HarnessProcessManager::WaitUntilReady(DWORD timeoutMs) {
         Sleep(100);
     } while (GetTickCount64() - start < timeoutMs);
 
-    impl_->lastError = L"等待 Harness Web UI 超时（" + DefaultUrl() + L"） · 日志：" + LogPath();
+    impl_->lastError = L"等待 DeepSeek 官方 Harness Web UI 超时（" + DefaultUrl() + L"） · 日志：" + LogPath();
     return false;
 }
 
@@ -463,10 +378,6 @@ const std::wstring& HarnessProcessManager::LastError() const {
 }
 
 std::wstring HarnessProcessManager::DefaultUrl() {
-    // Harness currently has a Chromium 151 Origin/Host regression when opened
-    // through the literal 127.0.0.1 authority. localhost resolves to the same
-    // loopback listener while preserving the browser authority expected by its
-    // browser-trust fence.
     return L"http://localhost:3080";
 }
 
@@ -478,14 +389,12 @@ std::wstring HarnessProcessManager::LogPath() {
 std::wstring HarnessProcessManager::BuildLaunchCommand() {
     const LaunchSpec resolved = ResolveLaunchSpec();
     if (resolved.Valid()) return resolved.commandLine;
-    return BuildNpxLaunchCommandFor(L"npx.cmd");
+    return BuildOfficialNpxCommandFor(L"npx.cmd");
 }
 
 bool HarnessProcessManager::SelfTest() {
-    const std::wstring directNode = L"C:\\Program Files\\TuringDesk\\HarnessRuntime\\Node\\node.exe";
-    const std::wstring directBin = L"C:\\Program Files\\TuringDesk\\HarnessRuntime\\Dsh\\node_modules\\@deepseek-ai\\dsh\\lib\\bin.js";
-    const std::wstring directCommand = L"\"" + directNode + L"\" \"" + directBin + L"\" web" + kHarnessBindArgs;
-    const std::wstring npxCommand = BuildNpxLaunchCommandFor(L"C:\\Program Files\\TuringDesk\\HarnessRuntime\\Node\\npx.cmd");
+    const std::wstring npxCommand = BuildOfficialNpxCommandFor(L"C:\\Program Files\\nodejs\\npx.cmd");
+    const std::wstring dshCommand = BuildCmdLaunchCommand(L"C:\\Users\\test\\AppData\\Roaming\\npm\\dsh.cmd", kHarnessArgs);
 
     const auto bindsOnlyLoopback = [](const std::wstring& command) {
         return command.find(L"--host 127.0.0.1") != std::wstring::npos &&
@@ -495,12 +404,13 @@ bool HarnessProcessManager::SelfTest() {
     };
 
     return DefaultUrl() == L"http://localhost:3080" &&
-           directCommand.find(L"node.exe\"") != std::wstring::npos &&
-           directCommand.find(L"@deepseek-ai\\dsh\\lib\\bin.js") != std::wstring::npos &&
-           bindsOnlyLoopback(directCommand) &&
            npxCommand.find(kHarnessPackage) != std::wstring::npos &&
+           npxCommand.find(L"--no-open") != std::wstring::npos &&
            npxCommand.find(L"/d /s /c") != std::wstring::npos &&
            bindsOnlyLoopback(npxCommand) &&
+           dshCommand.find(L"dsh.cmd") != std::wstring::npos &&
+           dshCommand.find(L"--no-open") != std::wstring::npos &&
+           bindsOnlyLoopback(dshCommand) &&
            std::string_view(kHarnessBootMarker) == "window.__DSH_BOOT__" &&
            !LogPath().empty();
 }
