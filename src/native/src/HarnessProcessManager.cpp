@@ -1,5 +1,6 @@
 #include "turingdesk/HarnessProcessManager.h"
 #include <winhttp.h>
+#include <algorithm>
 #include <filesystem>
 #include <iterator>
 #include <string>
@@ -100,17 +101,11 @@ std::wstring BuildOfficialNpxCommandFor(const std::wstring& npxPath) {
 }
 
 LaunchSpec ResolveLaunchSpec() {
-    // Prefer an already installed official dsh command. This is exactly the package
-    // published by deepseek-ai/deepseek-harness, with TuringDesk only supplying the
-    // process lifetime and WebView2 shell.
     const std::wstring dsh = ResolvePath(L"dsh.cmd");
     if (!dsh.empty()) {
         return {ComSpecPath(), BuildCmdLaunchCommand(dsh, kHarnessArgs)};
     }
 
-    // Otherwise use the official README path: npx @deepseek-ai/dsh web.
-    // npx owns its own npm cache and package lifecycle; TuringDesk does not copy,
-    // vendor, rebuild, or maintain a private DeepSeek Harness node_modules tree.
     const std::wstring npx = ResolvePath(L"npx.cmd");
     if (!npx.empty()) {
         return {ComSpecPath(), BuildOfficialNpxCommandFor(npx)};
