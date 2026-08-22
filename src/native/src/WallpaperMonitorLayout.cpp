@@ -9,6 +9,11 @@ namespace {
 
 using GetDpiForMonitorFn = HRESULT (WINAPI*)(HMONITOR, int, UINT*, UINT*);
 
+struct EnumContext {
+    MonitorTopology* topology{};
+    bool first{true};
+};
+
 void QueryMonitorDpi(HMONITOR monitor, UINT& dpiX, UINT& dpiY) {
     dpiX = 96;
     dpiY = 96;
@@ -53,11 +58,13 @@ bool MonitorTopology::Valid() const noexcept {
 
 MonitorTopology QueryMonitorTopology() {
     MonitorTopology topology;
-    bool first = true;
+    EnumContext context{&topology, true};
 
     EnumDisplayMonitors(nullptr, nullptr,
         [](HMONITOR monitor, HDC, LPRECT, LPARAM raw) -> BOOL {
-            auto* target = reinterpret_cast<std::pair<MonitorTopology*, bool*>*>(raw);
+            auto* target = reinterpret_cast<EnumContext*>(raw);
+            if (!target || !target->topology) return FALSE;
+
             MONITORINFOEXW info{};
             info.cbSize = sizeof(info);
             if (!GetMonitorInfoW(monitor, &info)) return TRUE;
@@ -69,20 +76,20 @@ MonitorTopology QueryMonitorTopology() {
             item.deviceName = info.szDevice;
             QueryMonitorDpi(monitor, item.dpiX, item.dpiY);
 
-            if (*target->second) {
-                target->first->virtualBounds = item.desktopRect;
-                *target->second = false;
+            if (target->first) {
+                target->topology->virtualBounds = item.desktopRect;
+                target->first = false;
             } else {
-                target->first->virtualBounds.left = std::min(target->first->virtualBounds.left, item.desktopRect.left);
-                target->first->virtualBounds.top = std::min(target->first->virtualBounds.top, item.desktopRect.top);
-                target->first->virtualBounds.right = std::max(target->first->virtualBounds.right, item.desktopRect.right);
-                target->first->virtualBounds.bottom = std::max(target->first->virtualBounds.bottom, item.desktopRect.bottom);
+                target->topology->virtualBounds.left = std::min(target->topology->virtualBounds.left, item.desktopRect.left);
+                target->topology->virtualBounds.top = std::min(target->topology->virtualBounds.top, item.desktopRect.top);
+                target->topology->virtualBounds.right = std::max(target->topology->virtualBounds.right, item.desktopRect.right);
+                target->topology->virtualBounds.bottom = std::max(target->topology->virtualBounds.bottom, item.desktopRect.bottom);
             }
 
-            if (item.primary) target->first->primaryBounds = item.desktopRect;
-            target->first->monitors.push_back(std::move(item));
+            if (item.primary) target->topology->primaryBounds = item.desktopRect;
+            target->topology->monitors.push_back(std::move(item));
             return TRUE;
-        }, reinterpret_cast<LPARAM>(&std::pair<MonitorTopology*, bool*>{&topology, &first}));
+        }, reinterpret_cast<LPARAM>(&context));
 
     if (!topology.monitors.empty() &&
         (topology.primaryBounds.right <= topology.primaryBounds.left ||
@@ -155,7 +162,9 @@ RECT DesktopRectToParentClient(HWND parent, const RECT& desktopRect) noexcept {
         {desktopRect.left, desktopRect.top},
         {desktopRect.right, desktopRect.bottom},
     };
-    if (MapWindowPoints(nullptr, parent, points, 2) == 0 && GetLastError() != ERROR_SUCCESS) return {};
+    SetLastError(ERROR_SUCCESS);
+    const int mapped = MapWindowPoints(nullptr, parent, points, 2);
+    if (mapped == 0 && GetLastError() != ERROR_SUCCESS) return {};
     RECT result{points[0].x, points[0].y, points[1].x, points[1].y};
     return NormalizeBounds(result);
 }
