@@ -57,8 +57,21 @@ function Stop-OwnedProcesses {
     Start-Sleep -Milliseconds 250
 }
 
-function Expand-Zip([string]$Archive, [string]$Destination) {
+function Expand-BundleArchive([string]$Archive, [string]$Destination) {
     New-Item -ItemType Directory -Force -Path $Destination | Out-Null
+    if ($Archive.EndsWith('.zst', [StringComparison]::OrdinalIgnoreCase)) {
+        if (-not (Test-Path $script:NodeExe -PathType Leaf)) {
+            throw "Node 24 is required to materialize the vendored Zstd payload: $Archive"
+        }
+        $outputName = [IO.Path]::GetFileNameWithoutExtension($Archive)
+        $outputPath = Join-Path $Destination $outputName
+        $js = "const fs=require('node:fs');const z=require('node:zlib');const [src,dst]=process.argv.slice(1);fs.writeFileSync(dst,z.zstdDecompressSync(fs.readFileSync(src)));"
+        & $script:NodeExe -e $js $Archive $outputPath
+        if ($LASTEXITCODE -ne 0 -or -not (Test-Path $outputPath -PathType Leaf)) {
+            throw "Failed to materialize vendored Zstd payload: $Archive"
+        }
+        return
+    }
     & tar.exe -xf $Archive -C $Destination
     if ($LASTEXITCODE -ne 0) { throw "Failed to extract vendored archive: $Archive" }
 }
@@ -135,7 +148,7 @@ New-Item -ItemType Directory -Force -Path $RuntimeDir | Out-Null
 # Materialize goz first and preserve an unchanged running service binary.
 $gozTemp = Join-Path $env:TEMP ('TuringDesk-Goz-' + [guid]::NewGuid().ToString('N'))
 try {
-    Expand-Zip $gozArchive $gozTemp
+    Expand-BundleArchive $gozArchive $gozTemp
     $newGoz = Get-ChildItem $gozTemp -Filter 'goz.exe' -File -Recurse | Select-Object -First 1
     $newGozd = Get-ChildItem $gozTemp -Filter 'gozd.exe' -File -Recurse | Select-Object -First 1
     if (-not $newGoz -or -not $newGozd) { throw 'Vendored goz archive is incomplete' }
@@ -162,7 +175,7 @@ Remove-Item $CodexDir -Recurse -Force -ErrorAction SilentlyContinue
 
 $nodeTemp = Join-Path $env:TEMP ('TuringDesk-Node-' + [guid]::NewGuid().ToString('N'))
 try {
-    Expand-Zip $nodeArchive $nodeTemp
+    Expand-BundleArchive $nodeArchive $nodeTemp
     $nodeRoot = Get-ChildItem $nodeTemp -Directory | Select-Object -First 1
     if (-not $nodeRoot -or -not (Test-Path (Join-Path $nodeRoot.FullName 'node.exe'))) { throw 'Vendored Node archive layout is invalid' }
     New-Item -ItemType Directory -Force -Path $NodeDir | Out-Null
@@ -170,7 +183,7 @@ try {
 }
 finally { Remove-Item $nodeTemp -Recurse -Force -ErrorAction SilentlyContinue }
 
-Expand-Zip $harnessArchive $NodeDir
+Expand-BundleArchive $harnessArchive $NodeDir
 if (-not (Test-Path $NodeExe) -or -not (Test-Path $DshBin)) { throw 'Bundled DeepSeek Harness runtime is incomplete' }
 & $NodeExe --version | Out-Host
 & $NodeExe $DshBin --help | Out-Host
@@ -178,9 +191,9 @@ if ($LASTEXITCODE -ne 0) { throw 'Bundled DeepSeek Harness CLI failed to start' 
 
 $codexTemp = Join-Path $env:TEMP ('TuringDesk-Codex-' + [guid]::NewGuid().ToString('N'))
 try {
-    Expand-Zip $codexArchive $codexTemp
+    Expand-BundleArchive $codexArchive $codexTemp
     $found = Get-ChildItem $codexTemp -Filter 'codex-aarch64-pc-windows-msvc.exe' -File -Recurse | Select-Object -First 1
-    if (-not $found) { throw 'Vendored full Codex CLI archive is incomplete' }
+    if (-not $found) { throw 'Vendored full Codex CLI payload is incomplete' }
     New-Item -ItemType Directory -Force -Path $CodexDir | Out-Null
     Copy-Item $found.FullName $CodexExe -Force
 }
