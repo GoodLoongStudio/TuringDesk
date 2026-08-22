@@ -13,7 +13,7 @@ permissions:
 
 concurrency:
   group: vendor-arm64-runtime
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   announce:
