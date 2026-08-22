@@ -21,6 +21,7 @@ Already present on `main`:
 - Adaptive wallpaper performance policy with configurable FPS, fullscreen/maximized actions, Remote Desktop, battery saver, lock and idle handling.
 - Video loop, mute/volume, playback rate, precise seek/restart and bounded recovery synchronized across monitor surfaces.
 - Persistent local wallpaper library with import, generated thumbnails, search, favorites, recent history and optional managed copies.
+- Persistent Playlist / Schedule / Profile automation with sequential/random rotation, day/time windows and full wallpaper configuration snapshots.
 
 ## Delivery order
 
@@ -79,15 +80,21 @@ Each item is completed in `main`, with native self-test/CI coverage added or upd
   - [x] Assignment persistence and independent resolution participate in `TuringDeskWallpaper --self-test`.
   - [x] ARM64/x64 native CI green at `0c532f38`.
 
-- [ ] 7. Playlists, schedules and profiles
-  - Timed rotation, random/sequential playlists.
-  - Time-of-day and day-of-week schedules.
-  - Named profiles that bundle wallpaper + layout + performance settings.
+- [x] 7. Playlists, schedules and profiles
+  - [x] Timed sequential/random playlist rotation with persisted cursor and last-rotation state.
+  - [x] Time-of-day and day-of-week schedules, including cross-midnight windows.
+  - [x] Named Profiles bundle wallpaper, layout, scaling/focal alignment, FPS/performance rules and video settings.
+  - [x] Native automation manager supports save/apply/delete Profile, edit/activate/advance Playlist and create/delete Schedule.
+  - [x] Main wallpaper runtime evaluates automation once per second and reports the active Schedule/last automation action in diagnostics.
+  - [x] Automation persistence/time-window/rotation behavior participates in `TuringDeskWallpaper --self-test`.
+  - [x] ARM64/x64 native CI green at `4378a20f`.
 
 - [ ] 8. Application rules
-  - Per-executable pause/stop/throttle rules.
-  - Game/fullscreen defaults and user overrides.
-  - Rule diagnostics showing which rule is active.
+  - [x] Persistent per-executable rule model with enabled state, trigger, action and priority.
+  - [x] Trigger modes: foreground, running, fullscreen and maximized.
+  - [x] Explicit Continue/Throttle/Pause/Stop rules override generic fullscreen/maximized defaults while system protection remains stronger.
+  - [x] Native application-rule manager supports EXE picker, recent-foreground capture, live-match diagnostics and rule CRUD.
+  - [ ] Native self-test/CI green for the integrated application-rule runtime and UI.
 
 - [ ] 9. Web wallpaper backend
   - Isolated WebView2 wallpaper process/window.
