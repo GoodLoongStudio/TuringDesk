@@ -94,7 +94,10 @@ std::wstring BuildDirectDshCommand(const std::wstring& nodePath, const std::wstr
 }
 
 std::wstring BuildDirectNpxCommand(const std::wstring& nodePath, const std::wstring& npxCli) {
-    return Quote(nodePath) + L" " + Quote(npxCli) + L" --yes --loglevel=notice " +
+    // The official Windows first run can spend several minutes resolving and
+    // populating npm's cache before port 3080 exists. Keep npm's HTTP/timing
+    // diagnostics visible in harness.log instead of making that work look frozen.
+    return Quote(nodePath) + L" " + Quote(npxCli) + L" --yes --loglevel=http --timing " +
            std::wstring(kHarnessPackage) + L" " + kHarnessArgs;
 }
 
@@ -296,9 +299,6 @@ bool HarnessProcessManager::Start() {
         return false;
     }
 
-    // Always emit our own launch diagnostics before the upstream process starts.
-    // Therefore an empty harness.log itself is now actionable: it means the host
-    // never reached process creation rather than that npm happened to be quiet.
     WriteLogLine(logHandle, L"[TuringDesk] DeepSeek Harness launch requested");
     WriteLogLine(logHandle, L"[TuringDesk] mode: " + launch.mode);
     WriteLogLine(logHandle, L"[TuringDesk] application: " + launch.application);
@@ -393,6 +393,13 @@ bool HarnessProcessManager::Running() const {
     return GetExitCodeProcess(impl_->process, &exitCode) && exitCode == STILL_ACTIVE;
 }
 
+DWORD HarnessProcessManager::ExitCode() const {
+    if (!impl_ || !impl_->process) return STILL_ACTIVE;
+    DWORD exitCode = STILL_ACTIVE;
+    if (!GetExitCodeProcess(impl_->process, &exitCode)) return STILL_ACTIVE;
+    return exitCode;
+}
+
 bool HarnessProcessManager::ServiceReady() const {
     return ProbeHarnessHttp();
 }
@@ -403,7 +410,13 @@ bool HarnessProcessManager::WaitUntilReady(DWORD timeoutMs) {
         return true;
     }
     if (!Running()) {
-        if (impl_->lastError.empty()) impl_->lastError = L"Harness 未运行";
+        const DWORD exitCode = ExitCode();
+        if (exitCode != STILL_ACTIVE) {
+            impl_->lastError = L"Harness 在 Web UI 就绪前退出，ExitCode=" + std::to_wstring(exitCode) +
+                               L" · 日志：" + LogPath();
+        } else if (impl_->lastError.empty()) {
+            impl_->lastError = L"Harness 未运行";
+        }
         return false;
     }
 
@@ -414,8 +427,7 @@ bool HarnessProcessManager::WaitUntilReady(DWORD timeoutMs) {
             return true;
         }
         if (!Running()) {
-            DWORD exitCode = 0;
-            GetExitCodeProcess(impl_->process, &exitCode);
+            const DWORD exitCode = ExitCode();
             impl_->lastError = L"Harness 在 Web UI 就绪前退出，ExitCode=" + std::to_wstring(exitCode) +
                                L" · 日志：" + LogPath();
             return false;
@@ -443,7 +455,7 @@ std::wstring HarnessProcessManager::LogPath() {
 std::wstring HarnessProcessManager::BuildLaunchCommand() {
     const LaunchSpec resolved = ResolveLaunchSpec();
     if (resolved.Valid()) return resolved.commandLine;
-    return L"node.exe npx-cli.js --yes @deepseek-ai/dsh web --no-open --host 127.0.0.1 --port 3080";
+    return L"node.exe npx-cli.js --yes --loglevel=http --timing @deepseek-ai/dsh web --no-open --host 127.0.0.1 --port 3080";
 }
 
 bool HarnessProcessManager::SelfTest() {
@@ -463,6 +475,8 @@ bool HarnessProcessManager::SelfTest() {
     return DefaultUrl() == L"http://localhost:3080" &&
            npxCommand.find(L"npx-cli.js") != std::wstring::npos &&
            npxCommand.find(kHarnessPackage) != std::wstring::npos &&
+           npxCommand.find(L"--loglevel=http") != std::wstring::npos &&
+           npxCommand.find(L"--timing") != std::wstring::npos &&
            npxCommand.find(L"--no-open") != std::wstring::npos &&
            npxCommand.find(L"cmd.exe") == std::wstring::npos &&
            bindsOnlyLoopback(npxCommand) &&
