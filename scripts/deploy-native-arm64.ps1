@@ -65,7 +65,46 @@ function Test-Binary([string]$Exe) {
     Step "Running Native Search self-test"
     $Process = Start-Process -FilePath $Exe -ArgumentList "--self-test" -Wait -PassThru
     if ($Process.ExitCode -ne 0) {
-        throw "Self-test failed with exit code $($Process.ExitCode)"
+        throw "Search self-test failed with exit code $($Process.ExitCode)"
+    }
+}
+
+function Test-WallpaperBinary([string]$Exe) {
+    Step "Running Native Wallpaper self-test"
+    $Process = Start-Process -FilePath $Exe -ArgumentList "--self-test" -Wait -PassThru
+    if ($Process.ExitCode -ne 0) {
+        throw "Wallpaper self-test failed with exit code $($Process.ExitCode)"
+    }
+}
+
+function Install-WallpaperShortcut([string]$WallpaperExe) {
+    try {
+        $Programs = Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs\TuringDesk"
+        New-Item -ItemType Directory -Force -Path $Programs | Out-Null
+        $ShortcutPath = Join-Path $Programs "TuringDesk 壁纸设置.lnk"
+        $Shell = New-Object -ComObject WScript.Shell
+        $Shortcut = $Shell.CreateShortcut($ShortcutPath)
+        $Shortcut.TargetPath = $WallpaperExe
+        $Shortcut.Arguments = "--settings"
+        $Shortcut.WorkingDirectory = $DeployDir
+        $Shortcut.Description = "TuringDesk Wallpaper Settings"
+        $Shortcut.Save()
+        Write-Host "Wallpaper shortcut installed: $ShortcutPath" -ForegroundColor DarkGray
+    }
+    catch {
+        Write-Host "WARNING: Unable to create Wallpaper shortcut: $($_.Exception.Message)" -ForegroundColor Yellow
+    }
+}
+
+function Should-ShowWallpaperSettings {
+    $Config = Join-Path $env:LOCALAPPDATA "TuringDesk\wallpaper.ini"
+    if (-not (Test-Path $Config)) { return $true }
+    try {
+        $Version = Select-String -Path $Config -Pattern '^Version=2$' -SimpleMatch:$false -ErrorAction Stop
+        return -not [bool]$Version
+    }
+    catch {
+        return $true
     }
 }
 
@@ -272,6 +311,7 @@ else {
 $Downloaded = Download-Artifact -RunId $RunId
 try {
     Test-Binary $Downloaded.Exe
+    Test-WallpaperBinary $Downloaded.WallpaperExe
 
     Step "Deploying to $DeployDir"
     Stop-DeployedInstance
@@ -281,17 +321,26 @@ try {
     $DeployedWallpaper = Join-Path $DeployDir $WallpaperExeName
     Copy-WithRetry -Source $Downloaded.Exe -Destination $DeployedExe
     Copy-WithRetry -Source $Downloaded.WallpaperExe -Destination $DeployedWallpaper
+    Test-WallpaperBinary $DeployedWallpaper
+    Install-WallpaperShortcut $DeployedWallpaper
 
     $EverythingExe = Deploy-BundledEverything -ArtifactRoot $Downloaded.Root
     Ensure-EverythingService -EverythingExe $EverythingExe
     Ensure-CodexRuntime | Out-Null
 
+    $ShowWallpaperSettings = Should-ShowWallpaperSettings
     Step "Starting TuringDesk Wallpaper"
-    Start-Process $DeployedWallpaper
+    if ($ShowWallpaperSettings) {
+        Start-Process -FilePath $DeployedWallpaper -ArgumentList "--settings"
+    }
+    else {
+        Start-Process -FilePath $DeployedWallpaper
+    }
 
     Step "Starting TuringDesk Native Search"
     Start-Process $DeployedExe
     Write-Host "`nDeployment complete. Press Alt+Space to open Search." -ForegroundColor Green
+    Write-Host "Search 'TuringDesk 壁纸设置' or use the wallpaper tray icon to change scenes." -ForegroundColor Green
     Write-Host "Wallpaper settings: $DeployedWallpaper --settings" -ForegroundColor DarkGray
     Write-Host "Path: $DeployDir"
 }
