@@ -17,10 +17,10 @@ constexpr int kAiButtonId = 3102;
 constexpr int kHarnessButtonId = 3103;
 constexpr int kCloseButtonId = 3104;
 constexpr int kStatusLabelId = 3105;
-constexpr DWM_WINDOW_ATTRIBUTE kDwmUseImmersiveDarkMode = static_cast<DWM_WINDOW_ATTRIBUTE>(20);
-constexpr DWM_WINDOW_ATTRIBUTE kDwmWindowCornerPreference = static_cast<DWM_WINDOW_ATTRIBUTE>(33);
-constexpr DWM_WINDOW_ATTRIBUTE kDwmBorderColor = static_cast<DWM_WINDOW_ATTRIBUTE>(34);
-constexpr DWM_WINDOW_ATTRIBUTE kDwmSystemBackdropType = static_cast<DWM_WINDOW_ATTRIBUTE>(38);
+constexpr DWMWINDOWATTRIBUTE kDwmUseImmersiveDarkMode = static_cast<DWMWINDOWATTRIBUTE>(20);
+constexpr DWMWINDOWATTRIBUTE kDwmWindowCornerPreference = static_cast<DWMWINDOWATTRIBUTE>(33);
+constexpr DWMWINDOWATTRIBUTE kDwmBorderColor = static_cast<DWMWINDOWATTRIBUTE>(34);
+constexpr DWMWINDOWATTRIBUTE kDwmSystemBackdropType = static_cast<DWMWINDOWATTRIBUTE>(38);
 
 HWND gCenterWindow{};
 
