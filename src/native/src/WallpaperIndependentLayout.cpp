@@ -3,6 +3,7 @@
 #include <windows.h>
 
 #include <algorithm>
+#include <cwctype>
 #include <fstream>
 #include <system_error>
 
@@ -33,6 +34,22 @@ std::wstring SceneKeyForLibraryId(std::wstring_view id) {
     return L"aurora";
 }
 
+bool LooksLikeHttps(std::wstring_view value) noexcept {
+    constexpr std::wstring_view prefix = L"https://";
+    if (value.size() <= prefix.size()) return false;
+    for (std::size_t i = 0; i < prefix.size(); ++i) {
+        if (std::towlower(value[i]) != prefix[i]) return false;
+    }
+    return true;
+}
+
+bool SourceAvailable(const WallpaperLibraryItem& item) {
+    if (item.kind == LibraryWallpaperKind::Scene) return true;
+    if (item.kind == LibraryWallpaperKind::Web && LooksLikeHttps(item.source.wstring())) return true;
+    std::error_code ec;
+    return !item.source.empty() && fs::exists(item.source, ec) && fs::is_regular_file(item.source, ec);
+}
+
 } // namespace
 
 std::vector<ResolvedMonitorWallpaper> ResolveIndependentWallpapers(
@@ -60,24 +77,15 @@ std::vector<ResolvedMonitorWallpaper> ResolveIndependentWallpapers(
             result.back().wallpaperId = *assignedId;
             continue;
         }
-
-        if (item->kind == LibraryWallpaperKind::Web) {
-            result.push_back(MakeFallback(monitor, region, globalFallback, L"Web 壁纸后端尚未启用"));
-            result.back().wallpaperId = item->id;
-            continue;
-        }
         if (item->kind == LibraryWallpaperKind::Unknown) {
             result.push_back(MakeFallback(monitor, region, globalFallback, L"壁纸类型无法识别"));
             result.back().wallpaperId = item->id;
             continue;
         }
-        if (item->kind != LibraryWallpaperKind::Scene) {
-            std::error_code ec;
-            if (item->source.empty() || !fs::exists(item->source, ec) || !fs::is_regular_file(item->source, ec)) {
-                result.push_back(MakeFallback(monitor, region, globalFallback, L"壁纸源文件已离线或被移动"));
-                result.back().wallpaperId = item->id;
-                continue;
-            }
+        if (!SourceAvailable(*item)) {
+            result.push_back(MakeFallback(monitor, region, globalFallback, L"壁纸源文件已离线、被移动或 URL 无效"));
+            result.back().wallpaperId = item->id;
+            continue;
         }
 
         ResolvedMonitorWallpaper resolved;
@@ -98,6 +106,8 @@ std::vector<ResolvedMonitorWallpaper> ResolveIndependentWallpapers(
             resolved.kind = ResolvedWallpaperKind::Video;
             break;
         case LibraryWallpaperKind::Web:
+            resolved.kind = ResolvedWallpaperKind::Web;
+            break;
         case LibraryWallpaperKind::Unknown:
             break;
         }
@@ -109,6 +119,12 @@ std::vector<ResolvedMonitorWallpaper> ResolveIndependentWallpapers(
 bool IndependentLayoutHasVideo(const std::vector<ResolvedMonitorWallpaper>& resolved) noexcept {
     return std::any_of(resolved.begin(), resolved.end(), [](const auto& item) {
         return item.kind == ResolvedWallpaperKind::Video;
+    });
+}
+
+bool IndependentLayoutHasWeb(const std::vector<ResolvedMonitorWallpaper>& resolved) noexcept {
+    return std::any_of(resolved.begin(), resolved.end(), [](const auto& item) {
+        return item.kind == ResolvedWallpaperKind::Web;
     });
 }
 
@@ -154,9 +170,9 @@ bool SelfTestIndependentWallpaperResolution() {
     if (resolved.size() == 3) {
         ok = ok && !resolved[0].fallback && resolved[0].kind == ResolvedWallpaperKind::Scene && resolved[0].sceneKey == L"neon";
         ok = ok && resolved[1].fallback && resolved[1].sceneKey == L"aurora" && !resolved[1].fallbackReason.empty();
-        ok = ok && resolved[2].fallback && !resolved[2].fallbackReason.empty();
+        ok = ok && !resolved[2].fallback && resolved[2].kind == ResolvedWallpaperKind::Web && !resolved[2].source.empty();
     }
-    ok = ok && !IndependentLayoutHasVideo(resolved);
+    ok = ok && !IndependentLayoutHasVideo(resolved) && IndependentLayoutHasWeb(resolved);
 
     fs::remove_all(root, ec);
     return ok;
