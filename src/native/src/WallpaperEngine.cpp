@@ -10,6 +10,8 @@
 #include "turingdesk/WallpaperMonitorLayout.h"
 #include "turingdesk/WallpaperScaling.h"
 #include "turingdesk/WallpaperPerformancePolicy.h"
+#include "turingdesk/WallpaperLibrary.h"
+#include "turingdesk/WallpaperLibraryWindow.h"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -356,6 +358,7 @@ public:
         if (FAILED(CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER,
                                     IID_PPV_ARGS(wicFactory_.GetAddressOf())))) return false;
 
+        InitializeLibrary();
         taskbarCreated_ = RegisterWindowMessageW(L"TaskbarCreated");
         topology_ = turingdesk::wallpaper::QueryMonitorTopology();
 
@@ -443,7 +446,7 @@ public:
         SendMessageW(sceneCombo_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Quiet Grid · 静谧网格"));
         SendMessageW(sceneCombo_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"图片壁纸"));
         SendMessageW(sceneCombo_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"视频壁纸 · Media Foundation"));
-        imageButton_ = CreateWindowExW(0, L"BUTTON", L"选择图片 / 视频…", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+        imageButton_ = CreateWindowExW(0, L"BUTTON", L"打开壁纸库…", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
                                        486, 58, 210, 30, settings_, ControlId(kImageButtonId), instance_, nullptr);
 
         label(L"多屏布局", 20, 106, 88, 24);
@@ -554,6 +557,77 @@ public:
     }
 
 private:
+    void InitializeLibrary() {
+        libraryError_.clear();
+        if (!library_.Load(&libraryError_)) return;
+        std::wstring error;
+        library_.UpsertScene(L"scene-aurora", L"Aurora Flow", &error);
+        if (libraryError_.empty() && !error.empty()) libraryError_ = error;
+        error.clear();
+        library_.UpsertScene(L"scene-neon", L"Neon Flow", &error);
+        if (libraryError_.empty() && !error.empty()) libraryError_ = error;
+        error.clear();
+        library_.UpsertScene(L"scene-grid", L"Quiet Grid", &error);
+        if (libraryError_.empty() && !error.empty()) libraryError_ = error;
+
+        if (!config_.image.empty() && fs::exists(config_.image)) {
+            error.clear();
+            library_.ImportFile(config_.image, {}, &error);
+            if (libraryError_.empty() && !error.empty()) libraryError_ = error;
+        }
+        if (!config_.video.empty() && fs::exists(config_.video)) {
+            error.clear();
+            library_.ImportFile(config_.video, {}, &error);
+            if (libraryError_.empty() && !error.empty()) libraryError_ = error;
+        }
+    }
+
+    void ShowLibrary() {
+        if (!libraryError_.empty()) {
+            std::wstring retryError;
+            if (!library_.Load(&retryError)) {
+                libraryError_ = retryError;
+                if (status_) SetWindowTextW(status_, (L"壁纸库无法打开：" + libraryError_).c_str());
+                return;
+            }
+            libraryError_.clear();
+        }
+        libraryWindow_.Show(instance_, &library_, [this](const turingdesk::wallpaper::WallpaperLibraryItem& item) {
+            ApplyLibraryItem(item);
+        });
+    }
+
+    void ApplyLibraryItem(const turingdesk::wallpaper::WallpaperLibraryItem& item) {
+        Config next = config_;
+        next.enabled = true;
+        next.image.clear();
+        next.video.clear();
+        using Kind = turingdesk::wallpaper::LibraryWallpaperKind;
+        if (item.kind == Kind::Scene) {
+            if (_wcsicmp(item.id.c_str(), L"scene-neon") == 0) next.scene = L"neon";
+            else if (_wcsicmp(item.id.c_str(), L"scene-grid") == 0) next.scene = L"grid";
+            else next.scene = L"aurora";
+        } else if (item.kind == Kind::Image) {
+            next.scene = L"image";
+            next.image = item.source.wstring();
+        } else if (item.kind == Kind::Video) {
+            next.scene = L"video";
+            next.video = item.source.wstring();
+        } else if (item.kind == Kind::Web) {
+            libraryError_ = L"Web 壁纸已经进入统一壁纸库，但运行后端将在路线第 9 项接入。";
+            if (status_) SetWindowTextW(status_, libraryError_.c_str());
+            return;
+        } else {
+            return;
+        }
+        if (ApplyConfig(next)) {
+            std::wstring markError;
+            library_.MarkUsed(item.id, &markError);
+            if (!markError.empty()) libraryError_ = markError;
+            libraryWindow_.Refresh();
+        }
+    }
+
     HWND CreateActionCombo(int x, int y, int id) {
         HWND combo = CreateWindowExW(0, L"COMBOBOX", L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST,
                                      x, y, 176, 150, settings_, ControlId(id), instance_, nullptr);
@@ -709,7 +783,7 @@ private:
         if (message == WM_COMMAND) {
             switch (LOWORD(wParam)) {
             case kImageButtonId:
-                if (HIWORD(wParam) == BN_CLICKED) self->ChooseImage();
+                if (HIWORD(wParam) == BN_CLICKED) self->ShowLibrary();
                 return 0;
             case kVideoBackButtonId:
                 if (HIWORD(wParam) == BN_CLICKED) {
@@ -1220,6 +1294,7 @@ private:
         }
         SetRenderTimerFps(config_.fpsCap);
         RefreshSettings();
+        libraryWindow_.Refresh();
         return mounted;
     }
 
@@ -1250,30 +1325,6 @@ private:
         return true;
     }
 
-    void ChooseImage() {
-        wchar_t path[32768]{};
-        OPENFILENAMEW dialog{};
-        dialog.lStructSize = sizeof(dialog);
-        dialog.hwndOwner = settings_;
-        dialog.lpstrFile = path;
-        dialog.nMaxFile = static_cast<DWORD>(std::size(path));
-        dialog.lpstrFilter = L"图片和视频\0*.jpg;*.jpeg;*.png;*.bmp;*.mp4;*.mov;*.wmv;*.m4v\0视频\0*.mp4;*.mov;*.wmv;*.m4v\0图片\0*.jpg;*.jpeg;*.png;*.bmp\0所有文件\0*.*\0";
-        dialog.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST;
-        if (!GetOpenFileNameW(&dialog)) return;
-        const std::wstring selectedPath = path;
-        const auto extension = fs::path(selectedPath).extension().wstring();
-        const bool isVideo = _wcsicmp(extension.c_str(), L".mp4") == 0 || _wcsicmp(extension.c_str(), L".mov") == 0 ||
-                             _wcsicmp(extension.c_str(), L".wmv") == 0 || _wcsicmp(extension.c_str(), L".m4v") == 0;
-        if (isVideo) {
-            pendingVideo_ = selectedPath;
-            SendMessageW(sceneCombo_, CB_SETCURSEL, 4, 0);
-        } else {
-            pendingImage_ = selectedPath;
-            SendMessageW(sceneCombo_, CB_SETCURSEL, 3, 0);
-        }
-        if (status_) SetWindowTextW(status_, selectedPath.c_str());
-    }
-
     void ApplyFromSettings() {
         const int selected = static_cast<int>(SendMessageW(sceneCombo_, CB_GETCURSEL, 0, 0));
         const int selectedLayout = static_cast<int>(SendMessageW(layoutCombo_, CB_GETCURSEL, 0, 0));
@@ -1302,29 +1353,41 @@ private:
         next.videoMuted = SendMessageW(videoMuteCheck_, BM_GETCHECK, 0, 0) == BST_CHECKED;
         if (selectedVolume >= 0 && selectedVolume < static_cast<int>(std::size(volumeValues))) next.videoVolume = volumeValues[selectedVolume];
         if (selectedRate >= 0 && selectedRate < static_cast<int>(std::size(rateValues))) next.videoRate = rateValues[selectedRate];
-        next.image.clear();
-        next.video.clear();
 
-        if (selected == 1) next.scene = L"neon";
-        else if (selected == 2) next.scene = L"grid";
-        else if (selected == 3) {
+        if (selected == 1) {
+            next.scene = L"neon";
+            next.image.clear();
+            next.video.clear();
+        } else if (selected == 2) {
+            next.scene = L"grid";
+            next.image.clear();
+            next.video.clear();
+        } else if (selected == 3) {
             next.scene = L"image";
-            next.image = pendingImage_.empty() ? config_.image : pendingImage_;
             if (next.image.empty()) {
-                SetWindowTextW(status_, L"请先选择一张 JPG / PNG / BMP 图片。");
+                SetWindowTextW(status_, L"请从壁纸库选择或导入一张图片。");
+                ShowLibrary();
                 return;
             }
         } else if (selected == 4) {
             next.scene = L"video";
-            next.video = pendingVideo_.empty() ? config_.video : pendingVideo_;
             if (next.video.empty()) {
-                SetWindowTextW(status_, L"请先选择一个 MP4 / MOV / WMV / M4V 视频。");
+                SetWindowTextW(status_, L"请从壁纸库选择或导入一个视频。");
+                ShowLibrary();
                 return;
             }
         } else {
             next.scene = L"aurora";
+            next.image.clear();
+            next.video.clear();
         }
-        ApplyConfig(next);
+        if (ApplyConfig(next)) {
+            std::wstring markError;
+            if (next.scene == L"aurora") library_.MarkUsed(L"scene-aurora", &markError);
+            else if (next.scene == L"neon") library_.MarkUsed(L"scene-neon", &markError);
+            else if (next.scene == L"grid") library_.MarkUsed(L"scene-grid", &markError);
+            if (!markError.empty()) libraryError_ = markError;
+        }
     }
 
     void RefreshSettings() {
@@ -1391,6 +1454,8 @@ private:
                 }
                 if (!videoRecoveryNote_.empty()) status += L"\r\n恢复：" + videoRecoveryNote_;
             }
+            status += L"\r\n库：" + std::to_wstring(library_.Items().size()) + L" 项";
+            if (!libraryError_.empty()) status += L" · 库诊断：" + libraryError_;
             status += L"\r\n" + turingdesk::wallpaper::DescribeMonitorTopology(topology_);
         }
         SetWindowTextW(status_, status.c_str());
@@ -1441,6 +1506,9 @@ private:
     std::wstring pendingVideo_;
     std::wstring lastMediaError_;
     std::wstring videoRecoveryNote_;
+    std::wstring libraryError_;
+    turingdesk::wallpaper::WallpaperLibrary library_;
+    turingdesk::wallpaper::WallpaperLibraryWindow libraryWindow_;
     turingdesk::VideoWallpaperSet videoSet_;
     float time_{};
     ComPtr<ID2D1Factory> d2dFactory_;
@@ -1495,6 +1563,7 @@ int RunSelfTest(HINSTANCE instance) {
     const bool layoutGeometryOk = turingdesk::wallpaper::SelfTestMonitorLayoutGeometry();
     const bool scalingGeometryOk = turingdesk::wallpaper::SelfTestScalingGeometry();
     const bool performancePolicyOk = turingdesk::wallpaper::WallpaperPerformancePolicy::SelfTest();
+    const bool libraryOk = turingdesk::wallpaper::WallpaperLibrary::SelfTest();
     const auto topology = turingdesk::wallpaper::QueryMonitorTopology();
     const bool topologyOk = topology.Valid();
     const bool mediaFoundationOk = turingdesk::VideoWallpaperPlayer::MediaFoundationAvailable();
@@ -1507,6 +1576,7 @@ int RunSelfTest(HINSTANCE instance) {
     if (!topologyOk) return 30;
     if (!scalingGeometryOk) return 31;
     if (!performancePolicyOk) return 32;
+    if (!libraryOk) return 33;
     return mediaFoundationOk ? 0 : 28;
 }
 
