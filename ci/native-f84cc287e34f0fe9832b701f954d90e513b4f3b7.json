@@ -1,0 +1,7 @@
+{
+  "sha": "f84cc287e34f0fe9832b701f954d90e513b4f3b7",
+  "mode": "native-arm64-only",
+  "x64": "disabled",
+  "arm64": "failure",
+  "run_id": "32581377799"
+}
