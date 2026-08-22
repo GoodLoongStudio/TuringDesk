@@ -100,7 +100,7 @@ function Should-ShowWallpaperSettings {
     $Config = Join-Path $env:LOCALAPPDATA "TuringDesk\wallpaper.ini"
     if (-not (Test-Path $Config)) { return $true }
     try {
-        $Version = Select-String -Path $Config -Pattern '^Version=2$' -SimpleMatch:$false -ErrorAction Stop
+        $Version = Select-String -Path $Config -Pattern '^Version=3$' -SimpleMatch:$false -ErrorAction Stop
         return -not [bool]$Version
     }
     catch {
