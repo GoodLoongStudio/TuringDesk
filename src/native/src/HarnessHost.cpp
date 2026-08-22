@@ -38,6 +38,11 @@ std::wstring HrText(HRESULT hr) {
     return text;
 }
 
+std::wstring HarnessLogHint() {
+    const std::wstring logPath = turingdesk::HarnessProcessManager::LogPath();
+    return logPath.empty() ? std::wstring{} : L"\r\n日志：" + logPath;
+}
+
 class HarnessHost {
 public:
     explicit HarnessHost(HINSTANCE instance) : instance_(instance) {}
@@ -60,7 +65,7 @@ public:
 
         status_ = CreateWindowExW(0, L"STATIC", L"正在启动 DeepSeek Harness…",
                                   WS_CHILD | WS_VISIBLE | SS_CENTER,
-                                  24, 24, 1100, 40, hwnd_, nullptr, instance_, nullptr);
+                                  24, 24, 1100, 80, hwnd_, nullptr, instance_, nullptr);
         HFONT font = CreateFontW(-20, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
                                  DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
                                  CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
@@ -83,6 +88,7 @@ public:
             return true;
         }
 
+        SetStatus(L"正在启动 DeepSeek Harness…" + HarnessLogHint());
         readyDeadline_ = GetTickCount64() + kReadyTimeoutMs;
         SetTimer(hwnd_, kReadyTimerId, kReadyPollMs, nullptr);
         return true;
@@ -154,14 +160,14 @@ private:
 
         if (!harness_.Running()) {
             KillTimer(hwnd_, kReadyTimerId);
-            SetStatus(L"DeepSeek Harness 在 Web UI 就绪前退出。请确认已安装兼容的 Node.js。当前 Harness 要求 Node.js 22.19+ 或 24+。");
+            SetStatus(L"DeepSeek Harness 在 Web UI 就绪前退出。TuringDesk 已使用内置 Node 24 LTS；请查看启动日志定位 npm/Harness 错误。" + HarnessLogHint());
             return;
         }
 
         if (GetTickCount64() >= readyDeadline_) {
             KillTimer(hwnd_, kReadyTimerId);
             harness_.Stop();
-            SetStatus(L"DeepSeek Harness 启动超时。请检查网络、npm/npx 与 Node.js 环境后重试。");
+            SetStatus(L"DeepSeek Harness 启动超时。已停止本次 Harness 进程树，请查看启动日志。" + HarnessLogHint());
         }
     }
 
@@ -226,7 +232,7 @@ private:
         if (!status_ || !hwnd_) return;
         RECT bounds{};
         if (!GetClientRect(hwnd_, &bounds)) return;
-        SetWindowPos(status_, nullptr, 24, 24, (bounds.right - bounds.left) - 48, 64,
+        SetWindowPos(status_, nullptr, 24, 24, (bounds.right - bounds.left) - 48, 96,
                      SWP_NOZORDER | SWP_NOACTIVATE);
     }
 
