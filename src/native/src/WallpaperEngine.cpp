@@ -4,6 +4,7 @@
 #include <d2d1.h>
 #include <wincodec.h>
 #include <wrl/client.h>
+#include "turingdesk/VideoWallpaperPlayer.h"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -37,7 +38,7 @@ constexpr int kPauseCheckId = 4106;
 constexpr int kTraySettings = 4201;
 constexpr int kTrayToggle = 4202;
 constexpr int kTrayExit = 4203;
-constexpr int kConfigVersion = 3;
+constexpr int kConfigVersion = 4;
 constexpr LONG_PTR kRaisedDesktopFlag = WS_EX_NOREDIRECTIONBITMAP;
 
 HMENU ControlId(int id) {
@@ -49,6 +50,7 @@ struct Config {
     bool pauseFullscreen{true};
     std::wstring scene{L"aurora"};
     std::wstring image;
+    std::wstring video;
 };
 
 enum class MountMode {
@@ -78,7 +80,7 @@ fs::path ConfigPath() {
 }
 
 bool ValidScene(const std::wstring& scene) {
-    return scene == L"aurora" || scene == L"neon" || scene == L"grid" || scene == L"image";
+    return scene == L"aurora" || scene == L"neon" || scene == L"grid" || scene == L"image" || scene == L"video";
 }
 
 void SaveConfig(const Config& config) {
@@ -89,6 +91,7 @@ void SaveConfig(const Config& config) {
     WritePrivateProfileStringW(L"Wallpaper", L"PauseFullscreen", config.pauseFullscreen ? L"1" : L"0", path.c_str());
     WritePrivateProfileStringW(L"Wallpaper", L"Scene", config.scene.c_str(), path.c_str());
     WritePrivateProfileStringW(L"Wallpaper", L"Image", config.image.c_str(), path.c_str());
+    WritePrivateProfileStringW(L"Wallpaper", L"Video", config.video.c_str(), path.c_str());
 }
 
 Config LoadConfig() {
@@ -103,16 +106,15 @@ Config LoadConfig() {
     config.scene = text;
     GetPrivateProfileStringW(L"Wallpaper", L"Image", L"", text, static_cast<DWORD>(std::size(text)), path.c_str());
     config.image = text;
+    GetPrivateProfileStringW(L"Wallpaper", L"Video", L"", text, static_cast<DWORD>(std::size(text)), path.c_str());
+    config.video = text;
 
     if (!ValidScene(config.scene)) config.scene = L"aurora";
     if (config.scene == L"image" && config.image.empty()) config.scene = L"aurora";
+    if (config.scene == L"video" && config.video.empty()) config.scene = L"aurora";
 
-    if (version < kConfigVersion) {
-        config.enabled = true;
-        config.scene = L"aurora";
-        config.image.clear();
-        SaveConfig(config);
-    }
+    // V4 adds video state; preserve an existing V3 scene instead of resetting the user wallpaper.
+    if (version < kConfigVersion) SaveConfig(config);
     return config;
 }
 
@@ -236,6 +238,7 @@ public:
     explicit WallpaperApp(HINSTANCE instance) : instance_(instance), config_(LoadConfig()) {}
 
     ~WallpaperApp() {
+        videoPlayer_.Stop();
         RemoveTray();
         if (settings_ && IsWindow(settings_)) DestroyWindow(settings_);
         if (host_ && IsWindow(host_)) DestroyWindow(host_);
@@ -332,8 +335,9 @@ public:
         SendMessageW(sceneCombo_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Neon Flow · 霓虹网格"));
         SendMessageW(sceneCombo_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Quiet Grid · 静谧网格"));
         SendMessageW(sceneCombo_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"图片壁纸"));
+        SendMessageW(sceneCombo_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"视频壁纸 · Media Foundation"));
 
-        imageButton_ = CreateWindowExW(0, L"BUTTON", L"选择图片…",
+        imageButton_ = CreateWindowExW(0, L"BUTTON", L"选择图片 / 视频…",
                                        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
                                        366, 58, 150, 30, settings_, ControlId(kImageButtonId), instance_, nullptr);
         pauseCheck_ = CreateWindowExW(0, L"BUTTON", L"全屏应用时暂停动态壁纸",
@@ -367,9 +371,15 @@ public:
         if (enabled) {
             AttachToDesktop();
             ShowWindow(host_, SW_SHOWNOACTIVATE);
-            InvalidateRect(host_, nullptr, FALSE);
-            UpdateWindow(host_);
+            if (config_.scene == L"video") {
+                if (!videoPlayer_.Active()) StartVideo();
+                videoPlayer_.SetPaused(false);
+            } else {
+                InvalidateRect(host_, nullptr, FALSE);
+                UpdateWindow(host_);
+            }
         } else {
+            videoPlayer_.SetPaused(true);
             ShowWindow(host_, SW_HIDE);
         }
         RefreshSettings();
@@ -470,9 +480,17 @@ private:
                         RefreshSettings();
                     }
                 }
-                if (config_.enabled && config_.image.empty()) {
+                if (config_.enabled) {
                     const bool paused = config_.pauseFullscreen && ForegroundIsFullscreen(host_, settings_);
-                    if (!paused) {
+                    if (config_.scene == L"video") {
+                        videoPlayer_.Tick();
+                        videoPlayer_.SetPaused(paused);
+                        const auto mediaError = videoPlayer_.LastErrorText();
+                        if (mediaError != lastMediaError_) {
+                            lastMediaError_ = mediaError;
+                            RefreshSettings();
+                        }
+                    } else if (config_.image.empty() && !paused) {
                         time_ += 0.033f;
                         InvalidateRect(host_, nullptr, FALSE);
                     }
@@ -733,9 +751,11 @@ private:
     void Draw() {
         EnsureRenderTarget();
         if (!renderTarget_ || !brush_ || !config_.enabled) return;
+        if (config_.scene == L"video" && videoPlayer_.Active()) return;
 
         renderTarget_->BeginDraw();
-        if (!config_.image.empty() && imageBitmap_) DrawImage();
+        if (config_.scene == L"video") renderTarget_->Clear(D2D1::ColorF(0.0f, 0.0f, 0.0f));
+        else if (!config_.image.empty() && imageBitmap_) DrawImage();
         else if (config_.scene == L"neon") DrawNeon();
         else if (config_.scene == L"grid") DrawGrid();
         else DrawAurora();
@@ -825,9 +845,12 @@ private:
     }
 
     bool ApplyConfig(const Config& next, bool persist = true) {
+        videoPlayer_.Stop();
+        lastMediaError_.clear();
         config_ = next;
         if (persist) SaveConfig(config_);
         pendingImage_.clear();
+        pendingVideo_.clear();
         imageBitmap_.Reset();
         if (renderTarget_) LoadImage();
         const bool mounted = AttachToDesktop();
@@ -835,11 +858,27 @@ private:
             ShowWindow(host_, SW_SHOWNOACTIVATE);
             InvalidateRect(host_, nullptr, FALSE);
             UpdateWindow(host_);
+            if (config_.scene == L"video") StartVideo();
         } else if (!config_.enabled) {
             ShowWindow(host_, SW_HIDE);
         }
         RefreshSettings();
         return mounted;
+    }
+
+    bool StartVideo() {
+        lastMediaError_.clear();
+        if (config_.video.empty() || !fs::exists(config_.video)) {
+            lastMediaError_ = L"视频文件不存在";
+            return false;
+        }
+        if (!videoPlayer_.Start(host_, config_.video)) {
+            lastMediaError_ = videoPlayer_.LastErrorText();
+            if (lastMediaError_.empty()) lastMediaError_ = L"Media Foundation 无法启动该视频";
+            return false;
+        }
+        videoPlayer_.SetPaused(false);
+        return true;
     }
 
     void ChooseImage() {
@@ -849,12 +888,23 @@ private:
         dialog.hwndOwner = settings_;
         dialog.lpstrFile = path;
         dialog.nMaxFile = static_cast<DWORD>(std::size(path));
-        dialog.lpstrFilter = L"图片\0*.jpg;*.jpeg;*.png;*.bmp\0所有文件\0*.*\0";
+        dialog.lpstrFilter = L"图片和视频\0*.jpg;*.jpeg;*.png;*.bmp;*.mp4;*.mov;*.wmv;*.m4v\0视频\0*.mp4;*.mov;*.wmv;*.m4v\0图片\0*.jpg;*.jpeg;*.png;*.bmp\0所有文件\0*.*\0";
         dialog.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST;
         if (!GetOpenFileNameW(&dialog)) return;
-        pendingImage_ = path;
-        SendMessageW(sceneCombo_, CB_SETCURSEL, 3, 0);
-        if (status_) SetWindowTextW(status_, pendingImage_.c_str());
+        const std::wstring selectedPath = path;
+        const auto extension = fs::path(selectedPath).extension().wstring();
+        const bool isVideo = _wcsicmp(extension.c_str(), L".mp4") == 0 ||
+                             _wcsicmp(extension.c_str(), L".mov") == 0 ||
+                             _wcsicmp(extension.c_str(), L".wmv") == 0 ||
+                             _wcsicmp(extension.c_str(), L".m4v") == 0;
+        if (isVideo) {
+            pendingVideo_ = selectedPath;
+            SendMessageW(sceneCombo_, CB_SETCURSEL, 4, 0);
+        } else {
+            pendingImage_ = selectedPath;
+            SendMessageW(sceneCombo_, CB_SETCURSEL, 3, 0);
+        }
+        if (status_) SetWindowTextW(status_, selectedPath.c_str());
     }
 
     void ApplyFromSettings() {
@@ -863,6 +913,7 @@ private:
         next.enabled = true;
         next.pauseFullscreen = SendMessageW(pauseCheck_, BM_GETCHECK, 0, 0) == BST_CHECKED;
         next.image.clear();
+        next.video.clear();
 
         if (selected == 1) next.scene = L"neon";
         else if (selected == 2) next.scene = L"grid";
@@ -871,6 +922,13 @@ private:
             next.image = pendingImage_.empty() ? config_.image : pendingImage_;
             if (next.image.empty()) {
                 SetWindowTextW(status_, L"请先选择一张 JPG / PNG / BMP 图片。");
+                return;
+            }
+        } else if (selected == 4) {
+            next.scene = L"video";
+            next.video = pendingVideo_.empty() ? config_.video : pendingVideo_;
+            if (next.video.empty()) {
+                SetWindowTextW(status_, L"请先选择一个 MP4 / MOV / WMV / M4V 视频。");
                 return;
             }
         } else {
@@ -882,7 +940,8 @@ private:
     void RefreshSettings() {
         if (!settings_ || !IsWindow(settings_) || !sceneCombo_) return;
         int selected = 0;
-        if (!config_.image.empty() || config_.scene == L"image") selected = 3;
+        if (!config_.video.empty() || config_.scene == L"video") selected = 4;
+        else if (!config_.image.empty() || config_.scene == L"image") selected = 3;
         else if (config_.scene == L"neon") selected = 1;
         else if (config_.scene == L"grid") selected = 2;
         SendMessageW(sceneCombo_, CB_SETCURSEL, selected, 0);
@@ -895,9 +954,13 @@ private:
         } else if (!mountOk_) {
             status = L"应用失败：" + (lastMountError_.empty() ? L"没有挂载到 Windows 桌面层" : lastMountError_);
         } else {
-            const wchar_t* scene = selected == 0 ? L"Aurora Flow" : selected == 1 ? L"Neon Flow" : selected == 2 ? L"Quiet Grid" : L"图片壁纸";
+            const wchar_t* scene = selected == 0 ? L"Aurora Flow" : selected == 1 ? L"Neon Flow" : selected == 2 ? L"Quiet Grid" : selected == 3 ? L"图片壁纸" : L"视频壁纸";
             status = std::wstring(scene) + L" 已应用 · 桌面层：" + MountModeText(mountMode_);
-            if (selected != 3) status += L" · Direct2D 约 30 FPS";
+            if (selected <= 2) status += L" · Direct2D 约 30 FPS";
+            else if (selected == 4) {
+                if (!lastMediaError_.empty()) status = L"视频壁纸错误：" + lastMediaError_;
+                else status += L" · Media Foundation · 静音循环";
+            }
         }
         SetWindowTextW(status_, status.c_str());
     }
@@ -923,6 +986,9 @@ private:
     std::wstring lastMountError_;
     Config config_;
     std::wstring pendingImage_;
+    std::wstring pendingVideo_;
+    std::wstring lastMediaError_;
+    turingdesk::VideoWallpaperPlayer videoPlayer_;
     float time_{};
     ComPtr<ID2D1Factory> d2dFactory_;
     ComPtr<ID2D1HwndRenderTarget> renderTarget_;
@@ -976,11 +1042,13 @@ int RunSelfTest(HINSTANCE instance) {
     DestroyWindow(test);
 
     const bool pathOk = !ConfigPath().empty();
+    const bool mediaFoundationOk = turingdesk::VideoWallpaperPlayer::MediaFoundationAvailable();
     wic.Reset();
     d2d.Reset();
     if (SUCCEEDED(com)) CoUninitialize();
     if (!layered) return 26;
-    return pathOk ? 0 : 27;
+    if (!pathOk) return 27;
+    return mediaFoundationOk ? 0 : 28;
 }
 
 void SendExistingCommand(std::wstring_view args) {
