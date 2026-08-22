@@ -27,6 +27,9 @@ constexpr wchar_t kWallpaperHostClass[] = L"TuringDesk.Native.WallpaperHost";
 constexpr wchar_t kWallpaperSettingsClass[] = L"TuringDesk.Native.WallpaperSettings";
 constexpr std::chrono::milliseconds kTickInterval{250};
 constexpr ULONGLONG kStateRefreshMs = 1000;
+constexpr ULONGLONG kRecoveryCooldownMs = 3000;
+constexpr ULONGLONG kRecoveryStableResetMs = 30000;
+constexpr unsigned kMaxRecoveryAttempts = 3;
 
 fs::path WallpaperConfigPath() {
     wchar_t local[32768]{};
@@ -142,6 +145,21 @@ void WriteDiagnostics(const std::wstring& value) {
     WritePrivateProfileStringW(L"Diagnostics", L"WebRuntime", value.c_str(), path.c_str());
 }
 
+void EnsureIndependentHostBounds(HWND host) {
+    if (!host || !IsWindow(host)) return;
+    const HWND parent = GetParent(host);
+    if (!parent || !IsWindow(parent)) return;
+    const MonitorTopology topology = QueryMonitorTopology();
+    if (!topology.Valid()) return;
+    const RECT desktopBounds = HostDesktopBounds(topology, LayoutMode::Independent);
+    const RECT parentBounds = DesktopRectToParentClient(parent, desktopBounds);
+    const LONG width = parentBounds.right - parentBounds.left;
+    const LONG height = parentBounds.bottom - parentBounds.top;
+    if (width <= 0 || height <= 0) return;
+    SetWindowPos(host, nullptr, parentBounds.left, parentBounds.top, width, height,
+                 SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+}
+
 bool PersistGlobalWeb(const WallpaperLibraryItem& item, std::wstring* error) {
     const fs::path path = WallpaperConfigPath();
     bool ok = true;
@@ -182,6 +200,37 @@ struct WallpaperWebRuntimeCoordinator::Impl {
         std::vector<WebWallpaperRequest> activeRequests;
         RuntimeState state;
         ULONGLONG nextRefresh = 0;
+        ULONGLONG nextRecovery = 0;
+        ULONGLONG healthySince = 0;
+        unsigned recoveryAttempts = 0;
+
+        auto resetRecovery = [&] {
+            nextRecovery = 0;
+            healthySince = 0;
+            recoveryAttempts = 0;
+        };
+
+        auto startActiveRequests = [&](ULONGLONG now, bool recovery) {
+            if (state.layout == LayoutMode::Independent && !activeRequests.empty())
+                EnsureIndependentHostBounds(host);
+            web.Stop();
+            if (activeRequests.empty()) {
+                resetRecovery();
+                WriteDiagnostics(L"未启用 Web 壁纸");
+                return true;
+            }
+            if (recovery) ++recoveryAttempts;
+            if (!web.Start(host, activeRequests)) {
+                nextRecovery = now + kRecoveryCooldownMs;
+                healthySince = 0;
+                WriteDiagnostics(L"Web runtime 启动失败：" + web.LastErrorText());
+                return false;
+            }
+            nextRecovery = 0;
+            healthySince = now;
+            WriteDiagnostics(web.DiagnosticsText());
+            return true;
+        };
 
         while (!stopToken.stop_requested()) {
             HWND currentHost = FindWindowW(kWallpaperHostClass, nullptr);
@@ -190,6 +239,7 @@ struct WallpaperWebRuntimeCoordinator::Impl {
                 activeRequests.clear();
                 host = currentHost;
                 nextRefresh = 0;
+                resetRecovery();
             }
 
             const ULONGLONG now = GetTickCount64();
@@ -197,27 +247,43 @@ struct WallpaperWebRuntimeCoordinator::Impl {
                 state = LoadRuntimeState(WallpaperConfigPath());
                 const auto desired = DesiredRequests(host, state);
                 if (!SameRequests(desired, activeRequests)) {
-                    web.Stop();
                     activeRequests = desired;
-                    if (!activeRequests.empty()) {
-                        if (!web.Start(host, activeRequests)) WriteDiagnostics(L"启动失败：" + web.LastErrorText());
-                        else WriteDiagnostics(web.DiagnosticsText());
-                    } else {
-                        WriteDiagnostics(L"未启用 Web 壁纸");
-                    }
+                    resetRecovery();
+                    startActiveRequests(now, false);
+                } else if (state.layout == LayoutMode::Independent && !activeRequests.empty()) {
+                    EnsureIndependentHostBounds(host);
                 }
                 nextRefresh = now + kStateRefreshMs;
             }
 
             if (host && IsWindow(host) && !activeRequests.empty()) {
                 web.Tick();
+
+                if (!web.Active()) {
+                    healthySince = 0;
+                    if (recoveryAttempts >= kMaxRecoveryAttempts) {
+                        WriteDiagnostics(L"Web runtime 连续恢复 3 次失败，已停止自动恢复：" + web.LastErrorText());
+                    } else {
+                        if (nextRecovery == 0) nextRecovery = now + kRecoveryCooldownMs;
+                        if (now >= nextRecovery) startActiveRequests(now, true);
+                    }
+                } else {
+                    if (healthySince == 0) healthySince = now;
+                    if (recoveryAttempts > 0 && now - healthySince >= kRecoveryStableResetMs) {
+                        recoveryAttempts = 0;
+                        nextRecovery = 0;
+                        WriteDiagnostics(web.DiagnosticsText() + L" · 已稳定运行，恢复计数已清零");
+                    }
+                }
+
                 const HWND settings = FindWindowW(kWallpaperSettingsClass, nullptr);
                 const auto snapshot = performance.Evaluate(host, settings, state.performance);
                 const bool pause = !IsWindowVisible(host) ||
                     snapshot.action == PerformanceAction::Pause || snapshot.action == PerformanceAction::Stop;
                 web.SetPaused(pause);
                 const auto error = web.LastErrorText();
-                if (!error.empty()) WriteDiagnostics(L"运行异常：" + error);
+                if (!error.empty() && recoveryAttempts < kMaxRecoveryAttempts)
+                    WriteDiagnostics(L"运行异常：" + error);
             }
 
             std::this_thread::sleep_for(kTickInterval);
