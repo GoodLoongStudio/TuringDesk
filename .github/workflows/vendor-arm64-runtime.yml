@@ -100,9 +100,6 @@ jobs:
             if ($LASTEXITCODE -ne 0 -or -not (Test-Path $harnessZip)) { throw 'Unable to package Harness runtime tree' }
 
             # goz: build the pinned MIT source for native Windows ARM64.
-            # We deliberately build from source because upstream release assets are not
-            # treated as an ARM64 contract. The resulting binaries are committed to the
-            # RuntimeBundle so normal builds remain network-free.
             $gozDir = Join-Path $runtime 'goz'
             if (Test-Path $gozDir) { Remove-Item $gozDir -Recurse -Force }
             New-Item -ItemType Directory -Force -Path $gozDir | Out-Null
@@ -188,7 +185,6 @@ jobs:
               Copy-Item $license.FullName (Join-Path $webSdkDir $license.Name) -Force
             }
 
-            # Everything is intentionally gone from the product/runtime bundle.
             Remove-Item (Join-Path $runtime 'everything') -Recurse -Force -ErrorAction SilentlyContinue
 
             $manifest = [ordered]@{
@@ -228,3 +224,36 @@ jobs:
             Start-Sleep -Seconds 2
           }
           throw 'Unable to push vendored ARM64 runtime to main'
+
+  report:
+    if: always()
+    needs: [vendor]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ci-status
+      - name: Write runtime vendor status
+        shell: bash
+        env:
+          VENDOR_RESULT: ${{ needs.vendor.result }}
+        run: |
+          mkdir -p ci
+          cat > "ci/runtime-vendor-${GITHUB_SHA}.json" <<EOF
+          {
+            "sha": "${GITHUB_SHA}",
+            "mode": "runtime-vendor-arm64-goz-codex-cli",
+            "result": "${VENDOR_RESULT}",
+            "run_id": "${GITHUB_RUN_ID}"
+          }
+          EOF
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "ci/runtime-vendor-${GITHUB_SHA}.json"
+          git commit -m "ci: report ARM64 runtime vendor ${GITHUB_SHA}" || exit 0
+          for i in 1 2 3; do
+            git pull --rebase origin ci-status || true
+            if git push origin HEAD:ci-status; then exit 0; fi
+            sleep 2
+          done
+          exit 1
