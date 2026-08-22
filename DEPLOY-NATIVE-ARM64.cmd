@@ -6,6 +6,7 @@ cd /d "%~dp0"
 echo.
 echo ========================================
 echo   TuringDesk ARM64 One-Click Deploy
+echo   Repository RuntimeBundle / Offline
 echo ========================================
 echo.
 
@@ -26,19 +27,20 @@ git pull --ff-only
 if errorlevel 1 goto :fail
 
 echo.
-echo [2/3] Preparing official prerequisites and persistent tools...
+echo [2/3] Preparing repository-vendored ARM64 runtime (no third-party download)...
 powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\prepare-third-party-runtime-arm64.ps1"
 if errorlevel 1 goto :fail
 
 echo.
-echo [3/3] Building, validating, and launching TuringDesk...
+echo [3/3] Fetching the verified ARM64 build, validating, and launching TuringDesk...
 powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\deploy-native-arm64.ps1"
 if errorlevel 1 goto :fail
 
 echo.
-echo DeepSeek Harness: official npx @deepseek-ai/dsh, hosted by TuringDesk WebView2.
+echo DeepSeek Harness: pinned official package from this repository RuntimeBundle.
+echo Node / Harness / Everything / Codex are deployed from local repository files.
 echo ========================================
-echo   SUCCESS - TuringDesk is running
+echo   SUCCESS - TuringDesk ARM64 is running
 echo ========================================
 timeout /t 2 /nobreak >nul
 exit /b 0
