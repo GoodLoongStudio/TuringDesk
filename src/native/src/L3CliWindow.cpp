@@ -164,7 +164,8 @@ std::wstring RuntimeExecutionLabel(ActiveRuntime runtime) {
 }
 
 ActiveRuntime ChooseRuntime(CliState& state) {
-    if (state.codex->CanHandle(*state.agent)) return ActiveRuntime::Codex;
+    // L3 must remain TuringDesk-owned and lightweight. Prefer the native, registered
+    // tool runtime and never auto-promote ordinary L3 turns into the Codex sidecar.
     if (state.directTools->CanHandle(*state.agent)) return ActiveRuntime::DirectTools;
     return ActiveRuntime::DirectModel;
 }
@@ -177,7 +178,7 @@ std::wstring RuntimeStatusText(CliState& state) {
     text += L"\r\nCodex sidecar：";
     text += status.binaryAvailable ? L"已安装" : L"未安装";
     text += L"\r\nProvider → Codex：";
-    text += status.providerCompatible ? L"Responses 可直连" : L"等待协议桥";
+    text += status.providerCompatible ? L"Responses 可直连（L3 不自动使用）" : L"等待协议桥";
     text += L"\r\nDirect Tools：" + state.directTools->StatusText(*state.agent);
     text += L"\r\n" + status.message;
     return text;
