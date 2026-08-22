@@ -70,6 +70,30 @@ jobs:
           Copy-Item build/src/native/Release/TuringDeskHarness.exe build/package/TuringDeskHarness.exe -Force
           .\scripts\prepare-third-party-runtime-arm64.ps1 -DeployDir (Resolve-Path build/package).Path
 
+      - name: Redeploy while bundled Everything is running
+        shell: pwsh
+        run: |
+          $package = (Resolve-Path 'build/package').Path
+          $everything = Join-Path $package 'Everything\Everything.exe'
+          $config = Join-Path $package 'Everything\TuringDesk-Everything.ini'
+          if (-not (Test-Path $everything -PathType Leaf)) { throw 'Bundled Everything is missing before replacement test' }
+
+          $everythingProcess = Start-Process -FilePath $everything -ArgumentList "-config `"$config`" -startup" -PassThru
+          Start-Sleep -Seconds 1
+          $running = Get-CimInstance Win32_Process -Filter "Name='Everything.exe'" -ErrorAction SilentlyContinue |
+            Where-Object { $_.ExecutablePath -and ([System.IO.Path]::GetFullPath($_.ExecutablePath) -eq [System.IO.Path]::GetFullPath($everything)) }
+          if (-not $running) { throw 'Bundled Everything did not stay running for replacement regression test' }
+
+          # Force the installer down the replacement path while Everything.exe is
+          # image-mapped. The installer must stop only processes owned by this package.
+          Set-Content (Join-Path $package 'Runtime\runtime-manifest.sha256') -Value 'force-redeploy' -Encoding ASCII
+          .\scripts\prepare-third-party-runtime-arm64.ps1 -DeployDir $package
+
+          $stillRunning = Get-CimInstance Win32_Process -Filter "Name='Everything.exe'" -ErrorAction SilentlyContinue |
+            Where-Object { $_.ExecutablePath -and ([System.IO.Path]::GetFullPath($_.ExecutablePath) -eq [System.IO.Path]::GetFullPath($everything)) }
+          if ($stillRunning) { throw 'Bundled Everything survived runtime replacement' }
+          if (-not (Test-Path $everything -PathType Leaf)) { throw 'Bundled Everything was not restored after runtime replacement' }
+
       - name: Validate deployed ARM64 package
         shell: pwsh
         run: |
