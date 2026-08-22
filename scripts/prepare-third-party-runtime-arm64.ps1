@@ -42,20 +42,15 @@ function Test-PathInsideRoot([string]$Candidate, [string]$Root) {
     catch { return $false }
 }
 
-function Stop-TuringDeskOwnedRuntimeProcesses {
-    # A running TuringDesk.exe can immediately relaunch its bundled Everything
-    # instance after Everything.exe is killed. Stop the complete TuringDesk-owned
-    # process tree before replacing runtime files. The executable path check is
-    # intentionally strict so a user's system/global Everything, Node, or Codex is
-    # never touched.
+function Stop-TuringDeskOwnedRuntimeProcesses([bool]$IncludeEverything = $true) {
     $ownedNames = @(
         "TuringDesk.exe",
         "TuringDeskWallpaper.exe",
         "TuringDeskHarness.exe",
-        "Everything.exe",
         "node.exe",
         "codex-app-server.exe"
     )
+    if ($IncludeEverything) { $ownedNames += "Everything.exe" }
 
     $stopped = 0
     try {
@@ -74,7 +69,6 @@ function Stop-TuringDeskOwnedRuntimeProcesses {
     }
 
     if ($stopped -gt 0) {
-        # Give Windows a short bounded interval to release executable image mappings.
         for ($i = 0; $i -lt 30; $i++) {
             $remaining = $false
             try {
@@ -92,12 +86,19 @@ function Stop-TuringDeskOwnedRuntimeProcesses {
             Start-Sleep -Milliseconds 100
         }
     }
-
-    # Executable image sections can remain mapped very briefly after process exit.
     Start-Sleep -Milliseconds 300
 }
 
-function Remove-WithRetry([string]$Path) {
+function Request-BundledEverythingQuit([string]$EverythingExe, [string]$ConfigPath) {
+    if (-not (Test-Path $EverythingExe -PathType Leaf)) { return }
+    try {
+        & $EverythingExe -config $ConfigPath -quit 2>$null | Out-Null
+    }
+    catch { }
+    Start-Sleep -Milliseconds 500
+}
+
+function Remove-WithRetry([string]$Path, [bool]$IncludeEverything = $true) {
     if (-not (Test-Path $Path)) { return }
     $last = $null
     for ($i = 1; $i -le 24; $i++) {
@@ -107,7 +108,7 @@ function Remove-WithRetry([string]$Path) {
         }
         catch {
             $last = $_
-            if (($i % 4) -eq 0) { Stop-TuringDeskOwnedRuntimeProcesses }
+            if (($i % 4) -eq 0) { Stop-TuringDeskOwnedRuntimeProcesses -IncludeEverything $IncludeEverything }
             Start-Sleep -Milliseconds 250
         }
     }
@@ -143,6 +144,7 @@ $CodexDir = Join-Path $DeployDir "Codex"
 $NodeExe = Join-Path $NodeDir "node.exe"
 $DshBin = Join-Path $NodeDir "node_modules\@deepseek-ai\dsh\lib\bin.js"
 $EverythingExe = Join-Path $EverythingDir "Everything.exe"
+$EverythingConfig = Join-Path $EverythingDir "TuringDesk-Everything.ini"
 $CodexExe = Join-Path $CodexDir "codex-app-server.exe"
 $DeployManifestHash = Join-Path $RuntimeDir "runtime-manifest.sha256"
 $sourceManifestHash = Get-Sha256 $ManifestPath
@@ -163,69 +165,100 @@ if ($alreadyReady) {
 }
 
 Step "Installing repository-vendored ARM64 RuntimeBundle (offline)"
-Stop-TuringDeskOwnedRuntimeProcesses
-Remove-WithRetry $NodeDir
-Remove-WithRetry $EverythingDir
-Remove-WithRetry $CodexDir
-New-Item -ItemType Directory -Force -Path $RuntimeDir | Out-Null
 
-# Node's official portable zip has one top-level directory. Extract it to a
-# temporary directory, then flatten that one root into Runtime\Node.
-$nodeTemp = Join-Path $env:TEMP ("TuringDesk-Node-" + [guid]::NewGuid().ToString("N"))
+# Materialize the new Everything payload before touching running processes. When
+# the executable is byte-for-byte unchanged, preserve it in place. Windows locks
+# mapped EXEs, and a RuntimeBundle manifest change must not force replacement of
+# an unchanged search engine.
+$everythingTemp = Join-Path $env:TEMP ("TuringDesk-Everything-" + [guid]::NewGuid().ToString("N"))
+$replaceEverything = $true
 try {
-    Expand-ArchiveWithTar $nodeArchive $nodeTemp
-    $nodeRoot = Get-ChildItem $nodeTemp -Directory | Select-Object -First 1
-    if (-not $nodeRoot -or -not (Test-Path (Join-Path $nodeRoot.FullName "node.exe") -PathType Leaf)) {
-        throw "Vendored Node archive has an unexpected layout"
-    }
-    New-Item -ItemType Directory -Force -Path $NodeDir | Out-Null
-    Copy-Item (Join-Path $nodeRoot.FullName "*") $NodeDir -Recurse -Force
-}
-finally {
-    Remove-Item $nodeTemp -Recurse -Force -ErrorAction SilentlyContinue
-}
+    Expand-ArchiveWithTar $everythingArchive $everythingTemp
+    $newEverything = Get-ChildItem $everythingTemp -Filter "Everything.exe" -File -Recurse | Select-Object -First 1
+    if (-not $newEverything) { throw "Vendored Everything archive is incomplete" }
 
-# The Harness zip contains the complete production node_modules tree. Merge it
-# beside node.exe so HarnessProcessManager can resolve one deterministic root.
-Expand-ArchiveWithTar $harnessArchive $NodeDir
-@"
+    if (Test-Path $EverythingExe -PathType Leaf) {
+        try {
+            $replaceEverything = (Get-Sha256 $EverythingExe) -ne (Get-Sha256 $newEverything.FullName)
+        }
+        catch {
+            $replaceEverything = $true
+        }
+    }
+
+    if (-not $replaceEverything) {
+        Write-Host "Bundled Everything.exe is unchanged; preserving the running executable." -ForegroundColor DarkGray
+    } else {
+        Request-BundledEverythingQuit -EverythingExe $EverythingExe -ConfigPath $EverythingConfig
+    }
+
+    Stop-TuringDeskOwnedRuntimeProcesses -IncludeEverything $replaceEverything
+    Remove-WithRetry $NodeDir $false
+    Remove-WithRetry $CodexDir $false
+    if ($replaceEverything) { Remove-WithRetry $EverythingDir $true }
+    New-Item -ItemType Directory -Force -Path $RuntimeDir | Out-Null
+
+    $nodeTemp = Join-Path $env:TEMP ("TuringDesk-Node-" + [guid]::NewGuid().ToString("N"))
+    try {
+        Expand-ArchiveWithTar $nodeArchive $nodeTemp
+        $nodeRoot = Get-ChildItem $nodeTemp -Directory | Select-Object -First 1
+        if (-not $nodeRoot -or -not (Test-Path (Join-Path $nodeRoot.FullName "node.exe") -PathType Leaf)) {
+            throw "Vendored Node archive has an unexpected layout"
+        }
+        New-Item -ItemType Directory -Force -Path $NodeDir | Out-Null
+        Copy-Item (Join-Path $nodeRoot.FullName "*") $NodeDir -Recurse -Force
+    }
+    finally {
+        Remove-Item $nodeTemp -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
+    Expand-ArchiveWithTar $harnessArchive $NodeDir
+    @"
 @echo off
 "%~dp0node.exe" "%~dp0node_modules\@deepseek-ai\dsh\lib\bin.js" %*
 "@ | Set-Content -Path (Join-Path $NodeDir "dsh.cmd") -Encoding ASCII
 
-if (-not (Test-Path $NodeExe -PathType Leaf) -or -not (Test-Path $DshBin -PathType Leaf)) {
-    throw "Bundled DeepSeek Harness runtime is incomplete after extraction"
-}
-& $NodeExe --version | Out-Host
-if ($LASTEXITCODE -ne 0) { throw "Bundled ARM64 Node failed to start" }
-& $NodeExe $DshBin --help | Out-Host
-if ($LASTEXITCODE -ne 0) { throw "Bundled DeepSeek Harness CLI failed to start" }
+    if (-not (Test-Path $NodeExe -PathType Leaf) -or -not (Test-Path $DshBin -PathType Leaf)) {
+        throw "Bundled DeepSeek Harness runtime is incomplete after extraction"
+    }
+    & $NodeExe --version | Out-Host
+    if ($LASTEXITCODE -ne 0) { throw "Bundled ARM64 Node failed to start" }
+    & $NodeExe $DshBin --help | Out-Host
+    if ($LASTEXITCODE -ne 0) { throw "Bundled DeepSeek Harness CLI failed to start" }
 
-Expand-ArchiveWithTar $everythingArchive $EverythingDir
-if (-not (Test-Path $EverythingExe -PathType Leaf)) { throw "Vendored Everything archive is incomplete" }
-$everythingLicense = Join-Path $BundleRoot "everything\LICENSE.txt"
-if (Test-Path $everythingLicense -PathType Leaf) { Copy-Item $everythingLicense (Join-Path $EverythingDir "LICENSE.txt") -Force }
-@"
+    if ($replaceEverything) {
+        New-Item -ItemType Directory -Force -Path $EverythingDir | Out-Null
+        Copy-Item (Join-Path $everythingTemp "*") $EverythingDir -Recurse -Force
+    }
+    if (-not (Test-Path $EverythingExe -PathType Leaf)) { throw "Vendored Everything archive is incomplete after install" }
+
+    $everythingLicense = Join-Path $BundleRoot "everything\LICENSE.txt"
+    if (Test-Path $everythingLicense -PathType Leaf) { Copy-Item $everythingLicense (Join-Path $EverythingDir "LICENSE.txt") -Force }
+    @"
 [Everything]
 run_in_background=1
 show_tray_icon=0
 check_for_updates_on_startup=0
-"@ | Set-Content -Path (Join-Path $EverythingDir "TuringDesk-Everything.ini") -Encoding UTF8
+"@ | Set-Content -Path $EverythingConfig -Encoding UTF8
 
-$codexTemp = Join-Path $env:TEMP ("TuringDesk-Codex-" + [guid]::NewGuid().ToString("N"))
-try {
-    Expand-ArchiveWithTar $codexArchive $codexTemp
-    $found = Get-ChildItem $codexTemp -Filter "codex-app-server-aarch64-pc-windows-msvc.exe" -File -Recurse | Select-Object -First 1
-    if (-not $found) { throw "Vendored Codex archive is incomplete" }
-    New-Item -ItemType Directory -Force -Path $CodexDir | Out-Null
-    Copy-Item $found.FullName $CodexExe -Force
+    $codexTemp = Join-Path $env:TEMP ("TuringDesk-Codex-" + [guid]::NewGuid().ToString("N"))
+    try {
+        Expand-ArchiveWithTar $codexArchive $codexTemp
+        $found = Get-ChildItem $codexTemp -Filter "codex-app-server-aarch64-pc-windows-msvc.exe" -File -Recurse | Select-Object -First 1
+        if (-not $found) { throw "Vendored Codex archive is incomplete" }
+        New-Item -ItemType Directory -Force -Path $CodexDir | Out-Null
+        Copy-Item $found.FullName $CodexExe -Force
+    }
+    finally {
+        Remove-Item $codexTemp -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
+    Copy-Item $ManifestPath (Join-Path $RuntimeDir "runtime-manifest.json") -Force
+    Set-Content $DeployManifestHash -Value $sourceManifestHash -Encoding ASCII
 }
 finally {
-    Remove-Item $codexTemp -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-Item $everythingTemp -Recurse -Force -ErrorAction SilentlyContinue
 }
-
-Copy-Item $ManifestPath (Join-Path $RuntimeDir "runtime-manifest.json") -Force
-Set-Content $DeployManifestHash -Value $sourceManifestHash -Encoding ASCII
 
 Write-Host "Repository-vendored ARM64 RuntimeBundle ready." -ForegroundColor Green
 Write-Host "Node:    $NodeExe" -ForegroundColor DarkGray
