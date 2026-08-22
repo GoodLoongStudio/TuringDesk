@@ -24,7 +24,7 @@ concurrency:
 
 jobs:
   build-x64:
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.build_x64 }}
+    if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.build_x64) }}
     runs-on: windows-latest
     timeout-minutes: 15
     steps:
