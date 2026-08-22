@@ -1,0 +1,155 @@
+name: Apply Native Search Shell Icons
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/patch-search-shell-icons.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: patch-search-shell-icons
+  cancel-in-progress: true
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Patch SearchWindow Shell icon rendering
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path("src/native/src/SearchWindow.cpp")
+          text = path.read_text(encoding="utf-8")
+
+          helper_anchor = '''const wchar_t* KindLabel(ResultKind kind) {
+              switch (kind) {
+              case ResultKind::App: return L"应用";
+              case ResultKind::File: return L"文件";
+              case ResultKind::Folder: return L"文件夹";
+              case ResultKind::Answer: return L"AI";
+              case ResultKind::Status: return L"状态";
+              }
+              return L"";
+          }
+          '''
+          helper = helper_anchor + '''
+          HICON ResolveShellIcon(const SearchResult& result) {
+              if (!IsLaunchable(result.kind) || result.target.empty()) return nullptr;
+
+              SHFILEINFOW info{};
+              constexpr UINT flags = SHGFI_ICON | SHGFI_SMALLICON;
+              if (SHGetFileInfoW(result.target.c_str(), 0, &info, sizeof(info), flags) != 0 && info.hIcon)
+                  return info.hIcon;
+
+              const DWORD attributes = result.kind == ResultKind::Folder
+                  ? FILE_ATTRIBUTE_DIRECTORY
+                  : FILE_ATTRIBUTE_NORMAL;
+              info = {};
+              if (SHGetFileInfoW(result.target.c_str(), attributes, &info, sizeof(info),
+                                 flags | SHGFI_USEFILEATTRIBUTES) != 0 && info.hIcon)
+                  return info.hIcon;
+              return nullptr;
+          }
+
+          bool ShellIconSelfTest() {
+              SearchResult synthetic{ResultKind::File, L"Shell icon self-test", L"", L"turingdesk-self-test.txt", 0};
+              HICON icon = ResolveShellIcon(synthetic);
+              if (!icon) return false;
+              DestroyIcon(icon);
+              return true;
+          }
+          '''
+          if "HICON ResolveShellIcon(const SearchResult& result)" not in text:
+              if helper_anchor not in text:
+                  raise SystemExit("KindLabel anchor not found; refusing an unsafe patch")
+              text = text.replace(helper_anchor, helper, 1)
+
+          old_self_test = '''    return apps_.Count() >= 5 && files_.SelfTest() && local && !reply.empty() && !secret;
+          }'''
+          new_self_test = '''    return apps_.Count() >= 5 && files_.SelfTest() && local && !reply.empty() && !secret && ShellIconSelfTest();
+          }'''
+          if "ShellIconSelfTest();" not in text:
+              if old_self_test not in text:
+                  raise SystemExit("SearchWindow::SelfTest anchor not found")
+              text = text.replace(old_self_test, new_self_test, 1)
+
+          old_draw = '''            std::wstring title = result.title; if (title.size() > 100) title.resize(100);
+                      renderTarget_->DrawText(title.c_str(), static_cast<UINT32>(title.size()), titleFormat_.Get(),
+                                              D2D1::RectF(22, y + 4, width - 28, y + 28), textBrush_.Get(), D2D1_DRAW_TEXT_OPTIONS_CLIP);
+                      std::wstring subtitle = KindLabel(result.kind);
+                      if (!result.subtitle.empty()) subtitle += L"  ·  " + result.subtitle;
+                      if (subtitle.size() > 150) subtitle.resize(150);
+                      renderTarget_->DrawText(subtitle.c_str(), static_cast<UINT32>(subtitle.size()), subtitleFormat_.Get(),
+                                              D2D1::RectF(22, y + 31, width - 28, y + rowHeight), secondaryBrush_.Get(), D2D1_DRAW_TEXT_OPTIONS_CLIP);'''
+          new_draw = '''            const float textLeft = IsLaunchable(result.kind) ? 66.0f : 22.0f;
+                      std::wstring title = result.title; if (title.size() > 100) title.resize(100);
+                      renderTarget_->DrawText(title.c_str(), static_cast<UINT32>(title.size()), titleFormat_.Get(),
+                                              D2D1::RectF(textLeft, y + 4, width - 28, y + 28), textBrush_.Get(), D2D1_DRAW_TEXT_OPTIONS_CLIP);
+                      std::wstring subtitle = KindLabel(result.kind);
+                      if (!result.subtitle.empty()) subtitle += L"  ·  " + result.subtitle;
+                      if (subtitle.size() > 150) subtitle.resize(150);
+                      renderTarget_->DrawText(subtitle.c_str(), static_cast<UINT32>(subtitle.size()), subtitleFormat_.Get(),
+                                              D2D1::RectF(textLeft, y + 31, width - 28, y + rowHeight), secondaryBrush_.Get(), D2D1_DRAW_TEXT_OPTIONS_CLIP);'''
+          if "const float textLeft = IsLaunchable(result.kind)" not in text:
+              if old_draw not in text:
+                  raise SystemExit("result text drawing anchor not found")
+              text = text.replace(old_draw, new_draw, 1)
+
+          old_end = '''    const HRESULT hr = renderTarget_->EndDraw();
+              if (hr == D2DERR_RECREATE_TARGET) {
+                  renderTarget_.Reset(); textBrush_.Reset(); secondaryBrush_.Reset(); selectionBrush_.Reset(); borderBrush_.Reset(); accentBrush_.Reset();
+              }
+          }'''
+          new_end = '''    const HRESULT hr = renderTarget_->EndDraw();
+              if (hr == D2DERR_RECREATE_TARGET) {
+                  renderTarget_.Reset(); textBrush_.Reset(); secondaryBrush_.Reset(); selectionBrush_.Reset(); borderBrush_.Reset(); accentBrush_.Reset();
+              } else if (SUCCEEDED(hr) && expanded_) {
+                  HDC dc = GetDC(hwnd_);
+                  if (dc) {
+                      float iconY = 72.0f;
+                      for (const auto& result : results_) {
+                          const float rowHeight = result.kind == ResultKind::Status ? 66.0f : 56.0f;
+                          if (IsLaunchable(result.kind)) {
+                              if (HICON icon = ResolveShellIcon(result)) {
+                                  DrawIconEx(dc, 22, static_cast<int>(iconY + 10.0f), icon,
+                                             32, 32, 0, nullptr, DI_NORMAL);
+                                  DestroyIcon(icon);
+                              }
+                          }
+                          iconY += rowHeight;
+                          if (iconY > renderTarget_->GetSize().height - 28) break;
+                      }
+                      ReleaseDC(hwnd_, dc);
+                  }
+              }
+          }'''
+          if "DrawIconEx(dc, 22" not in text:
+              if old_end not in text:
+                  raise SystemExit("EndDraw anchor not found")
+              text = text.replace(old_end, new_end, 1)
+
+          path.write_text(text, encoding="utf-8")
+
+      - name: Commit source migration to main
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- src/native/src/SearchWindow.cpp; then
+            echo "Search Shell icon migration already applied."
+            exit 0
+          fi
+          git config user.name "GoodLoongStudio"
+          git config user.email "actions@users.noreply.github.com"
+          git add src/native/src/SearchWindow.cpp
+          git commit -m "feat: show Windows Shell icons in search results"
+          git push origin HEAD:main
