@@ -126,11 +126,14 @@ function Invoke-TuringDeskSmartDownload {
     }
     Remove-Item $Destination -Force -ErrorAction SilentlyContinue
 
-    foreach ($candidate in @(Get-TuringDeskBrowserDownloadCandidates -FileName $FileName)) {
-        if (Test-TuringDeskDownloadedFile -Path $candidate -ExpectedSha256 $ExpectedSha256) {
-            Write-Host "Reusing browser download for ${Name}: $candidate" -ForegroundColor Green
-            Copy-Item $candidate $Destination -Force
-            return $Destination
+    $isGenericMetadata = $FileName -ieq 'SHASUMS256.txt' -or $FileName -ieq 'LICENSE.txt'
+    if (-not $isGenericMetadata) {
+        foreach ($candidate in @(Get-TuringDeskBrowserDownloadCandidates -FileName $FileName)) {
+            if (Test-TuringDeskDownloadedFile -Path $candidate -ExpectedSha256 $ExpectedSha256) {
+                Write-Host "Reusing browser download for ${Name}: $candidate" -ForegroundColor Green
+                Copy-Item $candidate $Destination -Force
+                return $Destination
+            }
         }
     }
 
