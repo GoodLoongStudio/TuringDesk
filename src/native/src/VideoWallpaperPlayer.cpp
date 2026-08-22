@@ -13,6 +13,8 @@ using Microsoft::WRL::ComPtr;
 namespace turingdesk {
 namespace {
 
+constexpr double kHundredNsPerSecond = 10000000.0;
+
 class PlayerCallback final : public IMFPMediaPlayerCallback {
 public:
     PlayerCallback(std::atomic_bool& ended, std::atomic_bool& mediaReady, std::atomic_long& error)
@@ -79,6 +81,37 @@ float ClampVolume(float value) noexcept {
 
 float ClampRate(float value) noexcept {
     return std::clamp(value, 0.25f, 4.0f);
+}
+
+double ReadPlayerTimeSeconds(IMFPMediaPlayer* player, bool duration) {
+    if (!player) return -1.0;
+    PROPVARIANT value{};
+    PropVariantInit(&value);
+    const HRESULT hr = duration
+        ? player->GetDuration(MFP_POSITIONTYPE_100NS, &value)
+        : player->GetPosition(MFP_POSITIONTYPE_100NS, &value);
+    double seconds = -1.0;
+    if (SUCCEEDED(hr)) {
+        if (value.vt == VT_I8) seconds = static_cast<double>(value.hVal.QuadPart) / kHundredNsPerSecond;
+        else if (value.vt == VT_UI8) seconds = static_cast<double>(value.uhVal.QuadPart) / kHundredNsPerSecond;
+    }
+    PropVariantClear(&value);
+    return seconds;
+}
+
+std::wstring FormatTimeline(double position, double duration) {
+    if (position < 0.0) return {};
+    const auto pos = static_cast<unsigned long long>(position + 0.5);
+    const auto posMin = pos / 60ULL;
+    const auto posSec = pos % 60ULL;
+    wchar_t text[96]{};
+    if (duration > 0.0) {
+        const auto dur = static_cast<unsigned long long>(duration + 0.5);
+        swprintf_s(text, L"%llu:%02llu / %llu:%02llu", posMin, posSec, dur / 60ULL, dur % 60ULL);
+    } else {
+        swprintf_s(text, L"%llu:%02llu", posMin, posSec);
+    }
+    return text;
 }
 
 } // namespace
@@ -352,6 +385,29 @@ bool VideoWallpaperPlayer::Restart() {
     return true;
 }
 
+bool VideoWallpaperPlayer::SeekRelativeSeconds(double seconds) {
+    if (!impl_ || !impl_->player) return false;
+    const double current = PositionSeconds();
+    if (current < 0.0) return false;
+    double target = std::max(0.0, current + seconds);
+    const double duration = DurationSeconds();
+    if (duration > 0.0) target = std::min(target, duration);
+
+    PROPVARIANT position{};
+    PropVariantInit(&position);
+    position.vt = VT_I8;
+    position.hVal.QuadPart = static_cast<LONGLONG>(target * kHundredNsPerSecond);
+    const HRESULT hr = impl_->player->SetPosition(MFP_POSITIONTYPE_100NS, &position);
+    if (FAILED(hr)) {
+        impl_->lastError = hr;
+        return false;
+    }
+    impl_->ended.store(false, std::memory_order_release);
+    impl_->lastError = S_OK;
+    UpdateVideo();
+    return true;
+}
+
 SIZE VideoWallpaperPlayer::NativeVideoSize() const {
     return impl_ ? impl_->nativeSize : SIZE{};
 }
@@ -376,6 +432,14 @@ float VideoWallpaperPlayer::PlaybackRate() const {
     return impl_ ? impl_->playbackRate : 1.0f;
 }
 
+double VideoWallpaperPlayer::PositionSeconds() const {
+    return impl_ ? ReadPlayerTimeSeconds(impl_->player.Get(), false) : -1.0;
+}
+
+double VideoWallpaperPlayer::DurationSeconds() const {
+    return impl_ ? ReadPlayerTimeSeconds(impl_->player.Get(), true) : -1.0;
+}
+
 HRESULT VideoWallpaperPlayer::LastError() const {
     return impl_ ? impl_->lastError : E_UNEXPECTED;
 }
@@ -394,9 +458,14 @@ std::wstring VideoWallpaperPlayer::DiagnosticsText() const {
     text << L"Media Foundation MFPlay / EVR";
     if (impl_->nativeSize.cx > 0 && impl_->nativeSize.cy > 0)
         text << L" · " << impl_->nativeSize.cx << L"×" << impl_->nativeSize.cy;
-    text << L" · " << (impl_->muted ? L"静音" : L"音量 " + std::to_wstring(static_cast<int>(impl_->volume * 100.0f)) + L"%")
+    const std::wstring audio = impl_->muted
+        ? std::wstring(L"静音")
+        : std::wstring(L"音量 ") + std::to_wstring(static_cast<int>(impl_->volume * 100.0f)) + L"%";
+    text << L" · " << audio
          << L" · " << impl_->playbackRate << L"×"
          << L" · " << (impl_->looping ? L"循环" : L"单次");
+    const auto timeline = FormatTimeline(PositionSeconds(), DurationSeconds());
+    if (!timeline.empty()) text << L" · " << timeline;
     if (impl_->player) {
         float slowest = 0.0f;
         float fastest = 0.0f;
