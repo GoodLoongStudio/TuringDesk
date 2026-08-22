@@ -1,4 +1,5 @@
 name: Native Windows x64 Source Validation
+# trigger-revision: 1
 
 on:
   push:
