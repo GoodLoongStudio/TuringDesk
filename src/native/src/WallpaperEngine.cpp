@@ -181,7 +181,8 @@ Config LoadConfig() {
     config.focalY = ReadProfileFloat(path, L"FocalY", 0.5f);
     config.fpsCap = turingdesk::wallpaper::NormalizeFpsCap(GetPrivateProfileIntW(L"Wallpaper", L"FpsCap", 30, path.c_str()));
     config.throttleFps = turingdesk::wallpaper::NormalizeFpsCap(GetPrivateProfileIntW(L"Wallpaper", L"ThrottleFps", 15, path.c_str()));
-    config.idleThresholdSeconds = static_cast<DWORD>(std::clamp(GetPrivateProfileIntW(L"Wallpaper", L"IdleThresholdSeconds", 120, path.c_str()), 30, 3600));
+    const int idleSeconds = static_cast<int>(GetPrivateProfileIntW(L"Wallpaper", L"IdleThresholdSeconds", 120, path.c_str()));
+    config.idleThresholdSeconds = static_cast<DWORD>(std::clamp(idleSeconds, 30, 3600));
 
     if (version >= 7) {
         config.fullscreenAction = turingdesk::wallpaper::ParsePerformanceAction(ReadProfileText(path, L"FullscreenAction", L"pause"));
@@ -892,7 +893,7 @@ private:
 
     void RemoveTray() {
         if (!trayAdded_) return;
-        Shell_NotifyIconW(NIM_DELETE, &tray_);
+        Shell_NotifyIconW(NIM_DELETE, &tray_) != FALSE;
         trayAdded_ = false;
     }
 
