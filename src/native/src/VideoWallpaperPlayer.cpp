@@ -56,6 +56,8 @@ struct VideoWallpaperPlayer::Impl {
     bool mfStarted{};
     bool paused{};
     HRESULT lastError{S_OK};
+    HWND targetWindow{};
+    SIZE lastClientSize{};
     std::atomic_bool ended{false};
     std::atomic_long asyncError{S_OK};
     ComPtr<IMFPMediaPlayerCallback> callback;
@@ -68,10 +70,31 @@ struct VideoWallpaperPlayer::Impl {
         return mfStarted;
     }
 
+    void CaptureClientSize() {
+        lastClientSize = {};
+        if (!targetWindow) return;
+        RECT rect{};
+        if (!GetClientRect(targetWindow, &rect)) return;
+        lastClientSize.cx = rect.right - rect.left;
+        lastClientSize.cy = rect.bottom - rect.top;
+    }
+
+    bool ClientSizeChanged() {
+        if (!targetWindow) return false;
+        RECT rect{};
+        if (!GetClientRect(targetWindow, &rect)) return false;
+        const SIZE current{rect.right - rect.left, rect.bottom - rect.top};
+        if (current.cx == lastClientSize.cx && current.cy == lastClientSize.cy) return false;
+        lastClientSize = current;
+        return true;
+    }
+
     void ResetPlayer() {
         if (player) player->Shutdown();
         player.Reset();
         callback.Reset();
+        targetWindow = nullptr;
+        lastClientSize = {};
         ended.store(false, std::memory_order_relaxed);
         asyncError.store(S_OK, std::memory_order_relaxed);
         paused = false;
@@ -112,6 +135,8 @@ bool VideoWallpaperPlayer::Start(HWND targetWindow, const std::wstring& path) {
         return false;
     }
     impl_->player.Attach(rawPlayer);
+    impl_->targetWindow = targetWindow;
+    impl_->CaptureClientSize();
     const HRESULT volumeResult = impl_->player->SetVolume(0.0f);
     if (FAILED(volumeResult)) impl_->lastError = volumeResult;
     else impl_->lastError = S_OK;
@@ -129,6 +154,11 @@ void VideoWallpaperPlayer::Tick() {
 
     const HRESULT asyncError = static_cast<HRESULT>(impl_->asyncError.exchange(S_OK, std::memory_order_acq_rel));
     if (FAILED(asyncError)) impl_->lastError = asyncError;
+
+    // MFPlay does not automatically rescale when its target HWND changes size.
+    // The wallpaper host can be resized by monitor/DPI/Explorer changes, so refresh
+    // the video only when the client rect actually changes instead of every 33 ms.
+    if (impl_->ClientSizeChanged()) UpdateVideo();
 
     if (!impl_->ended.exchange(false, std::memory_order_acq_rel)) return;
 
@@ -156,6 +186,7 @@ void VideoWallpaperPlayer::SetPaused(bool paused) {
         return;
     }
     impl_->paused = paused;
+    if (!paused) UpdateVideo();
 }
 
 bool VideoWallpaperPlayer::Active() const {
