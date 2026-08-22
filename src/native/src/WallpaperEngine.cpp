@@ -5,6 +5,7 @@
 #include <wincodec.h>
 #include <wrl/client.h>
 #include "turingdesk/VideoWallpaperPlayer.h"
+#include "turingdesk/VideoWallpaperSet.h"
 #include "turingdesk/WallpaperMonitorLayout.h"
 #include <algorithm>
 #include <array>
@@ -253,7 +254,7 @@ public:
     explicit WallpaperApp(HINSTANCE instance) : instance_(instance), config_(LoadConfig()) {}
 
     ~WallpaperApp() {
-        videoPlayer_.Stop();
+        videoSet_.Stop();
         RemoveTray();
         if (settings_ && IsWindow(settings_)) DestroyWindow(settings_);
         if (host_ && IsWindow(host_)) DestroyWindow(host_);
@@ -397,14 +398,14 @@ public:
             AttachToDesktop();
             ShowWindow(host_, SW_SHOWNOACTIVATE);
             if (config_.scene == L"video") {
-                if (!videoPlayer_.Active()) StartVideo();
-                videoPlayer_.SetPaused(false);
+                if (!videoSet_.Active()) StartVideo();
+                videoSet_.SetPaused(false);
             } else {
                 InvalidateRect(host_, nullptr, FALSE);
                 UpdateWindow(host_);
             }
         } else {
-            videoPlayer_.SetPaused(true);
+            videoSet_.SetPaused(true);
             ShowWindow(host_, SW_HIDE);
         }
         RefreshSettings();
@@ -513,9 +514,9 @@ private:
                 if (config_.enabled) {
                     const bool paused = config_.pauseFullscreen && ForegroundIsFullscreen(host_, settings_);
                     if (config_.scene == L"video") {
-                        videoPlayer_.Tick();
-                        videoPlayer_.SetPaused(paused);
-                        const auto mediaError = videoPlayer_.LastErrorText();
+                        videoSet_.Tick();
+                        videoSet_.SetPaused(paused);
+                        const auto mediaError = videoSet_.LastErrorText();
                         if (mediaError != lastMediaError_) {
                             lastMediaError_ = mediaError;
                             RefreshSettings();
@@ -548,7 +549,7 @@ private:
         return DefWindowProcW(control_, message, wParam, lParam);
     }
 
-    LRESULT HandleHost(UINT message, WPARAM, LPARAM lParam) {
+    LRESULT HandleHost(UINT message, WPARAM wParam, LPARAM lParam) {
         switch (message) {
         case WM_NCHITTEST:
             return HTTRANSPARENT;
@@ -572,7 +573,7 @@ private:
             host_ = nullptr;
             return 0;
         }
-        return DefWindowProcW(host_, message, 0, lParam);
+        return DefWindowProcW(host_, message, wParam, lParam);
     }
 
     void ResetGraphics() {
@@ -783,7 +784,7 @@ private:
     void Draw() {
         EnsureRenderTarget();
         if (!renderTarget_ || !brush_ || !config_.enabled) return;
-        if (config_.scene == L"video" && videoPlayer_.Active()) return;
+        if (config_.scene == L"video" && videoSet_.Active()) return;
 
         renderTarget_->BeginDraw();
         renderTarget_->SetTransform(D2D1::Matrix3x2F::Identity());
@@ -901,7 +902,7 @@ private:
     }
 
     bool ApplyConfig(const Config& next, bool persist = true) {
-        videoPlayer_.Stop();
+        videoSet_.Stop();
         lastMediaError_.clear();
         config_ = next;
         config_.layout = turingdesk::wallpaper::LayoutModeKey(turingdesk::wallpaper::ParseLayoutMode(config_.layout));
@@ -924,17 +925,21 @@ private:
     }
 
     bool StartVideo() {
+        videoSet_.Stop();
         lastMediaError_.clear();
         if (config_.video.empty() || !fs::exists(config_.video)) {
             lastMediaError_ = L"视频文件不存在";
             return false;
         }
-        if (!videoPlayer_.Start(host_, config_.video)) {
-            lastMediaError_ = videoPlayer_.LastErrorText();
+
+        auto regions = turingdesk::wallpaper::DrawRegionsInHost(
+            topology_, turingdesk::wallpaper::ParseLayoutMode(config_.layout));
+        if (!videoSet_.Start(host_, config_.video, regions)) {
+            lastMediaError_ = videoSet_.LastErrorText();
             if (lastMediaError_.empty()) lastMediaError_ = L"Media Foundation 无法启动该视频";
             return false;
         }
-        videoPlayer_.SetPaused(false);
+        videoSet_.SetPaused(false);
         return true;
     }
 
@@ -1024,11 +1029,7 @@ private:
             if (selected <= 2) status += L" · Direct2D 约 30 FPS";
             else if (selected == 4) {
                 if (!lastMediaError_.empty()) status = L"视频壁纸错误：" + lastMediaError_;
-                else {
-                    status += L" · Media Foundation · 静音循环";
-                    if (layoutMode == turingdesk::wallpaper::LayoutMode::Clone && topology_.monitors.size() > 1)
-                        status += L" · 视频暂按跨屏渲染（每屏视频复制将在视频阶段完成）";
-                }
+                else status += L" · Media Foundation · 静音循环";
             }
             status += L"\r\n" + turingdesk::wallpaper::DescribeMonitorTopology(topology_);
         }
@@ -1060,7 +1061,7 @@ private:
     std::wstring pendingImage_;
     std::wstring pendingVideo_;
     std::wstring lastMediaError_;
-    turingdesk::VideoWallpaperPlayer videoPlayer_;
+    turingdesk::VideoWallpaperSet videoSet_;
     float time_{};
     ComPtr<ID2D1Factory> d2dFactory_;
     ComPtr<ID2D1HwndRenderTarget> renderTarget_;
