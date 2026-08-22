@@ -8,6 +8,10 @@
 namespace turingdesk {
 namespace {
 
+// Keep service probing on the literal loopback address so readiness checks never
+// involve name resolution or proxy configuration. The browser-facing URL uses
+// localhost instead (see DefaultUrl) to avoid the current Harness Chromium
+// Origin/Host trust regression on 127.0.0.1:3080.
 constexpr wchar_t kHarnessHost[] = L"127.0.0.1";
 constexpr INTERNET_PORT kHarnessPort = 3080;
 constexpr wchar_t kHarnessPath[] = L"/";
@@ -245,7 +249,11 @@ const std::wstring& HarnessProcessManager::LastError() const {
 }
 
 std::wstring HarnessProcessManager::DefaultUrl() {
-    return L"http://127.0.0.1:3080";
+    // Harness currently has a Chromium 151 Origin/Host regression when opened
+    // through the literal 127.0.0.1 authority. localhost resolves to the same
+    // loopback listener while preserving the browser authority expected by its
+    // browser-trust fence.
+    return L"http://localhost:3080";
 }
 
 std::wstring HarnessProcessManager::BuildLaunchCommand() {
@@ -257,7 +265,7 @@ std::wstring HarnessProcessManager::BuildLaunchCommand() {
 
 bool HarnessProcessManager::SelfTest() {
     const auto command = BuildLaunchCommand();
-    return DefaultUrl() == L"http://127.0.0.1:3080" &&
+    return DefaultUrl() == L"http://localhost:3080" &&
            command.find(L"@deepseek-ai/dsh") != std::wstring::npos &&
            command.find(L" web") != std::wstring::npos &&
            command.find(L"CREATE") == std::wstring::npos;
