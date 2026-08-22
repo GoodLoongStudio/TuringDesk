@@ -21,12 +21,17 @@ if errorlevel 1 (
   goto :fail
 )
 
-echo [1/2] Updating main...
+echo [1/3] Updating main...
 git pull --ff-only
 if errorlevel 1 goto :fail
 
 echo.
-echo [2/2] Building, installing required runtime, validating Harness, and launching TuringDesk...
+echo [2/3] Preparing persistent third-party runtimes with smart download...
+powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\prepare-third-party-runtime-arm64.ps1"
+if errorlevel 1 goto :fail
+
+echo.
+echo [3/3] Building, installing Harness runtime if needed, validating, and launching TuringDesk...
 powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\deploy-native-arm64.ps1"
 if errorlevel 1 goto :fail
 
