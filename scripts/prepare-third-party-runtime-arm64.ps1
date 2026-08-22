@@ -12,11 +12,71 @@ $SmartDownload = Join-Path $PSScriptRoot "smart-download.ps1"
 if (-not (Test-Path $SmartDownload -PathType Leaf)) { throw "Smart download helper is missing: $SmartDownload" }
 . $SmartDownload
 
-$CacheRoot = Join-Path $env:LOCALAPPDATA "TuringDesk\RuntimeCache\downloads"
+$TuringDeskRoot = Join-Path $env:LOCALAPPDATA "TuringDesk"
+$RuntimeCacheRoot = Join-Path $TuringDeskRoot "RuntimeCache"
+$CacheRoot = Join-Path $RuntimeCacheRoot "downloads"
 New-Item -ItemType Directory -Force -Path $CacheRoot | Out-Null
 New-Item -ItemType Directory -Force -Path $DeployDir | Out-Null
 
 function Step([string]$Text) { Write-Host "`n==> $Text" -ForegroundColor Cyan }
+
+function Remove-TuringDeskPathSafely([string]$Path) {
+    if (-not (Test-Path $Path)) { return }
+    $lastError = $null
+    for ($i = 1; $i -le 10; $i++) {
+        try {
+            Remove-Item $Path -Recurse -Force -ErrorAction Stop
+            Write-Host "Removed legacy TuringDesk path: $Path" -ForegroundColor DarkGray
+            return
+        }
+        catch {
+            $lastError = $_
+            Start-Sleep -Milliseconds 300
+        }
+    }
+    throw "Unable to remove obsolete TuringDesk Harness data at $Path : $($lastError.Exception.Message)"
+}
+
+function Remove-LegacyPrivateHarnessEnvironment {
+    Step "Cleaning obsolete private Harness environment"
+
+    # Stop only the TuringDesk Harness shell from this development deployment.
+    # Its Job Object owns the old child process tree, so closing it releases files
+    # under NativeTest\HarnessRuntime without killing unrelated system Node processes.
+    $expectedHarness = [System.IO.Path]::GetFullPath((Join-Path $DeployDir "TuringDeskHarness.exe"))
+    foreach ($process in @(Get-Process -Name "TuringDeskHarness" -ErrorAction SilentlyContinue)) {
+        try {
+            if ($process.Path -and ([System.IO.Path]::GetFullPath($process.Path) -eq $expectedHarness)) {
+                Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+                $process.WaitForExit(3000) | Out-Null
+            }
+        }
+        catch { }
+    }
+
+    # These are only directories/files created by TuringDesk's abandoned private
+    # Harness bootstrap. Never touch system Node, global npm cache, user profiles,
+    # or another project's node_modules.
+    $legacyPaths = @(
+        (Join-Path $DeployDir "HarnessRuntime"),
+        (Join-Path $RuntimeCacheRoot "Node"),
+        (Join-Path $RuntimeCacheRoot "npm"),
+        (Join-Path $RuntimeCacheRoot "logs")
+    )
+    foreach ($path in $legacyPaths) { Remove-TuringDeskPathSafely $path }
+
+    $legacyFiles = @(
+        (Join-Path $TuringDeskRoot "Logs\harness-system-install.log")
+    )
+    foreach ($path in $legacyFiles) {
+        if (Test-Path $path -PathType Leaf) {
+            Remove-Item $path -Force -ErrorAction SilentlyContinue
+            Write-Host "Removed legacy TuringDesk file: $path" -ForegroundColor DarkGray
+        }
+    }
+
+    Write-Host "Legacy private Harness environment is clean." -ForegroundColor Green
+}
 
 function Refresh-ProcessPath {
     $machine = [Environment]::GetEnvironmentVariable("Path", "Machine")
@@ -32,6 +92,8 @@ function Find-Npx {
     if (Test-Path $candidate -PathType Leaf) { return $candidate }
     return $null
 }
+
+Remove-LegacyPrivateHarnessEnvironment
 
 # DeepSeek's official Windows Web UI path is `npx @deepseek-ai/dsh web`.
 # TuringDesk only guarantees official Node.js/npx exists; it does not build or
