@@ -1,4 +1,5 @@
 #include "turingdesk/WallpaperPerformancePolicy.h"
+#include "turingdesk/WallpaperApplicationRules.h"
 
 #include <algorithm>
 #include <cstdlib>
@@ -53,6 +54,69 @@ void ApplyRule(PerformanceSnapshot& snapshot, bool active, PerformanceAction act
     } else if (action == snapshot.action && snapshot.reason.empty()) {
         snapshot.reason = reason;
     }
+}
+
+int TargetFpsForAction(const PerformanceConfig& config, PerformanceAction action) {
+    const int normalFps = NormalizeFpsCap(config.fpsCap);
+    const int throttleFps = std::min(normalFps, NormalizeFpsCap(config.throttleFps));
+    return action == PerformanceAction::Throttle ? throttleFps :
+           action == PerformanceAction::Normal ? normalFps : 0;
+}
+
+bool SameRootWindow(HWND a, HWND b) {
+    if (!a || !b) return false;
+    return a == b || GetAncestor(a, GA_ROOT) == GetAncestor(b, GA_ROOT);
+}
+
+std::wstring ApplicationRuleReason(const ApplicationRuleMatch& match) {
+    std::wstring result = L"应用规则：";
+    result += match.displayName.empty() ? match.executable : match.displayName;
+    result += L" · ";
+    result += WallpaperApplicationRules::TriggerDisplayName(match.trigger);
+    result += L" → ";
+    result += PerformanceActionDisplayName(match.action);
+    return result;
+}
+
+PerformanceSnapshot ApplyApplicationOverride(const PerformanceConfig& config,
+                                             const PerformanceSnapshot& base,
+                                             const ApplicationRuleMatch& match,
+                                             HWND foreground) {
+    if (!match.matched) return base;
+
+    // Foreground/fullscreen/maximized rules are explicit overrides for the generic
+    // foreground-window defaults. A background "running" rule may make policy
+    // stricter, but a Running+Continue rule must not accidentally neutralize a
+    // different foreground application's fullscreen policy.
+    const bool ownsForeground = SameRootWindow(match.window, foreground);
+    const bool replacesWindowDefaults = match.trigger != ApplicationRuleTrigger::Running || ownsForeground;
+
+    PerformanceSnapshot result = base;
+    if (replacesWindowDefaults) {
+        PerformanceConfig protectedConfig = config;
+        protectedConfig.fullscreenAction = PerformanceAction::Normal;
+        protectedConfig.maximizedAction = PerformanceAction::Normal;
+        result = ResolvePerformanceSnapshot(protectedConfig,
+                                            base.fullscreen, base.maximized,
+                                            base.remoteSession, base.batterySaver,
+                                            base.sessionLocked, base.idle);
+    }
+
+    const PerformanceAction protectedAction = result.action;
+    const std::wstring protectedReason = result.reason;
+    if (match.action != PerformanceAction::Normal &&
+        static_cast<int>(match.action) > static_cast<int>(result.action)) {
+        result.action = match.action;
+    }
+    result.targetFps = TargetFpsForAction(config, result.action);
+
+    const std::wstring appReason = ApplicationRuleReason(match);
+    if (static_cast<int>(protectedAction) > static_cast<int>(match.action) && !protectedReason.empty()) {
+        result.reason = appReason + L"；系统保护：" + protectedReason;
+    } else {
+        result.reason = appReason;
+    }
+    return result;
 }
 
 } // namespace
@@ -122,10 +186,7 @@ PerformanceSnapshot ResolvePerformanceSnapshot(const PerformanceConfig& config,
     ApplyRule(snapshot, sessionLocked, config.lockedSessionAction, L"Windows 会话已锁定");
     ApplyRule(snapshot, idle, config.idleAction, L"用户长时间无输入");
 
-    const int normalFps = NormalizeFpsCap(config.fpsCap);
-    const int throttleFps = std::min(normalFps, NormalizeFpsCap(config.throttleFps));
-    snapshot.targetFps = snapshot.action == PerformanceAction::Throttle ? throttleFps :
-                         snapshot.action == PerformanceAction::Normal ? normalFps : 0;
+    snapshot.targetFps = TargetFpsForAction(config, snapshot.action);
     return snapshot;
 }
 
@@ -150,8 +211,10 @@ PerformanceSnapshot WallpaperPerformancePolicy::Evaluate(HWND wallpaperWindow, H
     const bool remoteSession = GetSystemMetrics(SM_REMOTESESSION) != 0;
     const bool batterySaver = BatterySaverEnabled();
     const bool idle = UserIdleFor(config.idleThresholdSeconds);
-    return ResolvePerformanceSnapshot(config, fullscreen, maximized, remoteSession,
-                                      batterySaver, sessionLocked_, idle);
+    const auto base = ResolvePerformanceSnapshot(config, fullscreen, maximized, remoteSession,
+                                                 batterySaver, sessionLocked_, idle);
+    const auto appMatch = EvaluateCachedApplicationRules(wallpaperWindow, settingsWindow);
+    return ApplyApplicationOverride(config, base, appMatch, foreground);
 }
 
 bool WallpaperPerformancePolicy::SelfTest() noexcept {
@@ -172,7 +235,21 @@ bool WallpaperPerformancePolicy::SelfTest() noexcept {
     if (throttled.action != PerformanceAction::Throttle || throttled.targetFps != 15) return false;
 
     const auto stopped = ResolvePerformanceSnapshot(config, true, false, false, false, true, false);
-    return stopped.action == PerformanceAction::Stop && stopped.targetFps == 0 && !stopped.reason.empty();
+    if (stopped.action != PerformanceAction::Stop || stopped.targetFps != 0 || stopped.reason.empty()) return false;
+
+    ApplicationRuleMatch continueRule;
+    continueRule.matched = true;
+    continueRule.executable = L"game.exe";
+    continueRule.displayName = L"Game";
+    continueRule.trigger = ApplicationRuleTrigger::Fullscreen;
+    continueRule.action = PerformanceAction::Normal;
+    const auto overridden = ApplyApplicationOverride(config, ResolvePerformanceSnapshot(config, true, false, false, false, false, false), continueRule, nullptr);
+    if (overridden.action != PerformanceAction::Normal || overridden.targetFps != 60) return false;
+
+    const auto protectedBase = ResolvePerformanceSnapshot(config, true, false, false, false, true, false);
+    const auto protectedResult = ApplyApplicationOverride(config, protectedBase, continueRule, nullptr);
+    return protectedResult.action == PerformanceAction::Stop && protectedResult.targetFps == 0 &&
+           protectedResult.reason.find(L"系统保护") != std::wstring::npos;
 }
 
 } // namespace turingdesk::wallpaper
