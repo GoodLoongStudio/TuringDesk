@@ -21,6 +21,7 @@ public:
     const std::wstring& LastError() const;
 
     static std::wstring DefaultUrl();
+    static std::wstring LogPath();
     static std::wstring BuildLaunchCommand();
     static bool SelfTest();
 
