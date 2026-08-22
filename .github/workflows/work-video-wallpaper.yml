@@ -1,0 +1,32 @@
+name: Work Video Wallpaper
+
+on:
+  push:
+    branches:
+      - work-video-wallpaper
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: work-video-wallpaper
+          fetch-depth: 0
+      - name: Apply video wallpaper patch
+        shell: pwsh
+        run: python scripts/apply-video-wallpaper.py
+      - name: Commit clean result
+        shell: pwsh
+        run: |
+          Remove-Item scripts/apply-video-wallpaper.py -Force
+          Remove-Item .github/workflows/work-video-wallpaper.yml -Force
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "feat: add native Media Foundation video wallpapers"
+          git push origin HEAD:work-video-wallpaper
