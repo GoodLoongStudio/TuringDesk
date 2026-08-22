@@ -63,9 +63,9 @@ function Copy-WithRetry([string]$Source, [string]$Destination) {
 
 function Test-Binary([string]$Exe) {
     Step "Running Native Search self-test"
-    & $Exe --self-test | Out-Host
-    if ($LASTEXITCODE -ne 0) {
-        throw "Self-test failed with exit code $LASTEXITCODE"
+    $Process = Start-Process -FilePath $Exe -ArgumentList "--self-test" -Wait -PassThru
+    if ($Process.ExitCode -ne 0) {
+        throw "Self-test failed with exit code $($Process.ExitCode)"
     }
 }
 
