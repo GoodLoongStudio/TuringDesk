@@ -1,7 +1,7 @@
 {
   "sha": "4b7187523d456197943cd6e2c083d8132153234d",
-  "mode": "quick",
-  "x64": "success",
-  "arm64": "success",
-  "run_id": "32553114289"
+  "mode": "full",
+  "x64": "cancelled",
+  "arm64": "cancelled",
+  "run_id": "32553254566"
 }
