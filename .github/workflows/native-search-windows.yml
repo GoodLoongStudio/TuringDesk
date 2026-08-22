@@ -30,6 +30,11 @@ jobs:
         run: |
           $process = Start-Process -FilePath ".\build\src\native\Release\TuringDesk.exe" -ArgumentList "--self-test" -Wait -PassThru
           if ($process.ExitCode -ne 0) { throw "Native Search self-test failed: $($process.ExitCode)" }
+      - name: Native Wallpaper self-test
+        shell: pwsh
+        run: |
+          $process = Start-Process -FilePath ".\build\src\native\Release\TuringDeskWallpaper.exe" -ArgumentList "--self-test" -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "Native Wallpaper self-test failed: $($process.ExitCode)" }
       - name: Package x64 with Everything and Wallpaper
         shell: pwsh
         run: |
@@ -55,8 +60,10 @@ jobs:
           foreach ($path in $required) {
             if (-not (Test-Path $path -PathType Leaf)) { throw "Missing packaged file: $path" }
           }
-          $process = Start-Process -FilePath (Join-Path $package "TuringDesk.exe") -ArgumentList "--self-test" -Wait -PassThru
-          if ($process.ExitCode -ne 0) { throw "Packaged TuringDesk self-test failed: $($process.ExitCode)" }
+          $search = Start-Process -FilePath (Join-Path $package "TuringDesk.exe") -ArgumentList "--self-test" -Wait -PassThru
+          if ($search.ExitCode -ne 0) { throw "Packaged TuringDesk self-test failed: $($search.ExitCode)" }
+          $wallpaper = Start-Process -FilePath (Join-Path $package "TuringDeskWallpaper.exe") -ArgumentList "--self-test" -Wait -PassThru
+          if ($wallpaper.ExitCode -ne 0) { throw "Packaged wallpaper self-test failed: $($wallpaper.ExitCode)" }
       - uses: actions/upload-artifact@v4
         with:
           name: TuringDesk-Native-Search-x64
@@ -75,6 +82,11 @@ jobs:
         run: |
           $process = Start-Process -FilePath ".\build\src\native\Release\TuringDesk.exe" -ArgumentList "--self-test" -Wait -PassThru
           if ($process.ExitCode -ne 0) { throw "Native Search self-test failed: $($process.ExitCode)" }
+      - name: Native Wallpaper self-test
+        shell: pwsh
+        run: |
+          $process = Start-Process -FilePath ".\build\src\native\Release\TuringDeskWallpaper.exe" -ArgumentList "--self-test" -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "Native Wallpaper self-test failed: $($process.ExitCode)" }
       - name: Package ARM64 with Everything and Wallpaper
         shell: pwsh
         run: |
@@ -100,8 +112,10 @@ jobs:
           foreach ($path in $required) {
             if (-not (Test-Path $path -PathType Leaf)) { throw "Missing packaged file: $path" }
           }
-          $process = Start-Process -FilePath (Join-Path $package "TuringDesk.exe") -ArgumentList "--self-test" -Wait -PassThru
-          if ($process.ExitCode -ne 0) { throw "Packaged TuringDesk self-test failed: $($process.ExitCode)" }
+          $search = Start-Process -FilePath (Join-Path $package "TuringDesk.exe") -ArgumentList "--self-test" -Wait -PassThru
+          if ($search.ExitCode -ne 0) { throw "Packaged TuringDesk self-test failed: $($search.ExitCode)" }
+          $wallpaper = Start-Process -FilePath (Join-Path $package "TuringDeskWallpaper.exe") -ArgumentList "--self-test" -Wait -PassThru
+          if ($wallpaper.ExitCode -ne 0) { throw "Packaged wallpaper self-test failed: $($wallpaper.ExitCode)" }
       - uses: actions/upload-artifact@v4
         with:
           name: TuringDesk-Native-Search-ARM64
