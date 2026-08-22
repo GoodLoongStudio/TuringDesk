@@ -31,6 +31,9 @@ public:
     void SetVolume(float volume);
     void SetPlaybackRate(float rate);
     bool Restart();
+    bool SeekRelativeSeconds(double seconds);
+    double PositionSeconds() const;
+    double DurationSeconds() const;
     bool Active() const;
     std::wstring LastErrorText() const;
     std::wstring DiagnosticsText() const;
