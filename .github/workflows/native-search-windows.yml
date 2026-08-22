@@ -1,4 +1,4 @@
-name: Native Search Windows
+name: Native Windows ARM64
 
 on:
   push:
@@ -6,61 +6,19 @@ on:
     paths:
       - CMakeLists.txt
       - src/native/**
+      - runtime/arm64/**
+      - scripts/prepare-third-party-runtime-arm64.ps1
       - .github/workflows/native-search-windows.yml
   workflow_dispatch:
-    inputs:
-      build_x64:
-        description: Also build and validate x64
-        required: false
-        default: false
-        type: boolean
 
 permissions:
   contents: write
 
 concurrency:
-  group: native-search-${{ github.ref }}-${{ github.event_name }}
+  group: native-arm64-${{ github.ref }}-${{ github.event_name }}
   cancel-in-progress: true
 
 jobs:
-  build-x64:
-    if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.build_x64) }}
-    runs-on: windows-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v5
-      - name: Configure x64
-        run: cmake -S . -B build -A x64
-      - name: Build x64
-        run: cmake --build build --config Release --parallel
-      - name: Native Search self-test
-        shell: pwsh
-        run: |
-          $p = Start-Process -FilePath ".\build\src\native\Release\TuringDesk.exe" -ArgumentList "--self-test" -Wait -PassThru
-          if ($p.ExitCode -ne 0) { throw "Native Search self-test failed: $($p.ExitCode)" }
-      - name: Native Wallpaper self-test
-        shell: pwsh
-        run: |
-          $p = Start-Process -FilePath ".\build\src\native\Release\TuringDeskWallpaper.exe" -ArgumentList "--self-test" -Wait -PassThru
-          if ($p.ExitCode -ne 0) { throw "Native Wallpaper self-test failed: $($p.ExitCode)" }
-      - name: Native Harness shell self-test
-        shell: pwsh
-        run: |
-          $p = Start-Process -FilePath ".\build\src\native\Release\TuringDeskHarness.exe" -ArgumentList "--self-test" -Wait -PassThru
-          if ($p.ExitCode -ne 0) { throw "Native Harness shell self-test failed: $($p.ExitCode)" }
-      - name: Prepare x64 artifact
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force -Path build/package | Out-Null
-          Copy-Item build/src/native/Release/TuringDesk.exe build/package/TuringDesk.exe -Force
-          Copy-Item build/src/native/Release/TuringDeskWallpaper.exe build/package/TuringDeskWallpaper.exe -Force
-          Copy-Item build/src/native/Release/TuringDeskHarness.exe build/package/TuringDeskHarness.exe -Force
-      - uses: actions/upload-artifact@v4
-        with:
-          name: TuringDesk-Native-Search-x64
-          path: build/package/**
-          retention-days: 3
-
   build-arm64:
     runs-on: windows-11-arm
     timeout-minutes: 15
@@ -100,24 +58,23 @@ jobs:
 
   report:
     if: always()
-    needs: [build-x64, build-arm64]
+    needs: [build-arm64]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
         with:
           ref: ci-status
-      - name: Write isolated CI status
+      - name: Write isolated ARM64 CI status
         shell: bash
         env:
-          X64_RESULT: ${{ needs.build-x64.result }}
           ARM64_RESULT: ${{ needs.build-arm64.result }}
         run: |
           mkdir -p ci
           cat > "ci/native-${GITHUB_SHA}.json" <<EOF
           {
             "sha": "${GITHUB_SHA}",
-            "mode": "native",
-            "x64": "${X64_RESULT}",
+            "mode": "native-arm64-only",
+            "x64": "disabled",
             "arm64": "${ARM64_RESULT}",
             "run_id": "${GITHUB_RUN_ID}"
           }
@@ -125,7 +82,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add "ci/native-${GITHUB_SHA}.json"
-          git commit -m "ci: report native build ${GITHUB_SHA}" || exit 0
+          git commit -m "ci: report ARM64 native build ${GITHUB_SHA}" || exit 0
           for i in 1 2 3; do
             git pull --rebase origin ci-status || true
             if git push origin HEAD:ci-status; then exit 0; fi
