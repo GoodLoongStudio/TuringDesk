@@ -5,6 +5,8 @@
 #include <string>
 #include <vector>
 
+#include "turingdesk/WallpaperScaling.h"
+
 namespace turingdesk {
 
 class VideoWallpaperPlayer;
@@ -17,10 +19,13 @@ public:
     VideoWallpaperSet(const VideoWallpaperSet&) = delete;
     VideoWallpaperSet& operator=(const VideoWallpaperSet&) = delete;
 
-    bool Start(HWND parentWindow, const std::wstring& path, const std::vector<RECT>& regions);
+    bool Start(HWND parentWindow, const std::wstring& path, const std::vector<RECT>& regions,
+               wallpaper::ScaleMode scaleMode = wallpaper::ScaleMode::Cover,
+               float focalX = 0.5f, float focalY = 0.5f);
     void Stop();
     void Tick();
     void SetPaused(bool paused);
+    void SetScaling(wallpaper::ScaleMode scaleMode, float focalX = 0.5f, float focalY = 0.5f);
     bool Active() const;
     std::wstring LastErrorText() const;
 
@@ -37,6 +42,9 @@ private:
     HWND parent_{};
     std::vector<Slot> slots_;
     std::wstring lastError_;
+    wallpaper::ScaleMode scaleMode_{wallpaper::ScaleMode::Cover};
+    float focalX_{0.5f};
+    float focalY_{0.5f};
 };
 
 } // namespace turingdesk
