@@ -1,5 +1,5 @@
 name: Apply tdwall Library Migration
-# trigger-revision: 4
+# trigger-revision: 5
 
 on:
   push:
@@ -37,6 +37,9 @@ jobs:
           replace_once(lib,
               '    fs::create_directories(MediaDirectory(), ec);\n    fs::create_directories(ThumbnailDirectory(), ec);\n',
               '    fs::create_directories(MediaDirectory(), ec);\n    fs::create_directories(PackageDirectory(), ec);\n    fs::create_directories(ThumbnailDirectory(), ec);\n')
+          replace_once(lib,
+              '    if (!fs::exists(manifest, ec)) return true;\n',
+              '    if (!fs::exists(manifest, ec)) return DiscoverPackages(error);\n')
           replace_once(lib,
               '    std::sort(items_.begin(), items_.end(), [](const WallpaperLibraryItem& a, const WallpaperLibraryItem& b) {\n',
               '    if (!DiscoverPackages(error)) return false;\n\n    std::sort(items_.begin(), items_.end(), [](const WallpaperLibraryItem& a, const WallpaperLibraryItem& b) {\n')
