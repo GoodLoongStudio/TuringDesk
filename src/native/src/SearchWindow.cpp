@@ -1,6 +1,7 @@
 #include "turingdesk/SearchWindow.h"
 #include "turingdesk/L3CliWindow.h"
 #include "turingdesk/ModelSettingsWindow.h"
+#include "turingdesk/SettingsCenterWindow.h"
 #include <dwmapi.h>
 #include <shellapi.h>
 #include <windowsx.h>
@@ -182,7 +183,7 @@ bool SearchWindow::Create() {
                                       WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
                                       aiX, kControlTop, kAiButtonWidth, kControlHeight, hwnd_,
                                       reinterpret_cast<HMENU>(static_cast<INT_PTR>(kSettingsButtonId)), instance_, nullptr);
-    wallpaperButton_ = CreateWindowExW(0, L"BUTTON", L"壁纸",
+    wallpaperButton_ = CreateWindowExW(0, L"BUTTON", L"设置",
                                        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
                                        wallpaperX, kControlTop, kWallpaperButtonWidth, kControlHeight, hwnd_,
                                        reinterpret_cast<HMENU>(static_cast<INT_PTR>(kWallpaperButtonId)), instance_, nullptr);
@@ -373,7 +374,7 @@ void SearchWindow::HandleTray(UINT mouseMessage) {
     HMENU menu = CreatePopupMenu();
     if (!menu) return;
     AppendMenuW(menu, MF_STRING, kTrayShow, L"显示搜索");
-    AppendMenuW(menu, MF_STRING, kTrayWallpaper, L"壁纸设置");
+    AppendMenuW(menu, MF_STRING, kTrayWallpaper, L"设置中心");
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(menu, MF_STRING, kTrayExit, L"退出 TuringDesk");
 
@@ -384,24 +385,15 @@ void SearchWindow::HandleTray(UINT mouseMessage) {
                                        point.x, point.y, 0, hwnd_, nullptr);
     DestroyMenu(menu);
     if (command == kTrayShow) ShowAndFocus();
-    else if (command == kTrayWallpaper) OpenWallpaperSettings();
+    else if (command == kTrayWallpaper) OpenSettingsCenter();
     else if (command == kTrayExit) ExitApplication();
 }
 
-void SearchWindow::OpenWallpaperSettings() {
-    wchar_t modulePath[32768]{};
-    const DWORD length = GetModuleFileNameW(nullptr, modulePath, static_cast<DWORD>(std::size(modulePath)));
-    if (length == 0 || length >= std::size(modulePath)) {
-        SetStatus(L"壁纸设置启动失败", L"无法读取 TuringDesk 安装路径。");
-        return;
+void SearchWindow::OpenSettingsCenter() {
+    if (l3_.Busy()) l3_.Stop();
+    if (!ShowSettingsCenterWindow(instance_, hwnd_, l3_)) {
+        SetStatus(L"设置中心启动失败", L"无法创建 TuringDesk 设置中心窗口。");
     }
-    const fs::path wallpaper = fs::path(modulePath).parent_path() / L"TuringDeskWallpaper.exe";
-    if (!fs::exists(wallpaper)) {
-        SetStatus(L"壁纸引擎未找到", wallpaper.wstring());
-        return;
-    }
-    const auto code = reinterpret_cast<INT_PTR>(ShellExecuteW(hwnd_, L"open", wallpaper.c_str(), L"--settings", nullptr, SW_SHOWNORMAL));
-    if (code <= 32) SetStatus(L"壁纸设置启动失败", wallpaper.wstring());
 }
 
 void SearchWindow::ExitApplication() {
@@ -480,7 +472,7 @@ LRESULT SearchWindow::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) 
     case WM_COMMAND:
         if (LOWORD(wParam) == kSearchEditId && HIWORD(wParam) == EN_CHANGE) { OnQueryChanged(); return 0; }
         if (LOWORD(wParam) == kSettingsButtonId && HIWORD(wParam) == BN_CLICKED) { OpenModelSettings(); return 0; }
-        if (LOWORD(wParam) == kWallpaperButtonId && HIWORD(wParam) == BN_CLICKED) { OpenWallpaperSettings(); return 0; }
+        if (LOWORD(wParam) == kWallpaperButtonId && HIWORD(wParam) == BN_CLICKED) { OpenSettingsCenter(); return 0; }
         break;
     case WM_DRAWITEM: {
         const auto* item = reinterpret_cast<DRAWITEMSTRUCT*>(lParam);
@@ -496,7 +488,7 @@ LRESULT SearchWindow::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) 
         SetTextColor(item->hDC, RGB(32, 35, 40));
         const HFONT previous = reinterpret_cast<HFONT>(SelectObject(item->hDC, uiFont_));
         RECT textRect = item->rcItem;
-        const wchar_t* label = item->CtlID == kSettingsButtonId ? L"AI" : L"壁纸";
+        const wchar_t* label = item->CtlID == kSettingsButtonId ? L"AI" : L"设置";
         DrawTextW(item->hDC, label, -1, &textRect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
         SelectObject(item->hDC, previous);
         if (selectedBrush) DeleteObject(selectedBrush);
