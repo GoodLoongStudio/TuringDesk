@@ -15,7 +15,7 @@ namespace {
 constexpr wchar_t kHarnessHost[] = L"127.0.0.1";
 constexpr INTERNET_PORT kHarnessPort = 3080;
 constexpr wchar_t kHarnessPath[] = L"/";
-constexpr wchar_t kHarnessArgs[] = L"web --host 127.0.0.1 --port 3080";
+constexpr wchar_t kHarnessArgs[] = L"web --no-open --host 127.0.0.1 --port 3080";
 constexpr char kHarnessBootMarker[] = "window.__DSH_BOOT__";
 constexpr std::size_t kMaxReadinessProbeBytes = 256 * 1024;
 
@@ -272,6 +272,7 @@ bool HarnessProcessManager::Start() {
     WriteLogLine(logHandle, L"[TuringDesk] mode: " + launch.mode);
     WriteLogLine(logHandle, L"[TuringDesk] application: " + launch.application);
     WriteLogLine(logHandle, L"[TuringDesk] command: " + launch.commandLine);
+    WriteLogLine(logHandle, L"[TuringDesk] external browser: disabled; UI is hosted by TuringDesk WebView2");
     WriteLogLine(logHandle, L"[TuringDesk] network bootstrap: disabled; using repository RuntimeBundle");
     WriteLogLine(logHandle, L"[TuringDesk] waiting for upstream stdout/stderr...");
     FlushFileBuffers(logHandle);
@@ -409,7 +410,7 @@ std::wstring HarnessProcessManager::LogPath() {
 std::wstring HarnessProcessManager::BuildLaunchCommand() {
     const LaunchSpec resolved = ResolveLaunchSpec();
     if (resolved.Valid()) return resolved.commandLine;
-    return L"<TuringDesk>\\Runtime\\Node\\node.exe <TuringDesk>\\Runtime\\Node\\node_modules\\@deepseek-ai\\dsh\\lib\\bin.js web --host 127.0.0.1 --port 3080";
+    return L"<TuringDesk>\\Runtime\\Node\\node.exe <TuringDesk>\\Runtime\\Node\\node_modules\\@deepseek-ai\\dsh\\lib\\bin.js web --no-open --host 127.0.0.1 --port 3080";
 }
 
 bool HarnessProcessManager::SelfTest() {
@@ -429,6 +430,7 @@ bool HarnessProcessManager::SelfTest() {
            dshCommand.find(L"@deepseek-ai\\dsh\\lib\\bin.js") != std::wstring::npos &&
            dshCommand.find(L"npx") == std::wstring::npos &&
            dshCommand.find(L"registry.npmjs.org") == std::wstring::npos &&
+           dshCommand.find(L"--no-open") != std::wstring::npos &&
            bindsOnlyLoopback(dshCommand) &&
            BuildLaunchCommand().find(L"npx") == std::wstring::npos &&
            std::string_view(kHarnessBootMarker) == "window.__DSH_BOOT__" &&

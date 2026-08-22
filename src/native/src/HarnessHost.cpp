@@ -241,6 +241,7 @@ private:
                                 ResizeWebView();
                                 ShowWindow(status_, SW_HIDE);
                                 const std::wstring url = turingdesk::HarnessProcessManager::DefaultUrl();
+                                // DSH runs with --no-open; TuringDesk alone owns UI presentation here.
                                 hr = webview_->Navigate(url.c_str());
                                 if (FAILED(hr)) SetStatus(L"打开 Harness Web UI 失败：" + HrText(hr));
                                 return S_OK;
