@@ -63,6 +63,7 @@ public:
     const std::filesystem::path& Root() const noexcept;
     std::filesystem::path ManifestPath() const;
     std::filesystem::path MediaDirectory() const;
+    std::filesystem::path PackageDirectory() const;
     std::filesystem::path ThumbnailDirectory() const;
 
     static LibraryWallpaperKind InferKind(const std::filesystem::path& path) noexcept;
@@ -72,6 +73,7 @@ public:
     static bool SelfTest();
 
 private:
+    bool DiscoverPackages(std::wstring* error);
     bool SaveItem(const WallpaperLibraryItem& item, std::wstring* error);
     bool GenerateThumbnail(WallpaperLibraryItem& item);
     std::optional<std::size_t> FindIndex(std::wstring_view id) const;
