@@ -513,7 +513,7 @@ LRESULT SearchWindow::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) 
         return 0;
     case WM_COPYDATA: {
         std::vector<SearchResult> received;
-        if (files_.HandleCopyData(reinterpret_cast<COPYDATASTRUCTW*>(lParam), received)) {
+        if (files_.HandleCopyData(reinterpret_cast<COPYDATASTRUCT*>(lParam), received)) {
             fileSearchAvailable_ = true;
             fileSearchQueryFailed_ = false;
             fileResults_ = std::move(received);
