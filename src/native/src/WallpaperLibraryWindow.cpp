@@ -1,8 +1,13 @@
 #include "turingdesk/WallpaperLibraryWindow.h"
 
+#include <commctrl.h>
 #include <commdlg.h>
 #include <filesystem>
+#include <iterator>
+#include <optional>
 #include <string>
+#include <system_error>
+#include <utility>
 #include <vector>
 
 namespace fs = std::filesystem;
@@ -87,7 +92,8 @@ struct WallpaperLibraryWindow::Impl {
 
     void RebuildList() {
         if (!library || !list) return;
-        const std::wstring previous = Selected() ? Selected()->id : L"";
+        const auto oldSelected = Selected();
+        const std::wstring previous = oldSelected ? oldSelected->id : L"";
         SendMessageW(list, LB_RESETCONTENT, 0, 0);
         visibleIds.clear();
 
@@ -196,6 +202,10 @@ struct WallpaperLibraryWindow::Impl {
         if (!library) return;
         const auto selected = Selected();
         if (!selected) return;
+        if (selected->kind == LibraryWallpaperKind::Scene) {
+            SetStatus(L"内置 Scene 属于 TuringDesk 基础壁纸，不能从库中删除。" );
+            return;
+        }
         std::wstring error;
         if (!library->Remove(selected->id, false, &error)) {
             SetStatus(error.empty() ? L"删除库记录失败。" : error);
@@ -210,6 +220,14 @@ struct WallpaperLibraryWindow::Impl {
         const auto selected = Selected();
         if (!selected) {
             SetStatus(L"请先选择一个壁纸。" );
+            return;
+        }
+        if (selected->kind == LibraryWallpaperKind::Web) {
+            SetStatus(L"Web 壁纸已可入库；WebView2 运行后端将在路线第 9 项接入。" );
+            return;
+        }
+        if (selected->kind == LibraryWallpaperKind::Unknown) {
+            SetStatus(L"未知壁纸类型，不能应用。" );
             return;
         }
         if (selected->kind != LibraryWallpaperKind::Scene && !selected->source.empty()) {
