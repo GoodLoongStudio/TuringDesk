@@ -1,6 +1,7 @@
 #include "turingdesk/HarnessProcessManager.h"
 #include <winhttp.h>
 #include <algorithm>
+#include <iterator>
 #include <string_view>
 #include <vector>
 
