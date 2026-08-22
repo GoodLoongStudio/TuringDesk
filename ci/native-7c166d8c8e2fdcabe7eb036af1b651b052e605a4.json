@@ -1,6 +1,6 @@
 {
   "sha": "7c166d8c8e2fdcabe7eb036af1b651b052e605a4",
   "mode": "native-arm64-goz-codex-cli",
-  "arm64": "cancelled",
-  "run_id": "32591097301"
+  "arm64": "skipped",
+  "run_id": "32591106350"
 }
