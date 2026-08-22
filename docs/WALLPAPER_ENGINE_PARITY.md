@@ -14,6 +14,9 @@ Already present on `main`:
 - Pause dynamic/video wallpaper while a foreground application is fullscreen.
 - Display-change reattachment and mount diagnostics.
 - Per-monitor DPI awareness.
+- Multi-monitor topology with Span / Clone / Primary-only layout and negative-coordinate support.
+- Image Cover / Contain / Stretch / Center / Tile with focal alignment.
+- Video Cover / Contain / Stretch / Center via MFPlay source crop/aspect policy; video Tile still uses a safe Center fallback pending a bounded multi-surface implementation.
 
 ## Delivery order
 
@@ -21,16 +24,18 @@ Each item is completed in `main`, with native self-test/CI coverage added or upd
 
 ### P0 — desktop engine fundamentals
 
-- [ ] 1. Multi-monitor topology and layout engine
+- [x] 1. Multi-monitor topology and layout engine
   - Detect all active monitors, primary monitor, physical desktop bounds and hot-plug changes.
   - Layout modes: span across displays, clone/fill on every display, primary-only.
   - Correct coordinates for monitors left/above the primary display and mixed DPI.
   - Persist layout selection and expose monitor diagnostics.
+  - ARM64/x64 native CI green at `53f2bb67`.
 
 - [ ] 2. Wallpaper scaling and alignment
-  - Cover, contain, stretch, center and tile.
-  - Horizontal/vertical focal alignment and crop preview semantics.
-  - Apply consistently to image and video backends.
+  - [x] Cover, contain, stretch and center for image/video.
+  - [x] Image tile mode.
+  - [x] Horizontal/vertical focal alignment and persisted crop semantics.
+  - [ ] Bounded video tile mode without unbounded decoder duplication.
 
 - [ ] 3. Performance / playback rules
   - User-selectable FPS caps (15/30/45/60/120 where meaningful).
