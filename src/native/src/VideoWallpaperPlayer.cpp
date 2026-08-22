@@ -2,9 +2,11 @@
 #include <mfapi.h>
 #include <mfplay.h>
 #include <wrl/client.h>
+#include <algorithm>
 #include <atomic>
 #include <cstdio>
 #include <new>
+#include <sstream>
 
 using Microsoft::WRL::ComPtr;
 
@@ -71,12 +73,25 @@ MFVideoNormalizedRect NormalizeSource(const wallpaper::RectF& source, float widt
     return result;
 }
 
+float ClampVolume(float value) noexcept {
+    return std::clamp(value, 0.0f, 1.0f);
+}
+
+float ClampRate(float value) noexcept {
+    return std::clamp(value, 0.25f, 4.0f);
+}
+
 } // namespace
 
 struct VideoWallpaperPlayer::Impl {
     bool mfStarted{};
     bool paused{};
     bool placementDirty{true};
+    bool controlsDirty{true};
+    bool looping{true};
+    bool muted{true};
+    float volume{0.0f};
+    float playbackRate{1.0f};
     HRESULT lastError{S_OK};
     HWND targetWindow{};
     SIZE lastClientSize{};
@@ -145,9 +160,6 @@ struct VideoWallpaperPlayer::Impl {
         } else if (scaleMode == wallpaper::ScaleMode::Contain) {
             aspectMode = MFVideoARMode_PreservePicture;
         }
-        // Stretch uses the entire source with MFVideoARMode_None. Center and Tile
-        // are positioned by VideoWallpaperSet child surfaces, so the player also
-        // uses the full source without an additional scaling policy here.
 
         HRESULT hr = player->SetVideoSourceRect(&source);
         if (SUCCEEDED(hr)) hr = player->SetAspectRatioMode(aspectMode);
@@ -156,6 +168,20 @@ struct VideoWallpaperPlayer::Impl {
             return false;
         }
         placementDirty = false;
+        lastError = S_OK;
+        return true;
+    }
+
+    bool ApplyControls() {
+        if (!player) return false;
+        HRESULT hr = player->SetMute(muted ? TRUE : FALSE);
+        if (SUCCEEDED(hr)) hr = player->SetVolume(ClampVolume(volume));
+        if (SUCCEEDED(hr)) hr = player->SetRate(ClampRate(playbackRate));
+        if (FAILED(hr)) {
+            lastError = hr;
+            return false;
+        }
+        controlsDirty = false;
         lastError = S_OK;
         return true;
     }
@@ -172,6 +198,7 @@ struct VideoWallpaperPlayer::Impl {
         asyncError.store(S_OK, std::memory_order_relaxed);
         paused = false;
         placementDirty = true;
+        controlsDirty = true;
     }
 };
 
@@ -211,11 +238,9 @@ bool VideoWallpaperPlayer::Start(HWND targetWindow, const std::wstring& path) {
     impl_->player.Attach(rawPlayer);
     impl_->targetWindow = targetWindow;
     impl_->CaptureClientSize();
-    const HRESULT volumeResult = impl_->player->SetVolume(0.0f);
-    if (FAILED(volumeResult)) impl_->lastError = volumeResult;
-    else impl_->lastError = S_OK;
     impl_->paused = false;
     impl_->placementDirty = true;
+    impl_->controlsDirty = true;
     return true;
 }
 
@@ -233,6 +258,7 @@ void VideoWallpaperPlayer::Tick() {
     if (impl_->mediaReady.exchange(false, std::memory_order_acq_rel)) {
         impl_->RefreshNativeSize();
         impl_->placementDirty = true;
+        impl_->controlsDirty = true;
     }
 
     const bool resized = impl_->ClientSizeChanged();
@@ -243,16 +269,14 @@ void VideoWallpaperPlayer::Tick() {
         UpdateVideo();
     }
 
-    if (!impl_->ended.exchange(false, std::memory_order_acq_rel)) return;
+    if (impl_->controlsDirty) impl_->ApplyControls();
 
-    PROPVARIANT position{};
-    PropVariantInit(&position);
-    position.vt = VT_I8;
-    position.hVal.QuadPart = 0;
-    HRESULT hr = impl_->player->SetPosition(MFP_POSITIONTYPE_100NS, &position);
-    if (SUCCEEDED(hr)) hr = impl_->player->Play();
-    if (FAILED(hr)) impl_->lastError = hr;
-    else impl_->lastError = S_OK;
+    if (!impl_->ended.exchange(false, std::memory_order_acq_rel)) return;
+    if (!impl_->looping) {
+        impl_->paused = true;
+        return;
+    }
+    Restart();
 }
 
 void VideoWallpaperPlayer::UpdateVideo() {
@@ -284,12 +308,72 @@ void VideoWallpaperPlayer::SetScaling(wallpaper::ScaleMode mode, float focalX, f
     }
 }
 
+void VideoWallpaperPlayer::SetLooping(bool looping) {
+    if (!impl_) return;
+    impl_->looping = looping;
+}
+
+void VideoWallpaperPlayer::SetMuted(bool muted) {
+    if (!impl_) return;
+    impl_->muted = muted;
+    impl_->controlsDirty = true;
+    if (impl_->player) impl_->ApplyControls();
+}
+
+void VideoWallpaperPlayer::SetVolume(float volume) {
+    if (!impl_) return;
+    impl_->volume = ClampVolume(volume);
+    impl_->controlsDirty = true;
+    if (impl_->player) impl_->ApplyControls();
+}
+
+void VideoWallpaperPlayer::SetPlaybackRate(float rate) {
+    if (!impl_) return;
+    impl_->playbackRate = ClampRate(rate);
+    impl_->controlsDirty = true;
+    if (impl_->player) impl_->ApplyControls();
+}
+
+bool VideoWallpaperPlayer::Restart() {
+    if (!impl_ || !impl_->player) return false;
+    PROPVARIANT position{};
+    PropVariantInit(&position);
+    position.vt = VT_I8;
+    position.hVal.QuadPart = 0;
+    HRESULT hr = impl_->player->SetPosition(MFP_POSITIONTYPE_100NS, &position);
+    if (SUCCEEDED(hr) && !impl_->paused) hr = impl_->player->Play();
+    if (FAILED(hr)) {
+        impl_->lastError = hr;
+        return false;
+    }
+    impl_->ended.store(false, std::memory_order_release);
+    impl_->lastError = S_OK;
+    UpdateVideo();
+    return true;
+}
+
 SIZE VideoWallpaperPlayer::NativeVideoSize() const {
     return impl_ ? impl_->nativeSize : SIZE{};
 }
 
 bool VideoWallpaperPlayer::Active() const {
     return impl_ && impl_->player != nullptr;
+}
+
+bool VideoWallpaperPlayer::Looping() const {
+    return impl_ && impl_->looping;
+}
+
+bool VideoWallpaperPlayer::Muted() const {
+    return !impl_ || impl_->muted;
+}
+
+float VideoWallpaperPlayer::Volume() const {
+    return impl_ ? impl_->volume : 0.0f;
+}
+
+float VideoWallpaperPlayer::PlaybackRate() const {
+    return impl_ ? impl_->playbackRate : 1.0f;
 }
 
 HRESULT VideoWallpaperPlayer::LastError() const {
@@ -302,6 +386,26 @@ std::wstring VideoWallpaperPlayer::LastErrorText() const {
     wchar_t text[48]{};
     swprintf_s(text, L"HRESULT 0x%08X", static_cast<unsigned>(hr));
     return text;
+}
+
+std::wstring VideoWallpaperPlayer::DiagnosticsText() const {
+    if (!impl_) return L"Media Foundation player unavailable";
+    std::wostringstream text;
+    text << L"Media Foundation MFPlay / EVR";
+    if (impl_->nativeSize.cx > 0 && impl_->nativeSize.cy > 0)
+        text << L" · " << impl_->nativeSize.cx << L"×" << impl_->nativeSize.cy;
+    text << L" · " << (impl_->muted ? L"静音" : L"音量 " + std::to_wstring(static_cast<int>(impl_->volume * 100.0f)) + L"%")
+         << L" · " << impl_->playbackRate << L"×"
+         << L" · " << (impl_->looping ? L"循环" : L"单次");
+    if (impl_->player) {
+        float slowest = 0.0f;
+        float fastest = 0.0f;
+        if (SUCCEEDED(impl_->player->GetSupportedRates(TRUE, &slowest, &fastest)))
+            text << L" · 支持速率 " << slowest << L"–" << fastest << L"×";
+    }
+    text << L" · 硬件解码由 Windows Media Foundation/EVR 自动协商";
+    if (FAILED(impl_->lastError)) text << L" · " << LastErrorText();
+    return text.str();
 }
 
 bool VideoWallpaperPlayer::MediaFoundationAvailable() {
