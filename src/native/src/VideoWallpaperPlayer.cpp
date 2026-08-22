@@ -142,6 +142,12 @@ void VideoWallpaperPlayer::Tick() {
     else impl_->lastError = S_OK;
 }
 
+void VideoWallpaperPlayer::UpdateVideo() {
+    if (!impl_ || !impl_->player) return;
+    const HRESULT hr = impl_->player->UpdateVideo();
+    if (FAILED(hr)) impl_->lastError = hr;
+}
+
 void VideoWallpaperPlayer::SetPaused(bool paused) {
     if (!impl_ || !impl_->player || impl_->paused == paused) return;
     const HRESULT hr = paused ? impl_->player->Pause() : impl_->player->Play();
