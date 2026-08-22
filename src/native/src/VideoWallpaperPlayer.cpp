@@ -53,13 +53,13 @@ private:
     std::atomic_long& error_;
 };
 
-RECT ToRect(const wallpaper::RectF& value) {
-    return RECT{
-        static_cast<LONG>(value.left + 0.5f),
-        static_cast<LONG>(value.top + 0.5f),
-        static_cast<LONG>(value.right + 0.5f),
-        static_cast<LONG>(value.bottom + 0.5f),
-    };
+MFVideoNormalizedRect FullSource() {
+    MFVideoNormalizedRect result{};
+    result.left = 0.0f;
+    result.top = 0.0f;
+    result.right = 1.0f;
+    result.bottom = 1.0f;
+    return result;
 }
 
 MFVideoNormalizedRect NormalizeSource(const wallpaper::RectF& source, float width, float height) {
@@ -132,20 +132,25 @@ struct VideoWallpaperPlayer::Impl {
         if (nativeSize.cx <= 0 || nativeSize.cy <= 0) RefreshNativeSize();
         if (nativeSize.cx <= 0 || nativeSize.cy <= 0 || lastClientSize.cx <= 0 || lastClientSize.cy <= 0) return false;
 
-        const wallpaper::ScaleMode effective = scaleMode == wallpaper::ScaleMode::Tile
-            ? wallpaper::ScaleMode::Center
-            : scaleMode;
-        const auto placement = wallpaper::ComputePlacement(
-            static_cast<float>(nativeSize.cx), static_cast<float>(nativeSize.cy),
-            static_cast<float>(lastClientSize.cx), static_cast<float>(lastClientSize.cy),
-            effective, focalX, focalY);
+        MFVideoNormalizedRect source = FullSource();
+        DWORD aspectMode = MFVideoARMode_None;
 
-        const MFVideoNormalizedRect source = NormalizeSource(
-            placement.source, static_cast<float>(nativeSize.cx), static_cast<float>(nativeSize.cy));
-        const RECT destination = ToRect(placement.destination);
+        if (scaleMode == wallpaper::ScaleMode::Cover) {
+            const auto placement = wallpaper::ComputePlacement(
+                static_cast<float>(nativeSize.cx), static_cast<float>(nativeSize.cy),
+                static_cast<float>(lastClientSize.cx), static_cast<float>(lastClientSize.cy),
+                wallpaper::ScaleMode::Cover, focalX, focalY);
+            source = NormalizeSource(
+                placement.source, static_cast<float>(nativeSize.cx), static_cast<float>(nativeSize.cy));
+        } else if (scaleMode == wallpaper::ScaleMode::Contain) {
+            aspectMode = MFVideoARMode_PreservePicture;
+        }
+        // Stretch uses the entire source with MFVideoARMode_None. Center and Tile
+        // are positioned by VideoWallpaperSet child surfaces, so the player also
+        // uses the full source without an additional scaling policy here.
 
-        HRESULT hr = player->SetAspectRatioMode(MFVideoARMode_None);
-        if (SUCCEEDED(hr)) hr = player->SetVideoPosition(&source, &destination);
+        HRESULT hr = player->SetVideoSourceRect(&source);
+        if (SUCCEEDED(hr)) hr = player->SetAspectRatioMode(aspectMode);
         if (FAILED(hr)) {
             lastError = hr;
             return false;
