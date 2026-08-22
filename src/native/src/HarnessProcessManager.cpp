@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <filesystem>
 #include <iterator>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -20,6 +21,8 @@ constexpr INTERNET_PORT kHarnessPort = 3080;
 constexpr wchar_t kHarnessPath[] = L"/";
 constexpr wchar_t kHarnessPackage[] = L"@deepseek-ai/dsh@0.1.0-rc.7";
 constexpr wchar_t kBundledNpxRelativePath[] = L"HarnessRuntime\\Node\\npx.cmd";
+constexpr char kHarnessBootMarker[] = "window.__DSH_BOOT__";
+constexpr std::size_t kMaxReadinessProbeBytes = 256 * 1024;
 
 std::wstring Win32ErrorText(DWORD error) {
     if (error == ERROR_SUCCESS) return {};
@@ -85,6 +88,33 @@ std::wstring BuildLaunchCommandFor(const std::wstring& npxPath) {
     return L"cmd.exe /d /s /c \"\"" + npxPath + L"\" --yes " + kHarnessPackage + L" web\"";
 }
 
+bool ResponseContainsHarnessBootManifest(HINTERNET request) {
+    std::string body;
+    body.reserve(16 * 1024);
+
+    while (body.size() < kMaxReadinessProbeBytes) {
+        DWORD available = 0;
+        if (!WinHttpQueryDataAvailable(request, &available) || available == 0) break;
+
+        const std::size_t remaining = kMaxReadinessProbeBytes - body.size();
+        const DWORD toRead = static_cast<DWORD>(std::min<std::size_t>(available, remaining));
+        const std::size_t previousSize = body.size();
+        body.resize(previousSize + toRead);
+
+        DWORD bytesRead = 0;
+        if (!WinHttpReadData(request, body.data() + previousSize, toRead, &bytesRead)) {
+            body.resize(previousSize);
+            return false;
+        }
+        body.resize(previousSize + bytesRead);
+
+        if (body.find(kHarnessBootMarker) != std::string::npos) return true;
+        if (bytesRead == 0) break;
+    }
+
+    return false;
+}
+
 bool ProbeHarnessHttp() {
     HINTERNET session = WinHttpOpen(L"TuringDesk/0.1",
                                     WINHTTP_ACCESS_TYPE_NO_PROXY,
@@ -118,8 +148,13 @@ bool ProbeHarnessHttp() {
         if (WinHttpQueryHeaders(request,
                                 WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
                                 WINHTTP_HEADER_NAME_BY_INDEX,
-                                &status, &size, WINHTTP_NO_HEADER_INDEX)) {
-            ready = status >= 200 && status < 500;
+                                &status, &size, WINHTTP_NO_HEADER_INDEX) &&
+            status == 200) {
+            // A bare 200 on port 3080 is not sufficient: another process could
+            // own the port, or Harness may have returned the shell before its
+            // production boot payload is composed. Official dsh web injects
+            // window.__DSH_BOOT__ into the index when the Web UI is truly ready.
+            ready = ResponseContainsHarnessBootManifest(request);
         }
     }
 
@@ -294,7 +329,8 @@ bool HarnessProcessManager::SelfTest() {
     return DefaultUrl() == L"http://localhost:3080" &&
            command.find(kHarnessPackage) != std::wstring::npos &&
            command.find(L" web") != std::wstring::npos &&
-           command.find(L"/d /s /c") != std::wstring::npos;
+           command.find(L"/d /s /c") != std::wstring::npos &&
+           std::string_view(kHarnessBootMarker) == "window.__DSH_BOOT__";
 }
 
 } // namespace turingdesk
