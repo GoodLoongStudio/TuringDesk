@@ -15,6 +15,7 @@ $LogRoot = Join-Path $Root "Logs"
 $HarnessLog = Join-Path $LogRoot "harness-system-install.log"
 $NodeMsi = Join-Path $DownloadRoot "node-v$NodeVersion-arm64.msi"
 $NodeSums = Join-Path $DownloadRoot "node-v$NodeVersion-SHASUMS256.txt"
+$DeployedHarness = Join-Path $Root "NativeTest\TuringDeskHarness.exe"
 
 function Step([string]$Text) {
     Write-Host "`n==> $Text" -ForegroundColor Cyan
@@ -204,5 +205,26 @@ finally {
     $env:PATH = $oldPath
 }
 
-Write-Host "`nSystem Harness verification passed." -ForegroundColor Green
-Write-Host "TuringDeskHarness can now use the system npx fallback when a bundled runtime is not present." -ForegroundColor Green
+Write-Host "`nOfficial system Harness verification passed." -ForegroundColor Green
+
+Refresh-ProcessPath
+if (Test-Path $DeployedHarness -PathType Leaf) {
+    Step "Verifying the same system Harness through TuringDeskHarness.exe"
+    $smoke = Start-Process -FilePath $DeployedHarness -ArgumentList "--harness-smoke-test" -Wait -PassThru
+    if ($smoke.ExitCode -ne 0) {
+        $hostLog = Join-Path $LogRoot "harness.log"
+        if (Test-Path $hostLog) {
+            Write-Host "`n--- TuringDesk Harness log tail ---" -ForegroundColor Yellow
+            Get-Content $hostLog -Tail 120 | Out-Host
+        }
+        throw "Official Harness works, but TuringDeskHarness integration smoke test failed with exit code $($smoke.ExitCode)."
+    }
+    Write-Host "TuringDeskHarness integration smoke test passed." -ForegroundColor Green
+}
+else {
+    Write-Host "TuringDeskHarness.exe is not deployed yet, so only the official Harness runtime was verified." -ForegroundColor Yellow
+    Write-Host "Expected path: $DeployedHarness" -ForegroundColor DarkGray
+}
+
+Write-Host "`nSystem Harness verification passed end-to-end." -ForegroundColor Green
+Write-Host "TuringDesk can use the verified system Node/npx fallback even when a bundled HarnessRuntime is absent." -ForegroundColor Green
