@@ -13,6 +13,7 @@ add_executable(TuringDesk WIN32
 
 add_executable(TuringDeskWallpaper WIN32
     src/WallpaperEngine.cpp
+    src/VideoWallpaperPlayer.cpp
 )
 
 target_include_directories(TuringDesk PRIVATE include)
@@ -56,4 +57,8 @@ target_link_libraries(TuringDeskWallpaper PRIVATE
     d2d1
     windowscodecs
     comdlg32
+    mf
+    mfplat
+    mfplay
+    mfuuid
 )
