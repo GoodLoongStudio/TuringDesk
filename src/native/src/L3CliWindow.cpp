@@ -154,6 +154,15 @@ std::wstring RuntimeName(const CliState&, ActiveRuntime runtime) {
     return L"Unknown Runtime";
 }
 
+std::wstring RuntimeExecutionLabel(ActiveRuntime runtime) {
+    switch (runtime) {
+    case ActiveRuntime::Codex: return L"Agent Tools=启用";
+    case ActiveRuntime::DirectTools: return L"Native Tools=启用";
+    case ActiveRuntime::DirectModel: return L"文本模式";
+    }
+    return L"";
+}
+
 ActiveRuntime ChooseRuntime(CliState& state) {
     if (state.codex->CanHandle(*state.agent)) return ActiveRuntime::Codex;
     if (state.directTools->CanHandle(*state.agent)) return ActiveRuntime::DirectTools;
@@ -164,6 +173,7 @@ std::wstring RuntimeStatusText(CliState& state) {
     const auto status = state.codex->Status(*state.agent);
     const auto selected = ChooseRuntime(state);
     std::wstring text = L"当前路由：" + RuntimeName(state, selected);
+    text += L" · " + RuntimeExecutionLabel(selected);
     text += L"\r\nCodex sidecar：";
     text += status.binaryAvailable ? L"已安装" : L"未安装";
     text += L"\r\nProvider → Codex：";
@@ -243,14 +253,14 @@ void SendPrompt(CliState& state) {
         state.lastRuntime = runtime;
     }
     state.activeRuntime = runtime;
-    state.transcriptPrefix += L"> " + typedPrompt + (retry ? L"  [重试上一请求]" : L"") + L"\r\nAI  ";
+    state.transcriptPrefix += L"> " + typedPrompt + (retry ? L"  [重试上一请求]" : L"") + L"\r\n";
+    state.transcriptPrefix += L"[Runtime] " + RuntimeName(state, runtime) + L" · " + RuntimeExecutionLabel(runtime) + L"\r\n";
+    state.transcriptPrefix += L"AI  ";
     state.streaming.clear();
     state.busy = true;
     state.generation = gCliGeneration.fetch_add(1, std::memory_order_relaxed) + 1;
     EnableWindow(state.input, FALSE);
-    if (runtime == ActiveRuntime::Codex) RenderTranscript(state, L"[Codex Agent] …");
-    else if (runtime == ActiveRuntime::DirectTools) RenderTranscript(state, L"[Direct Agent] …");
-    else RenderTranscript(state, L"…");
+    RenderTranscript(state, L"…");
 
     const auto generation = state.generation;
     const HWND hwnd = state.window;
@@ -418,18 +428,19 @@ bool ShowL3CliWindow(HINSTANCE instance, HWND owner, L3Agent& agent, const std::
     HWND title = CreateWindowExW(0, L"STATIC", L"L3 CLI · Agent Runtime", WS_CHILD | WS_VISIBLE,
                                  16, 16, 300, 24, window, nullptr, instance, nullptr);
     state.settings = CreateWindowExW(0, L"BUTTON", L"AI 设置", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
-                                     width - 112, 14, 96, 28, window, reinterpret_cast<HMENU>(kSettingsId), instance, nullptr);
+                                     width - 112, 14, 96, 28, window,
+                                     reinterpret_cast<HMENU>(static_cast<INT_PTR>(kSettingsId)), instance, nullptr);
     state.transcript = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"",
                                        WS_CHILD | WS_VISIBLE | WS_VSCROLL | ES_MULTILINE | ES_AUTOVSCROLL | ES_READONLY,
                                        16, 52, width - 32, height - 118,
-                                       window, reinterpret_cast<HMENU>(kTranscriptId), instance, nullptr);
+                                       window, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kTranscriptId)), instance, nullptr);
     state.input = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"",
                                   WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
                                   16, height - 50, width - 76, 34,
-                                  window, reinterpret_cast<HMENU>(kInputId), instance, nullptr);
+                                  window, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kInputId)), instance, nullptr);
     state.close = CreateWindowExW(0, L"BUTTON", L"×", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
                                   width - 52, height - 48, 36, 30,
-                                  window, reinterpret_cast<HMENU>(kCloseId), instance, nullptr);
+                                  window, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kCloseId)), instance, nullptr);
     if (!title || !state.settings || !state.transcript || !state.input || !state.close) {
         DestroyWindow(window);
         DeleteObject(state.backgroundBrush);
