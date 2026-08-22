@@ -9,13 +9,8 @@ on:
       - .github/workflows/native-search-windows.yml
   workflow_dispatch:
     inputs:
-      full_package:
-        description: Build bundled Everything + Node + DeepSeek Harness runtime and run the real Harness smoke test
-        required: false
-        default: false
-        type: boolean
       build_x64:
-        description: Also build and validate x64 (off by default during ARM64 development)
+        description: Also build and validate x64
         required: false
         default: false
         type: boolean
@@ -27,17 +22,11 @@ concurrency:
   group: native-search-${{ github.ref }}-${{ github.event_name }}
   cancel-in-progress: true
 
-env:
-  EVERYTHING_VERSION: 1.5.0.1422b
-  NODE_VERSION: 24.19.0
-  DSH_VERSION: 0.1.0-rc.7
-  NODE_OPTIONS: --max-old-space-size=4096
-
 jobs:
   build-x64:
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.build_x64 }}
     runs-on: windows-latest
-    timeout-minutes: 25
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v5
       - name: Configure x64
@@ -47,104 +36,25 @@ jobs:
       - name: Native Search self-test
         shell: pwsh
         run: |
-          $process = Start-Process -FilePath ".\build\src\native\Release\TuringDesk.exe" -ArgumentList "--self-test" -Wait -PassThru
-          if ($process.ExitCode -ne 0) { throw "Native Search self-test failed: $($process.ExitCode)" }
+          $p = Start-Process -FilePath ".\build\src\native\Release\TuringDesk.exe" -ArgumentList "--self-test" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "Native Search self-test failed: $($p.ExitCode)" }
       - name: Native Wallpaper self-test
         shell: pwsh
         run: |
-          $process = Start-Process -FilePath ".\build\src\native\Release\TuringDeskWallpaper.exe" -ArgumentList "--self-test" -Wait -PassThru
-          if ($process.ExitCode -ne 0) { throw "Native Wallpaper self-test failed: $($process.ExitCode)" }
-      - name: Native Harness host self-test
+          $p = Start-Process -FilePath ".\build\src\native\Release\TuringDeskWallpaper.exe" -ArgumentList "--self-test" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "Native Wallpaper self-test failed: $($p.ExitCode)" }
+      - name: Native Harness shell self-test
         shell: pwsh
         run: |
-          $process = Start-Process -FilePath ".\build\src\native\Release\TuringDeskHarness.exe" -ArgumentList "--self-test" -Wait -PassThru
-          if ($process.ExitCode -ne 0) { throw "Native Harness host self-test failed: $($process.ExitCode)" }
-      - name: Prepare fast x64 deploy artifact
+          $p = Start-Process -FilePath ".\build\src\native\Release\TuringDeskHarness.exe" -ArgumentList "--self-test" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "Native Harness shell self-test failed: $($p.ExitCode)" }
+      - name: Prepare x64 artifact
         shell: pwsh
         run: |
-          $package = "build/package"
-          New-Item -ItemType Directory -Force -Path $package | Out-Null
-          Copy-Item "build/src/native/Release/TuringDesk.exe" (Join-Path $package "TuringDesk.exe") -Force
-          Copy-Item "build/src/native/Release/TuringDeskWallpaper.exe" (Join-Path $package "TuringDeskWallpaper.exe") -Force
-          Copy-Item "build/src/native/Release/TuringDeskHarness.exe" (Join-Path $package "TuringDeskHarness.exe") -Force
-      - name: Package full x64 runtime
-        if: ${{ inputs.full_package }}
-        shell: pwsh
-        run: |
-          . .\scripts\smart-download.ps1
-          $package = "build/package"
-          $everything = Join-Path $package "Everything"
-          $nodeTarget = Join-Path $package "HarnessRuntime\Node"
-          $dshTarget = Join-Path $package "HarnessRuntime\Dsh"
-          New-Item -ItemType Directory -Force -Path $everything | Out-Null
-          New-Item -ItemType Directory -Force -Path $nodeTarget | Out-Null
-          New-Item -ItemType Directory -Force -Path $dshTarget | Out-Null
-
-          Write-Host "[runtime] Preparing Everything x64..."
-          $everythingFile = "Everything-$env:EVERYTHING_VERSION.x64.zip"
-          $everythingZip = Join-Path $env:RUNNER_TEMP $everythingFile
-          Invoke-TuringDeskSmartDownload -Url "https://www.voidtools.com/$everythingFile" -Destination $everythingZip -Name "Everything x64" -FileName $everythingFile -TimeoutSeconds 180 | Out-Null
-          Expand-Archive $everythingZip -DestinationPath $everything -Force
-          Invoke-TuringDeskSmartDownload -Url "https://www.voidtools.com/License.txt" -Destination (Join-Path $everything "LICENSE.txt") -Name "Everything license" -FileName "LICENSE.txt" -TimeoutSeconds 60 | Out-Null
-
-          Write-Host "[runtime] Preparing Node x64..."
-          $nodeFile = "node-v$env:NODE_VERSION-win-x64.zip"
-          $nodeZip = Join-Path $env:RUNNER_TEMP $nodeFile
-          $nodeSums = Join-Path $env:RUNNER_TEMP "node-$env:NODE_VERSION-SHASUMS256.txt"
-          $nodeExtract = Join-Path $env:RUNNER_TEMP "node-x64"
-          Invoke-TuringDeskSmartDownload -Url "https://nodejs.org/dist/v$env:NODE_VERSION/SHASUMS256.txt" -Destination $nodeSums -Name "Node checksums" -FileName "SHASUMS256.txt" -TimeoutSeconds 120 | Out-Null
-          $sumLine = Get-Content $nodeSums | Where-Object { $_ -match "\s+$([regex]::Escape($nodeFile))$" } | Select-Object -First 1
-          if (-not $sumLine) { throw "Node checksum entry not found for $nodeFile" }
-          $expectedHash = ($sumLine -split '\s+')[0].ToLowerInvariant()
-          Invoke-TuringDeskSmartDownload -Url "https://nodejs.org/dist/v$env:NODE_VERSION/$nodeFile" -Destination $nodeZip -Name "Node $env:NODE_VERSION x64" -ExpectedSha256 $expectedHash -FileName $nodeFile -TimeoutSeconds 300 | Out-Null
-          Expand-Archive $nodeZip -DestinationPath $nodeExtract -Force
-          $nodeSource = Join-Path $nodeExtract "node-v$env:NODE_VERSION-win-x64"
-          Copy-Item (Join-Path $nodeSource "*") $nodeTarget -Recurse -Force
-
-          Write-Host "[runtime] Installing DeepSeek Harness x64 dependencies with NODE_OPTIONS=$env:NODE_OPTIONS..."
-          $npmCache = Join-Path $env:RUNNER_TEMP "npm-cache-x64"
-          New-Item -ItemType Directory -Force -Path $npmCache | Out-Null
-          $oldPath = $env:PATH
-          try {
-            $env:PATH = "$((Resolve-Path $nodeTarget).Path);$oldPath"
-            & (Join-Path $nodeTarget "npm.cmd") install --prefix $dshTarget --omit=dev --no-audit --no-fund --save-exact --cache $npmCache --prefer-offline --loglevel=notice --fetch-retries=3 --fetch-retry-mintimeout=1000 --fetch-retry-maxtimeout=10000 --fetch-timeout=60000 "@deepseek-ai/dsh@$env:DSH_VERSION"
-            if ($LASTEXITCODE -ne 0) { throw "Bundled DeepSeek Harness install failed: $LASTEXITCODE" }
-          } finally {
-            $env:PATH = $oldPath
-          }
-      - name: Verify full packaged x64 runtime and boot Harness
-        if: ${{ inputs.full_package }}
-        shell: pwsh
-        run: |
-          $package = "build/package"
-          $node = Join-Path $package "HarnessRuntime\Node"
-          $dsh = Join-Path $package "HarnessRuntime\Dsh"
-          $required = @(
-            (Join-Path $package "TuringDesk.exe"),
-            (Join-Path $package "TuringDeskWallpaper.exe"),
-            (Join-Path $package "TuringDeskHarness.exe"),
-            (Join-Path $package "Everything\Everything.exe"),
-            (Join-Path $package "Everything\LICENSE.txt"),
-            (Join-Path $node "node.exe"),
-            (Join-Path $node "npm.cmd"),
-            (Join-Path $node "npx.cmd"),
-            (Join-Path $node "LICENSE"),
-            (Join-Path $dsh "node_modules\@deepseek-ai\dsh\lib\bin.js"),
-            (Join-Path $dsh "node_modules\@deepseek-ai\dsh\package.json")
-          )
-          foreach ($path in $required) {
-            if (-not (Test-Path $path -PathType Leaf)) { throw "Missing packaged file: $path" }
-          }
-          $nodeVersion = & (Join-Path $node "node.exe") --version
-          if ($nodeVersion.Trim() -ne "v$env:NODE_VERSION") { throw "Unexpected bundled Node version: $nodeVersion" }
-          $dshPackage = Get-Content (Join-Path $dsh "node_modules\@deepseek-ai\dsh\package.json") -Raw | ConvertFrom-Json
-          if ($dshPackage.version -ne $env:DSH_VERSION) { throw "Unexpected bundled Harness version: $($dshPackage.version)" }
-          $smoke = Start-Process -FilePath (Join-Path $package "TuringDeskHarness.exe") -ArgumentList "--harness-smoke-test" -Wait -PassThru
-          if ($smoke.ExitCode -ne 0) {
-            $log = Join-Path $env:LOCALAPPDATA "TuringDesk\Logs\harness.log"
-            if (Test-Path $log) { Write-Host "--- Harness log ---"; Get-Content $log -Tail 300 }
-            throw "Packaged Harness smoke test failed: $($smoke.ExitCode)"
-          }
+          New-Item -ItemType Directory -Force -Path build/package | Out-Null
+          Copy-Item build/src/native/Release/TuringDesk.exe build/package/TuringDesk.exe -Force
+          Copy-Item build/src/native/Release/TuringDeskWallpaper.exe build/package/TuringDeskWallpaper.exe -Force
+          Copy-Item build/src/native/Release/TuringDeskHarness.exe build/package/TuringDeskHarness.exe -Force
       - uses: actions/upload-artifact@v4
         with:
           name: TuringDesk-Native-Search-x64
@@ -153,7 +63,7 @@ jobs:
 
   build-arm64:
     runs-on: windows-11-arm
-    timeout-minutes: 20
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v5
       - name: Configure ARM64
@@ -163,142 +73,25 @@ jobs:
       - name: Native Search self-test
         shell: pwsh
         run: |
-          $process = Start-Process -FilePath ".\build\src\native\Release\TuringDesk.exe" -ArgumentList "--self-test" -Wait -PassThru
-          if ($process.ExitCode -ne 0) { throw "Native Search self-test failed: $($process.ExitCode)" }
+          $p = Start-Process -FilePath ".\build\src\native\Release\TuringDesk.exe" -ArgumentList "--self-test" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "Native Search self-test failed: $($p.ExitCode)" }
       - name: Native Wallpaper self-test
         shell: pwsh
         run: |
-          $process = Start-Process -FilePath ".\build\src\native\Release\TuringDeskWallpaper.exe" -ArgumentList "--self-test" -Wait -PassThru
-          if ($process.ExitCode -ne 0) { throw "Native Wallpaper self-test failed: $($process.ExitCode)" }
-      - name: Native Harness host self-test
+          $p = Start-Process -FilePath ".\build\src\native\Release\TuringDeskWallpaper.exe" -ArgumentList "--self-test" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "Native Wallpaper self-test failed: $($p.ExitCode)" }
+      - name: Native Harness shell self-test
         shell: pwsh
         run: |
-          $process = Start-Process -FilePath ".\build\src\native\Release\TuringDeskHarness.exe" -ArgumentList "--self-test" -Wait -PassThru
-          if ($process.ExitCode -ne 0) { throw "Native Harness host self-test failed: $($process.ExitCode)" }
-      - name: Prepare fast ARM64 deploy artifact
+          $p = Start-Process -FilePath ".\build\src\native\Release\TuringDeskHarness.exe" -ArgumentList "--self-test" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "Native Harness shell self-test failed: $($p.ExitCode)" }
+      - name: Prepare ARM64 artifact
         shell: pwsh
         run: |
-          $package = "build/package"
-          New-Item -ItemType Directory -Force -Path $package | Out-Null
-          Copy-Item "build/src/native/Release/TuringDesk.exe" (Join-Path $package "TuringDesk.exe") -Force
-          Copy-Item "build/src/native/Release/TuringDeskWallpaper.exe" (Join-Path $package "TuringDeskWallpaper.exe") -Force
-          Copy-Item "build/src/native/Release/TuringDeskHarness.exe" (Join-Path $package "TuringDeskHarness.exe") -Force
-
-      - name: Restore ARM64 runtime cache
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.full_package }}
-        id: runtime-cache-arm64
-        uses: actions/cache@v4
-        with:
-          path: build/runtime-cache-arm64
-          key: turingdesk-runtime-arm64-v3-node-${{ env.NODE_VERSION }}-dsh-${{ env.DSH_VERSION }}-everything-${{ env.EVERYTHING_VERSION }}
-
-      - name: Download ARM64 runtime prerequisites
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.full_package && steps.runtime-cache-arm64.outputs.cache-hit != 'true' }}
-        shell: pwsh
-        run: |
-          . .\scripts\smart-download.ps1
-          $cache = "build/runtime-cache-arm64"
-          $everything = Join-Path $cache "Everything"
-          $nodeTarget = Join-Path $cache "HarnessRuntime\Node"
-          New-Item -ItemType Directory -Force -Path $everything | Out-Null
-          New-Item -ItemType Directory -Force -Path $nodeTarget | Out-Null
-
-          Write-Host "[1/3] Preparing Everything ARM64..."
-          $everythingFile = "Everything-$env:EVERYTHING_VERSION.ARM64.zip"
-          $everythingZip = Join-Path $env:RUNNER_TEMP $everythingFile
-          Invoke-TuringDeskSmartDownload -Url "https://www.voidtools.com/$everythingFile" -Destination $everythingZip -Name "Everything ARM64" -FileName $everythingFile -TimeoutSeconds 180 | Out-Null
-          Expand-Archive $everythingZip -DestinationPath $everything -Force
-          Invoke-TuringDeskSmartDownload -Url "https://www.voidtools.com/License.txt" -Destination (Join-Path $everything "LICENSE.txt") -Name "Everything license" -FileName "LICENSE.txt" -TimeoutSeconds 60 | Out-Null
-
-          Write-Host "[2/3] Preparing Node $env:NODE_VERSION ARM64..."
-          $nodeFile = "node-v$env:NODE_VERSION-win-arm64.zip"
-          $nodeZip = Join-Path $env:RUNNER_TEMP $nodeFile
-          $nodeSums = Join-Path $env:RUNNER_TEMP "node-$env:NODE_VERSION-SHASUMS256.txt"
-          $nodeExtract = Join-Path $env:RUNNER_TEMP "node-arm64"
-          Invoke-TuringDeskSmartDownload -Url "https://nodejs.org/dist/v$env:NODE_VERSION/SHASUMS256.txt" -Destination $nodeSums -Name "Node checksums" -FileName "SHASUMS256.txt" -TimeoutSeconds 120 | Out-Null
-          $sumLine = Get-Content $nodeSums | Where-Object { $_ -match "\s+$([regex]::Escape($nodeFile))$" } | Select-Object -First 1
-          if (-not $sumLine) { throw "Node checksum entry not found for $nodeFile" }
-          $expectedHash = ($sumLine -split '\s+')[0].ToLowerInvariant()
-          Invoke-TuringDeskSmartDownload -Url "https://nodejs.org/dist/v$env:NODE_VERSION/$nodeFile" -Destination $nodeZip -Name "Node $env:NODE_VERSION ARM64" -ExpectedSha256 $expectedHash -FileName $nodeFile -TimeoutSeconds 300 | Out-Null
-          Expand-Archive $nodeZip -DestinationPath $nodeExtract -Force
-          $nodeSource = Join-Path $nodeExtract "node-v$env:NODE_VERSION-win-arm64"
-          Copy-Item (Join-Path $nodeSource "*") $nodeTarget -Recurse -Force
-          Write-Host "[2/3] Node ready: $(& (Join-Path $nodeTarget 'node.exe') --version)"
-
-      - name: Install DeepSeek Harness ARM64 runtime
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.full_package && steps.runtime-cache-arm64.outputs.cache-hit != 'true' }}
-        shell: pwsh
-        run: |
-          $cache = "build/runtime-cache-arm64"
-          $nodeTarget = Join-Path $cache "HarnessRuntime\Node"
-          $dshTarget = Join-Path $cache "HarnessRuntime\Dsh"
-          $npmCache = Join-Path $cache "NpmCache"
-          New-Item -ItemType Directory -Force -Path $dshTarget | Out-Null
-          New-Item -ItemType Directory -Force -Path $npmCache | Out-Null
-          Write-Host "[3/3] Installing @deepseek-ai/dsh@$env:DSH_VERSION production dependencies with NODE_OPTIONS=$env:NODE_OPTIONS..."
-          $oldPath = $env:PATH
-          try {
-            $env:PATH = "$((Resolve-Path $nodeTarget).Path);$oldPath"
-            & (Join-Path $nodeTarget "npm.cmd") install --prefix $dshTarget --omit=dev --no-audit --no-fund --save-exact --cache $npmCache --prefer-offline --loglevel=notice --fetch-retries=3 --fetch-retry-mintimeout=1000 --fetch-retry-maxtimeout=10000 --fetch-timeout=60000 "@deepseek-ai/dsh@$env:DSH_VERSION"
-            if ($LASTEXITCODE -ne 0) { throw "Bundled DeepSeek Harness install failed: $LASTEXITCODE" }
-          } finally {
-            $env:PATH = $oldPath
-          }
-          $dshBin = Join-Path $dshTarget "node_modules\@deepseek-ai\dsh\lib\bin.js"
-          if (-not (Test-Path $dshBin -PathType Leaf)) { throw "Bundled Harness entrypoint missing: $dshBin" }
-          Write-Host "[3/3] DeepSeek Harness runtime ready."
-
-      - name: Assemble full ARM64 package from runtime cache
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.full_package }}
-        shell: pwsh
-        run: |
-          $cache = "build/runtime-cache-arm64"
-          $package = "build/package"
-          $node = Join-Path $cache "HarnessRuntime\Node\node.exe"
-          $dsh = Join-Path $cache "HarnessRuntime\Dsh\node_modules\@deepseek-ai\dsh\lib\bin.js"
-          if (-not (Test-Path $node -PathType Leaf) -or -not (Test-Path $dsh -PathType Leaf)) {
-            throw "ARM64 runtime cache is incomplete"
-          }
-          Write-Host "Runtime cache hit: ${{ steps.runtime-cache-arm64.outputs.cache-hit }}"
-          Copy-Item (Join-Path $cache "Everything") $package -Recurse -Force
-          New-Item -ItemType Directory -Force -Path (Join-Path $package "HarnessRuntime") | Out-Null
-          Copy-Item (Join-Path $cache "HarnessRuntime\Node") (Join-Path $package "HarnessRuntime") -Recurse -Force
-          Copy-Item (Join-Path $cache "HarnessRuntime\Dsh") (Join-Path $package "HarnessRuntime") -Recurse -Force
-
-      - name: Verify full packaged ARM64 runtime and boot Harness
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.full_package }}
-        shell: pwsh
-        run: |
-          $package = "build/package"
-          $node = Join-Path $package "HarnessRuntime\Node"
-          $dsh = Join-Path $package "HarnessRuntime\Dsh"
-          $required = @(
-            (Join-Path $package "TuringDesk.exe"),
-            (Join-Path $package "TuringDeskWallpaper.exe"),
-            (Join-Path $package "TuringDeskHarness.exe"),
-            (Join-Path $package "Everything\Everything.exe"),
-            (Join-Path $package "Everything\LICENSE.txt"),
-            (Join-Path $node "node.exe"),
-            (Join-Path $node "npm.cmd"),
-            (Join-Path $node "npx.cmd"),
-            (Join-Path $node "LICENSE"),
-            (Join-Path $dsh "node_modules\@deepseek-ai\dsh\lib\bin.js"),
-            (Join-Path $dsh "node_modules\@deepseek-ai\dsh\package.json")
-          )
-          foreach ($path in $required) {
-            if (-not (Test-Path $path -PathType Leaf)) { throw "Missing packaged file: $path" }
-          }
-          $nodeVersion = & (Join-Path $node "node.exe") --version
-          if ($nodeVersion.Trim() -ne "v$env:NODE_VERSION") { throw "Unexpected bundled Node version: $nodeVersion" }
-          $dshPackage = Get-Content (Join-Path $dsh "node_modules\@deepseek-ai\dsh\package.json") -Raw | ConvertFrom-Json
-          if ($dshPackage.version -ne $env:DSH_VERSION) { throw "Unexpected bundled Harness version: $($dshPackage.version)" }
-          Write-Host "Starting real Harness smoke test..."
-          $smoke = Start-Process -FilePath (Join-Path $package "TuringDeskHarness.exe") -ArgumentList "--harness-smoke-test" -Wait -PassThru
-          if ($smoke.ExitCode -ne 0) {
-            $log = Join-Path $env:LOCALAPPDATA "TuringDesk\Logs\harness.log"
-            if (Test-Path $log) { Write-Host "--- Harness log ---"; Get-Content $log -Tail 300 }
-            throw "Packaged Harness smoke test failed: $($smoke.ExitCode)"
-          }
+          New-Item -ItemType Directory -Force -Path build/package | Out-Null
+          Copy-Item build/src/native/Release/TuringDesk.exe build/package/TuringDesk.exe -Force
+          Copy-Item build/src/native/Release/TuringDeskWallpaper.exe build/package/TuringDeskWallpaper.exe -Force
+          Copy-Item build/src/native/Release/TuringDeskHarness.exe build/package/TuringDeskHarness.exe -Force
       - uses: actions/upload-artifact@v4
         with:
           name: TuringDesk-Native-Search-ARM64
@@ -318,13 +111,12 @@ jobs:
         env:
           X64_RESULT: ${{ needs.build-x64.result }}
           ARM64_RESULT: ${{ needs.build-arm64.result }}
-          BUILD_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.full_package && 'full' || 'quick' }}
         run: |
           mkdir -p ci
           cat > "ci/native-${GITHUB_SHA}.json" <<EOF
           {
             "sha": "${GITHUB_SHA}",
-            "mode": "${BUILD_MODE}",
+            "mode": "native",
             "x64": "${X64_RESULT}",
             "arm64": "${ARM64_RESULT}",
             "run_id": "${GITHUB_RUN_ID}"
