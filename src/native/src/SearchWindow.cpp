@@ -159,8 +159,8 @@ bool SearchWindow::Create() {
                               OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
                               DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
     }
-    editBrush_ = CreateSolidBrush(RGB(25, 27, 33));
-    buttonBrush_ = CreateSolidBrush(RGB(37, 40, 48));
+    editBrush_ = CreateSolidBrush(RGB(247, 248, 250));
+    buttonBrush_ = CreateSolidBrush(RGB(238, 241, 245));
 
     const int wallpaperX = kWindowWidth - kRightMargin - kWallpaperButtonWidth;
     const int aiX = wallpaperX - kButtonGap - kAiButtonWidth;
@@ -221,11 +221,11 @@ bool SearchWindow::SelfTest() {
 void SearchWindow::ApplyWindows11Style() {
     if (!hwnd_) return;
 
-    const BOOL dark = TRUE;
+    const BOOL dark = FALSE;
     DwmSetWindowAttribute(hwnd_, kDwmUseImmersiveDarkMode, &dark, sizeof(dark));
     const int corner = kDwmCornerRound;
     DwmSetWindowAttribute(hwnd_, kDwmWindowCornerPreference, &corner, sizeof(corner));
-    const COLORREF border = RGB(66, 70, 82);
+    const COLORREF border = RGB(204, 210, 218);
     DwmSetWindowAttribute(hwnd_, kDwmBorderColor, &border, sizeof(border));
     const int backdrop = kDwmBackdropTransient;
     DwmSetWindowAttribute(hwnd_, kDwmSystemBackdropType, &backdrop, sizeof(backdrop));
@@ -240,7 +240,7 @@ void SearchWindow::ApplyWindows11Style() {
         if (setComposition) {
             TdAccentPolicy policy{};
             policy.state = 4;
-            policy.gradientColor = 0xB823201E;
+            policy.gradientColor = 0xDDF8F5F2;
             TdCompositionData data{};
             data.attribute = 19;
             data.data = &policy;
@@ -488,12 +488,12 @@ LRESULT SearchWindow::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) 
         HBRUSH selectedBrush = nullptr;
         HBRUSH fill = buttonBrush_;
         if ((item->itemState & ODS_SELECTED) != 0) {
-            selectedBrush = CreateSolidBrush(RGB(50, 54, 65));
+            selectedBrush = CreateSolidBrush(RGB(220, 226, 234));
             fill = selectedBrush;
         }
         FillRect(item->hDC, &item->rcItem, fill);
         SetBkMode(item->hDC, TRANSPARENT);
-        SetTextColor(item->hDC, RGB(238, 241, 247));
+        SetTextColor(item->hDC, RGB(32, 35, 40));
         const HFONT previous = reinterpret_cast<HFONT>(SelectObject(item->hDC, uiFont_));
         RECT textRect = item->rcItem;
         const wchar_t* label = item->CtlID == kSettingsButtonId ? L"AI" : L"壁纸";
@@ -504,8 +504,8 @@ LRESULT SearchWindow::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) 
     }
     case WM_CTLCOLOREDIT: {
         const HDC dc = reinterpret_cast<HDC>(wParam);
-        SetTextColor(dc, RGB(244, 246, 250));
-        SetBkColor(dc, RGB(25, 27, 33));
+        SetTextColor(dc, RGB(26, 28, 32));
+        SetBkColor(dc, RGB(247, 248, 250));
         return reinterpret_cast<LRESULT>(editBrush_);
     }
     case kTrayMessage:
@@ -513,7 +513,7 @@ LRESULT SearchWindow::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) 
         return 0;
     case WM_COPYDATA: {
         std::vector<SearchResult> received;
-        if (files_.HandleCopyData(reinterpret_cast<COPYDATASTRUCT*>(lParam), received)) {
+        if (files_.HandleCopyData(reinterpret_cast<COPYDATASTRUCTW*>(lParam), received)) {
             fileSearchAvailable_ = true;
             fileSearchQueryFailed_ = false;
             fileResults_ = std::move(received);
@@ -705,13 +705,13 @@ void SearchWindow::Draw() {
         const auto props = D2D1::RenderTargetProperties();
         const auto hwndProps = D2D1::HwndRenderTargetProperties(hwnd_, D2D1::SizeU(rc.right - rc.left, rc.bottom - rc.top));
         if (FAILED(d2dFactory_->CreateHwndRenderTarget(props, hwndProps, renderTarget_.GetAddressOf()))) return;
-        renderTarget_->CreateSolidColorBrush(D2D1::ColorF(0xf5f7fa), textBrush_.GetAddressOf());
-        renderTarget_->CreateSolidColorBrush(D2D1::ColorF(0xa6acb8), secondaryBrush_.GetAddressOf());
-        renderTarget_->CreateSolidColorBrush(D2D1::ColorF(0x353a45, 0.84f), selectionBrush_.GetAddressOf());
+        renderTarget_->CreateSolidColorBrush(D2D1::ColorF(0x20242a), textBrush_.GetAddressOf());
+        renderTarget_->CreateSolidColorBrush(D2D1::ColorF(0x68717d), secondaryBrush_.GetAddressOf());
+        renderTarget_->CreateSolidColorBrush(D2D1::ColorF(0xdfe5ec, 0.88f), selectionBrush_.GetAddressOf());
     }
 
     renderTarget_->BeginDraw();
-    renderTarget_->Clear(D2D1::ColorF(0x15181f, 0.62f));
+    renderTarget_->Clear(D2D1::ColorF(0xf4f6f9, 0.78f));
 
     float y = 60.0f;
     const float width = renderTarget_->GetSize().width;
