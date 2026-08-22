@@ -1,5 +1,6 @@
 #include "turingdesk/HarnessProcessManager.h"
 #include <windows.h>
+#include <objbase.h>
 #include <WebView2.h>
 #include <wrl.h>
 #include <wrl/client.h>
