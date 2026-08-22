@@ -1,7 +1,12 @@
 #include "turingdesk/ModelSettingsWindow.h"
+#include <shellapi.h>
 #include <algorithm>
 #include <cwctype>
+#include <filesystem>
+#include <iterator>
 #include <string>
+
+namespace fs = std::filesystem;
 
 namespace turingdesk {
 namespace {
@@ -14,6 +19,7 @@ constexpr int kModelComboId = 2103;
 constexpr int kProbeButtonId = 2104;
 constexpr int kClearKeyButtonId = 2105;
 constexpr int kStatusLabelId = 2106;
+constexpr int kHarnessButtonId = 2107;
 
 struct SettingsState {
     L3Agent* agent{};
@@ -61,6 +67,39 @@ void RefreshKeyField(SettingsState& state) {
 
 bool UsingStoredKey(const SettingsState& state, const std::wstring& fieldText) {
     return state.hadExistingKey && (fieldText.empty() || fieldText == kSavedKeyMask);
+}
+
+bool OpenHarness(SettingsState& state) {
+    wchar_t modulePath[32768]{};
+    const DWORD length = GetModuleFileNameW(nullptr, modulePath, static_cast<DWORD>(std::size(modulePath)));
+    if (length == 0 || length >= std::size(modulePath)) {
+        MessageBoxW(state.window, L"无法定位 TuringDesk 安装目录。",
+                    L"DeepSeek Harness", MB_OK | MB_ICONERROR);
+        return false;
+    }
+
+    const fs::path executable = fs::path(std::wstring(modulePath, length)).parent_path() / L"TuringDeskHarness.exe";
+    std::error_code ec;
+    if (!fs::is_regular_file(executable, ec)) {
+        MessageBoxW(state.window,
+                    L"当前安装包缺少 TuringDeskHarness.exe。请安装包含 L4 Harness Host 的最新版本。",
+                    L"DeepSeek Harness", MB_OK | MB_ICONERROR);
+        return false;
+    }
+
+    const fs::path workingDirectory = executable.parent_path();
+    const auto launchResult = reinterpret_cast<INT_PTR>(
+        ShellExecuteW(state.window, L"open", executable.c_str(), nullptr,
+                      workingDirectory.c_str(), SW_SHOWNORMAL));
+    if (launchResult <= 32) {
+        MessageBoxW(state.window,
+                    (L"无法启动 DeepSeek Harness（ShellExecute=" + std::to_wstring(launchResult) + L"）。").c_str(),
+                    L"DeepSeek Harness", MB_OK | MB_ICONERROR);
+        return false;
+    }
+
+    SetStatus(state, L"DeepSeek Harness 已在独立 L4 窗口启动；此设置窗口仍可继续使用。");
+    return true;
 }
 
 void PopulateModels(SettingsState& state, const ModelProbeResult& probe) {
@@ -186,6 +225,9 @@ LRESULT CALLBACK SettingsProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPa
         case kProbeButtonId:
             if (HIWORD(wParam) == BN_CLICKED) RunProbe(*state);
             return 0;
+        case kHarnessButtonId:
+            if (HIWORD(wParam) == BN_CLICKED) OpenHarness(*state);
+            return 0;
         case IDOK:
             if (SaveSettings(*state)) DestroyWindow(hwnd);
             return 0;
@@ -273,10 +315,13 @@ bool ShowModelSettingsWindow(HINSTANCE instance, HWND owner, L3Agent& agent) {
                                         WS_CHILD | WS_VISIBLE,
                                         24, 208, 572, 42, window, reinterpret_cast<HMENU>(kStatusLabelId), instance, nullptr);
 
-    HWND autoHint = CreateWindowExW(0, L"STATIC", L"检测只读取模型列表，不发送聊天请求。",
+    HWND autoHint = CreateWindowExW(0, L"STATIC", L"检测只读取模型列表；L4 Harness 在独立窗口运行。",
                                     WS_CHILD | WS_VISIBLE,
-                                    24, 250, 300, 20, window, nullptr, instance, nullptr);
+                                    24, 250, 330, 20, window, nullptr, instance, nullptr);
 
+    HWND harnessButton = CreateWindowExW(0, L"BUTTON", L"打开 DeepSeek Harness (L4)",
+                                         WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+                                         24, 274, 240, 28, window, reinterpret_cast<HMENU>(kHarnessButtonId), instance, nullptr);
     HWND saveButton = CreateWindowExW(0, L"BUTTON", L"保存", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON,
                                       364, 274, 72, 28, window, reinterpret_cast<HMENU>(IDOK), instance, nullptr);
     HWND clearButton = CreateWindowExW(0, L"BUTTON", L"清除 Key", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
@@ -285,7 +330,7 @@ bool ShowModelSettingsWindow(HINSTANCE instance, HWND owner, L3Agent& agent) {
                                         524, 274, 72, 28, window, reinterpret_cast<HMENU>(IDCANCEL), instance, nullptr);
 
     for (HWND control : {labelApi, state.apiUrlEdit, labelKey, state.apiKeyEdit, state.probeButton,
-                         labelModel, state.modelCombo, state.statusLabel, autoHint,
+                         labelModel, state.modelCombo, state.statusLabel, autoHint, harnessButton,
                          saveButton, clearButton, cancelButton}) {
         SetControlFont(control, font);
     }
