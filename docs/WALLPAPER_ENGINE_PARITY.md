@@ -22,6 +22,7 @@ Already present on `main`:
 - Video loop, mute/volume, playback rate, precise seek/restart and bounded recovery synchronized across monitor surfaces.
 - Persistent local wallpaper library with import, generated thumbnails, search, favorites, recent history and optional managed copies.
 - Persistent Playlist / Schedule / Profile automation with sequential/random rotation, day/time windows and full wallpaper configuration snapshots.
+- Persistent per-executable wallpaper performance overrides with live match diagnostics.
 
 ## Delivery order
 
@@ -89,12 +90,13 @@ Each item is completed in `main`, with native self-test/CI coverage added or upd
   - [x] Automation persistence/time-window/rotation behavior participates in `TuringDeskWallpaper --self-test`.
   - [x] ARM64/x64 native CI green at `4378a20f`.
 
-- [ ] 8. Application rules
+- [x] 8. Application rules
   - [x] Persistent per-executable rule model with enabled state, trigger, action and priority.
   - [x] Trigger modes: foreground, running, fullscreen and maximized.
   - [x] Explicit Continue/Throttle/Pause/Stop rules override generic fullscreen/maximized defaults while system protection remains stronger.
   - [x] Native application-rule manager supports EXE picker, recent-foreground capture, live-match diagnostics and rule CRUD.
-  - [ ] Native self-test/CI green for the integrated application-rule runtime and UI.
+  - [x] Application-rule persistence and override semantics participate in native self-test.
+  - [x] ARM64/x64 native CI green at `5252bfc5`.
 
 - [ ] 9. Web wallpaper backend
   - Isolated WebView2 wallpaper process/window.
