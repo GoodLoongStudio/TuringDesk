@@ -10,6 +10,7 @@ namespace turingdesk::wallpaper {
 enum class LayoutMode {
     Span,
     Clone,
+    Independent,
     PrimaryOnly,
 };
 
