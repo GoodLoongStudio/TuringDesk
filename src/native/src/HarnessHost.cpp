@@ -19,10 +19,10 @@ constexpr wchar_t kWindowClass[] = L"TuringDesk.Native.HarnessWindow";
 constexpr wchar_t kMutexName[] = L"Local\\TuringDesk.Native.Harness.Singleton";
 constexpr UINT_PTR kReadyTimerId = 1;
 constexpr UINT kReadyPollMs = 250;
-// Keep automated smoke tests bounded, but never impose this deadline on the
-// interactive shell. Upstream's first Windows npx launch is known to spend many
-// minutes preparing npm state before port 3080 appears.
-constexpr DWORD kSmokeTimeoutMs = 600000;
+// The pinned Harness dependency tree is already present locally, so smoke tests
+// should become ready quickly. Keep a generous two-minute ceiling for slower
+// ARM64 machines while still surfacing a broken bundle promptly.
+constexpr DWORD kSmokeTimeoutMs = 120000;
 
 fs::path UserDataDirectory() {
     wchar_t localAppData[32768]{};
@@ -179,7 +179,7 @@ private:
             const DWORD exitCode = harness_.ExitCode();
             std::wstring text = L"DeepSeek 官方 Harness 在 Web UI 就绪前退出";
             if (exitCode != STILL_ACTIVE) text += L"，ExitCode=" + std::to_wstring(exitCode);
-            text += L"。请查看下方日志中的 npm/DSH 原始错误。" + HarnessLogHint();
+            text += L"。请查看下方日志中的 RuntimeBundle/DSH 原始错误。" + HarnessLogHint();
             SetStatus(text);
             return;
         }
@@ -195,8 +195,9 @@ private:
 
     void UpdateStartingStatus(ULONGLONG now) {
         const ULONGLONG elapsedSeconds = startedAt_ == 0 ? 0 : (now - startedAt_) / 1000;
-        std::wstring text = L"正在启动官方 DeepSeek Harness… 已等待 " + std::to_wstring(elapsedSeconds) + L" 秒。";
-        text += L"\r\n首次 npx 在 Windows 上可能需要较长时间；只要进程仍在运行就继续等待，关闭此窗口即可取消。";
+        std::wstring text = L"正在启动仓库内固定版本的 DeepSeek Harness… 已等待 " + std::to_wstring(elapsedSeconds) + L" 秒。";
+        text += L"\r\n不会执行 npm/npx 下载；Node 和 Harness 已随 TuringDesk RuntimeBundle 部署。关闭此窗口即可取消。";
+        if (elapsedSeconds >= 45) text += L"\r\n启动时间异常偏长，请检查 RuntimeBundle 完整性和下方日志。";
         text += HarnessLogHint();
         SetStatus(text);
     }
