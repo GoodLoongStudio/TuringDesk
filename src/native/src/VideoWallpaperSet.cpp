@@ -2,6 +2,7 @@
 #include "turingdesk/VideoWallpaperPlayer.h"
 
 #include <algorithm>
+#include <sstream>
 
 namespace turingdesk {
 namespace {
@@ -103,6 +104,10 @@ bool VideoWallpaperSet::Start(HWND parentWindow, const std::wstring& path, const
 
         slot.player = std::make_unique<VideoWallpaperPlayer>();
         slot.player->SetScaling(scaleMode_, focalX_, focalY_);
+        slot.player->SetLooping(looping_);
+        slot.player->SetMuted(muted_);
+        slot.player->SetVolume(volume_);
+        slot.player->SetPlaybackRate(playbackRate_);
         if (!slot.player->Start(slot.surface, path)) {
             lastError_ = slot.player->LastErrorText();
             if (lastError_.empty()) lastError_ = L"Media Foundation 无法启动多屏视频";
@@ -156,6 +161,34 @@ void VideoWallpaperSet::SetScaling(wallpaper::ScaleMode scaleMode, float focalX,
     }
 }
 
+void VideoWallpaperSet::SetLooping(bool looping) {
+    looping_ = looping;
+    for (auto& slot : slots_) if (slot.player) slot.player->SetLooping(looping_);
+}
+
+void VideoWallpaperSet::SetMuted(bool muted) {
+    muted_ = muted;
+    for (auto& slot : slots_) if (slot.player) slot.player->SetMuted(muted_);
+}
+
+void VideoWallpaperSet::SetVolume(float volume) {
+    volume_ = std::clamp(volume, 0.0f, 1.0f);
+    for (auto& slot : slots_) if (slot.player) slot.player->SetVolume(volume_);
+}
+
+void VideoWallpaperSet::SetPlaybackRate(float rate) {
+    playbackRate_ = std::clamp(rate, 0.25f, 4.0f);
+    for (auto& slot : slots_) if (slot.player) slot.player->SetPlaybackRate(playbackRate_);
+}
+
+bool VideoWallpaperSet::Restart() {
+    bool ok = !slots_.empty();
+    for (auto& slot : slots_) {
+        if (!slot.player || !slot.player->Restart()) ok = false;
+    }
+    return ok;
+}
+
 bool VideoWallpaperSet::Active() const {
     if (slots_.empty()) return false;
     return std::all_of(slots_.begin(), slots_.end(), [](const Slot& slot) {
@@ -171,6 +204,15 @@ std::wstring VideoWallpaperSet::LastErrorText() const {
         if (!error.empty()) return error;
     }
     return {};
+}
+
+std::wstring VideoWallpaperSet::DiagnosticsText() const {
+    std::wostringstream text;
+    text << slots_.size() << L" 个视频 Surface";
+    if (!slots_.empty() && slots_.front().player)
+        text << L" · " << slots_.front().player->DiagnosticsText();
+    if (!lastError_.empty()) text << L" · " << lastError_;
+    return text.str();
 }
 
 } // namespace turingdesk
