@@ -15,6 +15,7 @@ permissions:
 
 env:
   EVERYTHING_VERSION: 1.5.0.1422b
+  NODE_VERSION: 24.19.0
 
 jobs:
   build-x64:
@@ -40,33 +41,58 @@ jobs:
         run: |
           $process = Start-Process -FilePath ".\build\src\native\Release\TuringDeskHarness.exe" -ArgumentList "--self-test" -Wait -PassThru
           if ($process.ExitCode -ne 0) { throw "Native Harness host self-test failed: $($process.ExitCode)" }
-      - name: Package x64 with Everything, Wallpaper and Harness
+      - name: Package x64 with Everything, Wallpaper, Harness and Node LTS
         shell: pwsh
         run: |
           $package = "build/package"
           $everything = Join-Path $package "Everything"
+          $nodeTarget = Join-Path $package "HarnessRuntime\Node"
           New-Item -ItemType Directory -Force -Path $everything | Out-Null
+          New-Item -ItemType Directory -Force -Path $nodeTarget | Out-Null
           Copy-Item "build/src/native/Release/TuringDesk.exe" (Join-Path $package "TuringDesk.exe") -Force
           Copy-Item "build/src/native/Release/TuringDeskWallpaper.exe" (Join-Path $package "TuringDeskWallpaper.exe") -Force
           Copy-Item "build/src/native/Release/TuringDeskHarness.exe" (Join-Path $package "TuringDeskHarness.exe") -Force
-          $zip = Join-Path $env:RUNNER_TEMP "Everything-x64.zip"
-          Invoke-WebRequest "https://www.voidtools.com/Everything-$env:EVERYTHING_VERSION.x64.zip" -OutFile $zip
-          Expand-Archive $zip -DestinationPath $everything -Force
+
+          $everythingZip = Join-Path $env:RUNNER_TEMP "Everything-x64.zip"
+          Invoke-WebRequest "https://www.voidtools.com/Everything-$env:EVERYTHING_VERSION.x64.zip" -OutFile $everythingZip
+          Expand-Archive $everythingZip -DestinationPath $everything -Force
           Invoke-WebRequest "https://www.voidtools.com/License.txt" -OutFile (Join-Path $everything "LICENSE.txt")
+
+          $nodeFile = "node-v$env:NODE_VERSION-win-x64.zip"
+          $nodeZip = Join-Path $env:RUNNER_TEMP $nodeFile
+          $nodeSums = Join-Path $env:RUNNER_TEMP "node-SHASUMS256.txt"
+          $nodeExtract = Join-Path $env:RUNNER_TEMP "node-x64"
+          Invoke-WebRequest "https://nodejs.org/dist/v$env:NODE_VERSION/$nodeFile" -OutFile $nodeZip
+          Invoke-WebRequest "https://nodejs.org/dist/v$env:NODE_VERSION/SHASUMS256.txt" -OutFile $nodeSums
+          $sumLine = Get-Content $nodeSums | Where-Object { $_ -match "\s+$([regex]::Escape($nodeFile))$" } | Select-Object -First 1
+          if (-not $sumLine) { throw "Node checksum entry not found for $nodeFile" }
+          $expectedHash = ($sumLine -split '\s+')[0].ToLowerInvariant()
+          $actualHash = (Get-FileHash $nodeZip -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actualHash -ne $expectedHash) { throw "Node SHA256 mismatch: expected $expectedHash, got $actualHash" }
+          Expand-Archive $nodeZip -DestinationPath $nodeExtract -Force
+          $nodeSource = Join-Path $nodeExtract "node-v$env:NODE_VERSION-win-x64"
+          Copy-Item (Join-Path $nodeSource "*") $nodeTarget -Recurse -Force
       - name: Verify packaged x64 runtime
         shell: pwsh
         run: |
           $package = "build/package"
+          $node = Join-Path $package "HarnessRuntime\Node"
           $required = @(
             (Join-Path $package "TuringDesk.exe"),
             (Join-Path $package "TuringDeskWallpaper.exe"),
             (Join-Path $package "TuringDeskHarness.exe"),
             (Join-Path $package "Everything\Everything.exe"),
-            (Join-Path $package "Everything\LICENSE.txt")
+            (Join-Path $package "Everything\LICENSE.txt"),
+            (Join-Path $node "node.exe"),
+            (Join-Path $node "npm.cmd"),
+            (Join-Path $node "npx.cmd"),
+            (Join-Path $node "LICENSE")
           )
           foreach ($path in $required) {
             if (-not (Test-Path $path -PathType Leaf)) { throw "Missing packaged file: $path" }
           }
+          $nodeVersion = & (Join-Path $node "node.exe") --version
+          if ($nodeVersion.Trim() -ne "v$env:NODE_VERSION") { throw "Unexpected bundled Node version: $nodeVersion" }
           $search = Start-Process -FilePath (Join-Path $package "TuringDesk.exe") -ArgumentList "--self-test" -Wait -PassThru
           if ($search.ExitCode -ne 0) { throw "Packaged TuringDesk self-test failed: $($search.ExitCode)" }
           $wallpaper = Start-Process -FilePath (Join-Path $package "TuringDeskWallpaper.exe") -ArgumentList "--self-test" -Wait -PassThru
@@ -101,33 +127,58 @@ jobs:
         run: |
           $process = Start-Process -FilePath ".\build\src\native\Release\TuringDeskHarness.exe" -ArgumentList "--self-test" -Wait -PassThru
           if ($process.ExitCode -ne 0) { throw "Native Harness host self-test failed: $($process.ExitCode)" }
-      - name: Package ARM64 with Everything, Wallpaper and Harness
+      - name: Package ARM64 with Everything, Wallpaper, Harness and Node LTS
         shell: pwsh
         run: |
           $package = "build/package"
           $everything = Join-Path $package "Everything"
+          $nodeTarget = Join-Path $package "HarnessRuntime\Node"
           New-Item -ItemType Directory -Force -Path $everything | Out-Null
+          New-Item -ItemType Directory -Force -Path $nodeTarget | Out-Null
           Copy-Item "build/src/native/Release/TuringDesk.exe" (Join-Path $package "TuringDesk.exe") -Force
           Copy-Item "build/src/native/Release/TuringDeskWallpaper.exe" (Join-Path $package "TuringDeskWallpaper.exe") -Force
           Copy-Item "build/src/native/Release/TuringDeskHarness.exe" (Join-Path $package "TuringDeskHarness.exe") -Force
-          $zip = Join-Path $env:RUNNER_TEMP "Everything-ARM64.zip"
-          Invoke-WebRequest "https://www.voidtools.com/Everything-$env:EVERYTHING_VERSION.ARM64.zip" -OutFile $zip
-          Expand-Archive $zip -DestinationPath $everything -Force
+
+          $everythingZip = Join-Path $env:RUNNER_TEMP "Everything-ARM64.zip"
+          Invoke-WebRequest "https://www.voidtools.com/Everything-$env:EVERYTHING_VERSION.ARM64.zip" -OutFile $everythingZip
+          Expand-Archive $everythingZip -DestinationPath $everything -Force
           Invoke-WebRequest "https://www.voidtools.com/License.txt" -OutFile (Join-Path $everything "LICENSE.txt")
+
+          $nodeFile = "node-v$env:NODE_VERSION-win-arm64.zip"
+          $nodeZip = Join-Path $env:RUNNER_TEMP $nodeFile
+          $nodeSums = Join-Path $env:RUNNER_TEMP "node-SHASUMS256.txt"
+          $nodeExtract = Join-Path $env:RUNNER_TEMP "node-arm64"
+          Invoke-WebRequest "https://nodejs.org/dist/v$env:NODE_VERSION/$nodeFile" -OutFile $nodeZip
+          Invoke-WebRequest "https://nodejs.org/dist/v$env:NODE_VERSION/SHASUMS256.txt" -OutFile $nodeSums
+          $sumLine = Get-Content $nodeSums | Where-Object { $_ -match "\s+$([regex]::Escape($nodeFile))$" } | Select-Object -First 1
+          if (-not $sumLine) { throw "Node checksum entry not found for $nodeFile" }
+          $expectedHash = ($sumLine -split '\s+')[0].ToLowerInvariant()
+          $actualHash = (Get-FileHash $nodeZip -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actualHash -ne $expectedHash) { throw "Node SHA256 mismatch: expected $expectedHash, got $actualHash" }
+          Expand-Archive $nodeZip -DestinationPath $nodeExtract -Force
+          $nodeSource = Join-Path $nodeExtract "node-v$env:NODE_VERSION-win-arm64"
+          Copy-Item (Join-Path $nodeSource "*") $nodeTarget -Recurse -Force
       - name: Verify packaged ARM64 runtime
         shell: pwsh
         run: |
           $package = "build/package"
+          $node = Join-Path $package "HarnessRuntime\Node"
           $required = @(
             (Join-Path $package "TuringDesk.exe"),
             (Join-Path $package "TuringDeskWallpaper.exe"),
             (Join-Path $package "TuringDeskHarness.exe"),
             (Join-Path $package "Everything\Everything.exe"),
-            (Join-Path $package "Everything\LICENSE.txt")
+            (Join-Path $package "Everything\LICENSE.txt"),
+            (Join-Path $node "node.exe"),
+            (Join-Path $node "npm.cmd"),
+            (Join-Path $node "npx.cmd"),
+            (Join-Path $node "LICENSE")
           )
           foreach ($path in $required) {
             if (-not (Test-Path $path -PathType Leaf)) { throw "Missing packaged file: $path" }
           }
+          $nodeVersion = & (Join-Path $node "node.exe") --version
+          if ($nodeVersion.Trim() -ne "v$env:NODE_VERSION") { throw "Unexpected bundled Node version: $nodeVersion" }
           $search = Start-Process -FilePath (Join-Path $package "TuringDesk.exe") -ArgumentList "--self-test" -Wait -PassThru
           if ($search.ExitCode -ne 0) { throw "Packaged TuringDesk self-test failed: $($search.ExitCode)" }
           $wallpaper = Start-Process -FilePath (Join-Path $package "TuringDeskWallpaper.exe") -ArgumentList "--self-test" -Wait -PassThru
