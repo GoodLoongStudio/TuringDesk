@@ -1,5 +1,6 @@
 #pragma once
 #include <atomic>
+#include <cstddef>
 #include <functional>
 #include <mutex>
 #include <string>
@@ -55,6 +56,11 @@ public:
                           const std::wstring& apiKeyOverride,
                           bool preserveExistingKey,
                           std::wstring& reply);
+
+    std::size_t ConversationTurnCountForSelfTest() {
+        std::scoped_lock lock(conversationMutex_);
+        return conversation_.size();
+    }
 
 private:
     struct ChatTurn {

@@ -7,6 +7,10 @@
 #include <windows.h>
 #include <string_view>
 
+namespace turingdesk {
+bool RunL3PersistenceSelfTest();
+}
+
 namespace {
 
 constexpr wchar_t kSearchWindowClass[] = L"TuringDesk.Native.SearchWindow";
@@ -22,6 +26,7 @@ bool RunNativeSelfTest() {
 
     if (!turingdesk::DirectToolRuntime::SelfTest()) return false;
     if (!turingdesk::HarnessProcessManager::SelfTest()) return false;
+    if (!turingdesk::RunL3PersistenceSelfTest()) return false;
 
     turingdesk::L3Agent l3;
     std::wstring reply;
