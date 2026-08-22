@@ -15,7 +15,6 @@ namespace {
 constexpr wchar_t kHarnessHost[] = L"127.0.0.1";
 constexpr INTERNET_PORT kHarnessPort = 3080;
 constexpr wchar_t kHarnessPath[] = L"/";
-constexpr wchar_t kHarnessPackage[] = L"@deepseek-ai/dsh";
 constexpr wchar_t kHarnessArgs[] = L"web --host 127.0.0.1 --port 3080";
 constexpr char kHarnessBootMarker[] = "window.__DSH_BOOT__";
 constexpr std::size_t kMaxReadinessProbeBytes = 256 * 1024;
@@ -77,12 +76,11 @@ bool IsRegularFile(const fs::path& path) {
     return !path.empty() && fs::is_regular_file(path, ec);
 }
 
-std::wstring ResolvePath(const wchar_t* fileName) {
-    wchar_t path[32768]{};
-    const DWORD length = SearchPathW(nullptr, fileName, nullptr,
-                                     static_cast<DWORD>(std::size(path)), path, nullptr);
-    if (length > 0 && length < std::size(path)) return std::wstring(path, length);
-    return {};
+fs::path ExecutableDirectory() {
+    std::vector<wchar_t> buffer(32768);
+    const DWORD length = GetModuleFileNameW(nullptr, buffer.data(), static_cast<DWORD>(buffer.size()));
+    if (length == 0 || length >= buffer.size()) return {};
+    return fs::path(std::wstring(buffer.data(), length)).parent_path();
 }
 
 std::wstring Quote(const std::wstring& value) {
@@ -93,45 +91,20 @@ std::wstring BuildDirectDshCommand(const std::wstring& nodePath, const std::wstr
     return Quote(nodePath) + L" " + Quote(dshBin) + L" " + kHarnessArgs;
 }
 
-std::wstring BuildDirectNpxCommand(const std::wstring& nodePath, const std::wstring& npxCli) {
-    // Keep DeepSeek's official README flow while making npm's Windows network
-    // path deterministic. Chromium performs aggressive IPv4/IPv6 fallback;
-    // Node can otherwise spend a long time on a poor IPv6 route even when the
-    // same registry opens instantly in a browser.
-    return Quote(nodePath) + L" --dns-result-order=ipv4first " + Quote(npxCli) +
-           L" --yes --registry=https://registry.npmjs.org/ --prefer-offline" +
-           L" --fetch-retries=4 --fetch-retry-factor=2" +
-           L" --fetch-retry-mintimeout=1000 --fetch-retry-maxtimeout=15000" +
-           L" --fetch-timeout=60000 --no-audit --no-fund --loglevel=http --timing " +
-           std::wstring(kHarnessPackage) + L" " + kHarnessArgs;
-}
-
 LaunchSpec ResolveLaunchSpec() {
-    std::wstring node = ResolvePath(L"node.exe");
+    // Deliberately do not search PATH and do not invoke npm/npx. The only
+    // supported production runtime is the pinned repository RuntimeBundle
+    // deployed beside TuringDeskHarness.exe.
+    const fs::path appDir = ExecutableDirectory();
+    if (appDir.empty()) return {};
 
-    const std::wstring dshCmd = ResolvePath(L"dsh.cmd");
-    if (!node.empty() && !dshCmd.empty()) {
-        const fs::path prefix = fs::path(dshCmd).parent_path();
-        const fs::path dshBin = prefix / L"node_modules" / L"@deepseek-ai" / L"dsh" / L"lib" / L"bin.js";
-        if (IsRegularFile(dshBin)) {
-            return {node, BuildDirectDshCommand(node, dshBin.wstring()), L"official global dsh"};
-        }
-    }
+    const fs::path runtimeRoot = appDir / L"Runtime" / L"Node";
+    const fs::path node = runtimeRoot / L"node.exe";
+    const fs::path dshBin = runtimeRoot / L"node_modules" / L"@deepseek-ai" / L"dsh" / L"lib" / L"bin.js";
+    if (!IsRegularFile(node) || !IsRegularFile(dshBin)) return {};
 
-    const std::wstring npxCmd = ResolvePath(L"npx.cmd");
-    if (!npxCmd.empty()) {
-        const fs::path nodeRoot = fs::path(npxCmd).parent_path();
-        if (node.empty()) {
-            const fs::path siblingNode = nodeRoot / L"node.exe";
-            if (IsRegularFile(siblingNode)) node = siblingNode.wstring();
-        }
-        const fs::path npxCli = nodeRoot / L"node_modules" / L"npm" / L"bin" / L"npx-cli.js";
-        if (!node.empty() && IsRegularFile(npxCli)) {
-            return {node, BuildDirectNpxCommand(node, npxCli.wstring()), L"official npx @deepseek-ai/dsh"};
-        }
-    }
-
-    return {};
+    return {node.wstring(), BuildDirectDshCommand(node.wstring(), dshBin.wstring()),
+            L"repository-vendored official DeepSeek Harness"};
 }
 
 std::string WideToUtf8(const std::wstring& value) {
@@ -257,7 +230,7 @@ bool HarnessProcessManager::Start() {
 
     const LaunchSpec launch = ResolveLaunchSpec();
     if (!launch.Valid()) {
-        impl_->lastError = L"未找到可用的官方 Node.js/npm npx 运行入口。请重新运行 TuringDesk 一键部署以修复 Node.js。";
+        impl_->lastError = L"TuringDesk ARM64 RuntimeBundle 不完整：缺少 Runtime\\Node\\node.exe 或 Runtime\\Node\\node_modules\\@deepseek-ai\\dsh\\lib\\bin.js。请重新运行 DEPLOY-NATIVE-ARM64.cmd。不会回退到系统 Node/npm。";
         return false;
     }
 
@@ -299,6 +272,7 @@ bool HarnessProcessManager::Start() {
     WriteLogLine(logHandle, L"[TuringDesk] mode: " + launch.mode);
     WriteLogLine(logHandle, L"[TuringDesk] application: " + launch.application);
     WriteLogLine(logHandle, L"[TuringDesk] command: " + launch.commandLine);
+    WriteLogLine(logHandle, L"[TuringDesk] network bootstrap: disabled; using repository RuntimeBundle");
     WriteLogLine(logHandle, L"[TuringDesk] waiting for upstream stdout/stderr...");
     FlushFileBuffers(logHandle);
 
@@ -435,14 +409,12 @@ std::wstring HarnessProcessManager::LogPath() {
 std::wstring HarnessProcessManager::BuildLaunchCommand() {
     const LaunchSpec resolved = ResolveLaunchSpec();
     if (resolved.Valid()) return resolved.commandLine;
-    return L"node.exe --dns-result-order=ipv4first npx-cli.js --yes --registry=https://registry.npmjs.org/ --prefer-offline --fetch-retries=4 --fetch-timeout=60000 --no-audit --no-fund --loglevel=http --timing @deepseek-ai/dsh web --host 127.0.0.1 --port 3080";
+    return L"<TuringDesk>\\Runtime\\Node\\node.exe <TuringDesk>\\Runtime\\Node\\node_modules\\@deepseek-ai\\dsh\\lib\\bin.js web --host 127.0.0.1 --port 3080";
 }
 
 bool HarnessProcessManager::SelfTest() {
-    const std::wstring sampleNode = L"C:\\Program Files\\nodejs\\node.exe";
-    const std::wstring sampleNpx = L"C:\\Program Files\\nodejs\\node_modules\\npm\\bin\\npx-cli.js";
-    const std::wstring sampleDsh = L"C:\\Users\\test\\AppData\\Roaming\\npm\\node_modules\\@deepseek-ai\\dsh\\lib\\bin.js";
-    const std::wstring npxCommand = BuildDirectNpxCommand(sampleNode, sampleNpx);
+    const std::wstring sampleNode = L"C:\\TuringDesk\\Runtime\\Node\\node.exe";
+    const std::wstring sampleDsh = L"C:\\TuringDesk\\Runtime\\Node\\node_modules\\@deepseek-ai\\dsh\\lib\\bin.js";
     const std::wstring dshCommand = BuildDirectDshCommand(sampleNode, sampleDsh);
 
     const auto bindsOnlyLoopback = [](const std::wstring& command) {
@@ -453,17 +425,12 @@ bool HarnessProcessManager::SelfTest() {
     };
 
     return DefaultUrl() == L"http://localhost:3080" &&
-           npxCommand.find(L"npx-cli.js") != std::wstring::npos &&
-           npxCommand.find(kHarnessPackage) != std::wstring::npos &&
-           npxCommand.find(L"--dns-result-order=ipv4first") != std::wstring::npos &&
-           npxCommand.find(L"--registry=https://registry.npmjs.org/") != std::wstring::npos &&
-           npxCommand.find(L"--prefer-offline") != std::wstring::npos &&
-           npxCommand.find(L"--loglevel=http") != std::wstring::npos &&
-           npxCommand.find(L"--timing") != std::wstring::npos &&
-           npxCommand.find(L"cmd.exe") == std::wstring::npos &&
-           bindsOnlyLoopback(npxCommand) &&
+           dshCommand.find(L"Runtime\\Node\\node.exe") != std::wstring::npos &&
            dshCommand.find(L"@deepseek-ai\\dsh\\lib\\bin.js") != std::wstring::npos &&
+           dshCommand.find(L"npx") == std::wstring::npos &&
+           dshCommand.find(L"registry.npmjs.org") == std::wstring::npos &&
            bindsOnlyLoopback(dshCommand) &&
+           BuildLaunchCommand().find(L"npx") == std::wstring::npos &&
            std::string_view(kHarnessBootMarker) == "window.__DSH_BOOT__" &&
            !LogPath().empty();
 }
