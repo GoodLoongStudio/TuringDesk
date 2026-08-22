@@ -14,6 +14,7 @@ enum class ResolvedWallpaperKind {
     Scene,
     Image,
     Video,
+    Web,
 };
 
 struct GlobalWallpaperDescriptor {
@@ -41,6 +42,7 @@ std::vector<ResolvedMonitorWallpaper> ResolveIndependentWallpapers(
     const GlobalWallpaperDescriptor& globalFallback);
 
 bool IndependentLayoutHasVideo(const std::vector<ResolvedMonitorWallpaper>& resolved) noexcept;
+bool IndependentLayoutHasWeb(const std::vector<ResolvedMonitorWallpaper>& resolved) noexcept;
 bool SelfTestIndependentWallpaperResolution();
 
 } // namespace turingdesk::wallpaper
