@@ -63,6 +63,32 @@ const wchar_t* KindLabel(ResultKind kind) {
     return L"";
 }
 
+HICON ResolveShellIcon(const SearchResult& result) {
+    if (!IsLaunchable(result.kind) || result.target.empty()) return nullptr;
+
+    SHFILEINFOW info{};
+    constexpr UINT flags = SHGFI_ICON | SHGFI_SMALLICON;
+    if (SHGetFileInfoW(result.target.c_str(), 0, &info, sizeof(info), flags) != 0 && info.hIcon)
+        return info.hIcon;
+
+    const DWORD attributes = result.kind == ResultKind::Folder
+        ? FILE_ATTRIBUTE_DIRECTORY
+        : FILE_ATTRIBUTE_NORMAL;
+    info = {};
+    if (SHGetFileInfoW(result.target.c_str(), attributes, &info, sizeof(info),
+                       flags | SHGFI_USEFILEATTRIBUTES) != 0 && info.hIcon)
+        return info.hIcon;
+    return nullptr;
+}
+
+bool ShellIconSelfTest() {
+    SearchResult synthetic{ResultKind::File, L"Shell icon self-test", L"", L"turingdesk-self-test.txt", 0};
+    HICON icon = ResolveShellIcon(synthetic);
+    if (!icon) return false;
+    DestroyIcon(icon);
+    return true;
+}
+
 std::wstring ReadText(HWND control) {
     const int len = GetWindowTextLengthW(control);
     std::wstring value(static_cast<std::size_t>(len) + 1, L'\0');
@@ -257,7 +283,7 @@ bool SearchWindow::SelfTest() {
     std::wstring reply;
     bool secret = false;
     const bool local = l3_.TryHandleLocal(L"/time", reply, secret);
-    return apps_.Count() >= 5 && files_.SelfTest() && local && !reply.empty() && !secret;
+    return apps_.Count() >= 5 && files_.SelfTest() && local && !reply.empty() && !secret && ShellIconSelfTest();
 }
 
 void SearchWindow::ApplyWindows11Style() {
@@ -635,14 +661,15 @@ void SearchWindow::Draw() {
             if (static_cast<int>(i) == selected_) {
                 renderTarget_->FillRoundedRectangle(D2D1::RoundedRect(D2D1::RectF(12, y - 2, width - 12, y + rowHeight - 4), 8, 8), selectionBrush_.Get());
             }
+            const float textLeft = IsLaunchable(result.kind) ? 66.0f : 22.0f;
             std::wstring title = result.title; if (title.size() > 100) title.resize(100);
             renderTarget_->DrawText(title.c_str(), static_cast<UINT32>(title.size()), titleFormat_.Get(),
-                                    D2D1::RectF(22, y + 4, width - 28, y + 28), textBrush_.Get(), D2D1_DRAW_TEXT_OPTIONS_CLIP);
+                                    D2D1::RectF(textLeft, y + 4, width - 28, y + 28), textBrush_.Get(), D2D1_DRAW_TEXT_OPTIONS_CLIP);
             std::wstring subtitle = KindLabel(result.kind);
             if (!result.subtitle.empty()) subtitle += L"  ·  " + result.subtitle;
             if (subtitle.size() > 150) subtitle.resize(150);
             renderTarget_->DrawText(subtitle.c_str(), static_cast<UINT32>(subtitle.size()), subtitleFormat_.Get(),
-                                    D2D1::RectF(22, y + 31, width - 28, y + rowHeight), secondaryBrush_.Get(), D2D1_DRAW_TEXT_OPTIONS_CLIP);
+                                    D2D1::RectF(textLeft, y + 31, width - 28, y + rowHeight), secondaryBrush_.Get(), D2D1_DRAW_TEXT_OPTIONS_CLIP);
             y += rowHeight;
             if (y > renderTarget_->GetSize().height - 28) break;
         }
@@ -651,6 +678,24 @@ void SearchWindow::Draw() {
     const HRESULT hr = renderTarget_->EndDraw();
     if (hr == D2DERR_RECREATE_TARGET) {
         renderTarget_.Reset(); textBrush_.Reset(); secondaryBrush_.Reset(); selectionBrush_.Reset(); borderBrush_.Reset(); accentBrush_.Reset();
+    } else if (SUCCEEDED(hr) && expanded_) {
+        HDC dc = GetDC(hwnd_);
+        if (dc) {
+            float iconY = 72.0f;
+            for (const auto& result : results_) {
+                const float rowHeight = result.kind == ResultKind::Status ? 66.0f : 56.0f;
+                if (IsLaunchable(result.kind)) {
+                    if (HICON icon = ResolveShellIcon(result)) {
+                        DrawIconEx(dc, 22, static_cast<int>(iconY + 10.0f), icon,
+                                   32, 32, 0, nullptr, DI_NORMAL);
+                        DestroyIcon(icon);
+                    }
+                }
+                iconY += rowHeight;
+                if (iconY > renderTarget_->GetSize().height - 28) break;
+            }
+            ReleaseDC(hwnd_, dc);
+        }
     }
 }
 
