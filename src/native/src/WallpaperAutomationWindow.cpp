@@ -290,9 +290,9 @@ struct WallpaperAutomationWindow::Impl {
                 }
             }
         }
-        if (intervalCombo_) SendMessageW(intervalCombo, CB_SETCURSEL, intervalIndex, 0);
-        if (orderCombo_) SendMessageW(orderCombo, CB_SETCURSEL,
-                                      playlist && playlist->order == PlaylistOrder::Random ? 1 : 0, 0);
+        if (intervalCombo) SendMessageW(intervalCombo, CB_SETCURSEL, intervalIndex, 0);
+        if (orderCombo) SendMessageW(orderCombo, CB_SETCURSEL,
+                                     playlist && playlist->order == PlaylistOrder::Random ? 1 : 0, 0);
     }
 
     void AddPlaylistEntry() {
@@ -363,7 +363,7 @@ struct WallpaperAutomationWindow::Impl {
             return;
         }
         applyDecision(decision);
-        Refresh();
+        RefreshAll();
         SetStatus(L"已切换到 Playlist 下一项。");
     }
 
