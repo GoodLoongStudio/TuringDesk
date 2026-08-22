@@ -31,7 +31,8 @@ jobs:
           $ProgressPreference = 'SilentlyContinue'
           git config core.longpaths true
 
-          $lock = Get-Content 'runtime/arm64/runtime-lock.json' -Raw | ConvertFrom-Json
+          $lockPath = 'runtime/arm64/runtime-lock.json'
+          $lock = Get-Content $lockPath -Raw | ConvertFrom-Json
           if ($lock.architecture -ne 'arm64') { throw 'runtime lock is not ARM64' }
 
           $root = (Resolve-Path '.').Path
@@ -50,6 +51,8 @@ jobs:
           }
 
           try {
+            $lockHash = Sha256 $lockPath
+
             # Portable official Node.js ARM64. Keep the original archive in the repo;
             # deployment extracts it locally and never installs system Node.
             $nodeDir = Join-Path $runtime 'node'
@@ -142,6 +145,7 @@ jobs:
               schema = 1
               architecture = 'arm64'
               generatedUtc = [DateTime]::UtcNow.ToString('o')
+              lockSha256 = $lockHash
               node = [ordered]@{ version = [string]$lock.node.version; archive = "node/$nodeArchiveName"; sha256 = Sha256 $nodeArchive }
               deepseekHarness = [ordered]@{ version = $harnessVersion; archive = "harness/$(Split-Path $harnessZip -Leaf)"; sha256 = Sha256 $harnessZip }
               everything = [ordered]@{ version = [string]$lock.everything.version; archive = "everything/$everythingArchiveName"; sha256 = Sha256 $everythingArchive }
@@ -174,3 +178,36 @@ jobs:
             Start-Sleep -Seconds 2
           }
           throw 'Unable to push vendored ARM64 runtime to main'
+
+  report:
+    if: always()
+    needs: [vendor]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ci-status
+      - name: Write RuntimeBundle vendoring status
+        shell: bash
+        env:
+          VENDOR_RESULT: ${{ needs.vendor.result }}
+        run: |
+          mkdir -p ci
+          cat > "ci/runtime-vendor-${GITHUB_SHA}.json" <<EOF
+          {
+            "sha": "${GITHUB_SHA}",
+            "mode": "runtime-vendor-arm64",
+            "result": "${VENDOR_RESULT}",
+            "run_id": "${GITHUB_RUN_ID}"
+          }
+          EOF
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "ci/runtime-vendor-${GITHUB_SHA}.json"
+          git commit -m "ci: report ARM64 runtime vendoring ${GITHUB_SHA}" || exit 0
+          for i in 1 2 3; do
+            git pull --rebase origin ci-status || true
+            if git push origin HEAD:ci-status; then exit 0; fi
+            sleep 2
+          done
+          exit 1
