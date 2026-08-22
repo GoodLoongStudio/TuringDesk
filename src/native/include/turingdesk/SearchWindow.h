@@ -1,6 +1,6 @@
 #pragma once
 #include "turingdesk/AppSearch.h"
-#include "turingdesk/EverythingSearch.h"
+#include "turingdesk/GozSearch.h"
 #include "turingdesk/L3Agent.h"
 #include "turingdesk/SearchTypes.h"
 #include <windows.h>
@@ -59,7 +59,7 @@ private:
     HWND wallpaperButton_{};
     WNDPROC oldEditProc_{};
     AppSearch apps_;
-    EverythingSearch files_;
+    GozSearch files_;
     L3Agent l3_;
     std::vector<SearchResult> appResults_;
     std::vector<SearchResult> fileResults_;
