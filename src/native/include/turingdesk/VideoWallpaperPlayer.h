@@ -16,6 +16,7 @@ public:
     bool Start(HWND targetWindow, const std::wstring& path);
     void Stop();
     void Tick();
+    void UpdateVideo();
     void SetPaused(bool paused);
     bool Active() const;
     HRESULT LastError() const;
