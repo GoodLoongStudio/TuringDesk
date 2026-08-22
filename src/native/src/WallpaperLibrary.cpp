@@ -282,7 +282,7 @@ std::optional<WallpaperLibraryItem> WallpaperLibrary::ImportFile(
         const fs::path destination = MediaDirectory() / (item.id + normalizedSource.extension().wstring());
         fs::copy_file(normalizedSource, destination, fs::copy_options::overwrite_existing, ec);
         if (ec) {
-            SetError(error, L"复制壁纸到托管库失败：" + ec.message().c_str());
+            SetError(error, L"复制壁纸到托管库失败：" + destination.wstring());
             return std::nullopt;
         }
         item.source = destination;
@@ -446,10 +446,11 @@ const wchar_t* WallpaperLibrary::KindKey(LibraryWallpaperKind kind) noexcept {
 }
 
 LibraryWallpaperKind WallpaperLibrary::ParseKind(std::wstring_view value) noexcept {
-    if (_wcsicmp(std::wstring(value).c_str(), L"image") == 0) return LibraryWallpaperKind::Image;
-    if (_wcsicmp(std::wstring(value).c_str(), L"video") == 0) return LibraryWallpaperKind::Video;
-    if (_wcsicmp(std::wstring(value).c_str(), L"web") == 0) return LibraryWallpaperKind::Web;
-    if (_wcsicmp(std::wstring(value).c_str(), L"scene") == 0) return LibraryWallpaperKind::Scene;
+    const std::wstring normalized = Lower(std::wstring(value));
+    if (normalized == L"image") return LibraryWallpaperKind::Image;
+    if (normalized == L"video") return LibraryWallpaperKind::Video;
+    if (normalized == L"web") return LibraryWallpaperKind::Web;
+    if (normalized == L"scene") return LibraryWallpaperKind::Scene;
     return LibraryWallpaperKind::Unknown;
 }
 
@@ -485,8 +486,9 @@ bool WallpaperLibrary::GenerateThumbnail(WallpaperLibraryItem& item) {
 }
 
 std::optional<std::size_t> WallpaperLibrary::FindIndex(std::wstring_view id) const {
+    const std::wstring needle(id);
     for (std::size_t i = 0; i < items_.size(); ++i) {
-        if (_wcsicmp(items_[i].id.c_str(), std::wstring(id).c_str()) == 0) return i;
+        if (_wcsicmp(items_[i].id.c_str(), needle.c_str()) == 0) return i;
     }
     return std::nullopt;
 }
@@ -505,10 +507,10 @@ bool WallpaperLibrary::SelfTest() {
     fs::create_directories(root, ec);
     if (ec) return false;
 
-    const fs::path sample = root / L"sample.mp4";
+    const fs::path sample = root / L"sample.html";
     {
         std::ofstream output(sample, std::ios::binary);
-        output << "TuringDesk wallpaper library self-test";
+        output << "<!doctype html><title>TuringDesk wallpaper library self-test</title>";
     }
 
     WallpaperLibrary library(root / L"Library");
@@ -517,6 +519,7 @@ bool WallpaperLibrary::SelfTest() {
     auto imported = library.ImportFile(sample, {}, &error);
     ok = ok && imported.has_value();
     if (imported) {
+        ok = ok && imported->kind == LibraryWallpaperKind::Web;
         ok = ok && library.SetFavorite(imported->id, true, &error);
         ok = ok && library.MarkUsed(imported->id, &error);
         ok = ok && !library.Search(L"sample").empty();
