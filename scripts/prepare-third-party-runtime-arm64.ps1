@@ -20,10 +20,79 @@ New-Item -ItemType Directory -Force -Path $DeployDir | Out-Null
 
 function Step([string]$Text) { Write-Host "`n==> $Text" -ForegroundColor Cyan }
 
+function Test-PathInsideRoot([string]$Candidate, [string]$Root) {
+    if ([string]::IsNullOrWhiteSpace($Candidate) -or [string]::IsNullOrWhiteSpace($Root)) { return $false }
+    try {
+        $candidateFull = [System.IO.Path]::GetFullPath($Candidate).TrimEnd('\')
+        $rootFull = [System.IO.Path]::GetFullPath($Root).TrimEnd('\')
+        if ($candidateFull.Equals($rootFull, [System.StringComparison]::OrdinalIgnoreCase)) { return $true }
+        return $candidateFull.StartsWith($rootFull + "\", [System.StringComparison]::OrdinalIgnoreCase)
+    }
+    catch { return $false }
+}
+
+function Stop-LegacyPrivateHarnessProcesses {
+    $legacyHarnessRoot = Join-Path $DeployDir "HarnessRuntime"
+    $legacyNodeCacheRoot = Join-Path $RuntimeCacheRoot "Node"
+    $legacyRoots = @($legacyHarnessRoot, $legacyNodeCacheRoot)
+
+    # Stop the old TuringDesk Harness shell first. Older builds may have left a
+    # child Node process alive, so this is followed by path-scoped Node cleanup.
+    $expectedHarness = [System.IO.Path]::GetFullPath((Join-Path $DeployDir "TuringDeskHarness.exe"))
+    foreach ($process in @(Get-Process -Name "TuringDeskHarness" -ErrorAction SilentlyContinue)) {
+        try {
+            if ($process.Path -and ([System.IO.Path]::GetFullPath($process.Path) -eq $expectedHarness)) {
+                Write-Host "Stopping legacy TuringDeskHarness PID $($process.Id)" -ForegroundColor DarkGray
+                & taskkill.exe /PID $process.Id /T /F 2>$null | Out-Null
+            }
+        }
+        catch { }
+    }
+
+    # Only terminate node.exe instances whose executable itself lives inside a
+    # TuringDesk-owned legacy private runtime. Never terminate system Node or a
+    # Node executable owned by another project.
+    $nodeProcesses = @()
+    try {
+        $nodeProcesses = @(Get-CimInstance Win32_Process -Filter "Name='node.exe'" -ErrorAction Stop)
+    }
+    catch {
+        foreach ($process in @(Get-Process -Name "node" -ErrorAction SilentlyContinue)) {
+            try {
+                $nodeProcesses += [pscustomobject]@{ ProcessId = $process.Id; ExecutablePath = $process.Path }
+            }
+            catch { }
+        }
+    }
+
+    foreach ($process in $nodeProcesses) {
+        $exePath = [string]$process.ExecutablePath
+        if ([string]::IsNullOrWhiteSpace($exePath)) { continue }
+        $ownedByLegacyRuntime = $false
+        foreach ($root in $legacyRoots) {
+            if (Test-PathInsideRoot -Candidate $exePath -Root $root) {
+                $ownedByLegacyRuntime = $true
+                break
+            }
+        }
+        if (-not $ownedByLegacyRuntime) { continue }
+
+        try {
+            Write-Host "Stopping legacy private Node PID $($process.ProcessId): $exePath" -ForegroundColor Yellow
+            & taskkill.exe /PID $process.ProcessId /T /F 2>$null | Out-Null
+        }
+        catch { }
+    }
+
+    # Give Windows a moment to release executable image mappings and inherited
+    # handles before deleting the old runtime tree.
+    Start-Sleep -Milliseconds 1200
+}
+
 function Remove-TuringDeskPathSafely([string]$Path) {
     if (-not (Test-Path $Path)) { return }
     $lastError = $null
-    for ($i = 1; $i -le 10; $i++) {
+    for ($i = 1; $i -le 30; $i++) {
         try {
             Remove-Item $Path -Recurse -Force -ErrorAction Stop
             Write-Host "Removed legacy TuringDesk path: $Path" -ForegroundColor DarkGray
@@ -31,7 +100,12 @@ function Remove-TuringDeskPathSafely([string]$Path) {
         }
         catch {
             $lastError = $_
-            Start-Sleep -Milliseconds 300
+            if (($i % 5) -eq 0) {
+                # A late-exiting child from the abandoned bootstrap may still hold
+                # node.exe briefly. Re-scan only TuringDesk-owned private runtimes.
+                Stop-LegacyPrivateHarnessProcesses
+            }
+            Start-Sleep -Milliseconds 500
         }
     }
     throw "Unable to remove obsolete TuringDesk Harness data at $Path : $($lastError.Exception.Message)"
@@ -39,20 +113,7 @@ function Remove-TuringDeskPathSafely([string]$Path) {
 
 function Remove-LegacyPrivateHarnessEnvironment {
     Step "Cleaning obsolete private Harness environment"
-
-    # Stop only the TuringDesk Harness shell from this development deployment.
-    # Its Job Object owns the old child process tree, so closing it releases files
-    # under NativeTest\HarnessRuntime without killing unrelated system Node processes.
-    $expectedHarness = [System.IO.Path]::GetFullPath((Join-Path $DeployDir "TuringDeskHarness.exe"))
-    foreach ($process in @(Get-Process -Name "TuringDeskHarness" -ErrorAction SilentlyContinue)) {
-        try {
-            if ($process.Path -and ([System.IO.Path]::GetFullPath($process.Path) -eq $expectedHarness)) {
-                Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
-                $process.WaitForExit(3000) | Out-Null
-            }
-        }
-        catch { }
-    }
+    Stop-LegacyPrivateHarnessProcesses
 
     # These are only directories/files created by TuringDesk's abandoned private
     # Harness bootstrap. Never touch system Node, global npm cache, user profiles,
