@@ -46,6 +46,7 @@ add_executable(TuringDesk WIN32
 )
 
 add_executable(TuringDeskWallpaper WIN32
+    src/WallpaperEntry.cpp
     src/WallpaperEngine.cpp
     src/WallpaperMonitorLayout.cpp
     src/WallpaperMonitorAssignments.cpp
@@ -63,6 +64,13 @@ add_executable(TuringDeskWallpaper WIN32
     src/WallpaperLibraryWindow.cpp
     src/VideoWallpaperPlayer.cpp
     src/VideoWallpaperSet.cpp
+)
+
+# Keep WallpaperEngine.cpp focused on the historical native engine. WallpaperEntry.cpp
+# owns the real GUI entry point and dispatches --web-wallpaper-host before the main
+# singleton mutex is created.
+set_source_files_properties(src/WallpaperEngine.cpp PROPERTIES
+    COMPILE_DEFINITIONS "wWinMain=TuringDeskWallpaperMain"
 )
 
 add_executable(TuringDeskHarness WIN32
