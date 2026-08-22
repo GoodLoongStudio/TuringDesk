@@ -45,6 +45,10 @@ public:
         const std::filesystem::path& source,
         const WallpaperImportOptions& options = {},
         std::wstring* error = nullptr);
+    std::optional<WallpaperLibraryItem> ImportWebUrl(
+        std::wstring url,
+        std::wstring title = {},
+        std::wstring* error = nullptr);
 
     bool UpsertScene(std::wstring id, std::wstring title, std::wstring* error = nullptr);
     bool Remove(std::wstring_view id, bool deleteManagedCopy, std::wstring* error = nullptr);
@@ -64,6 +68,7 @@ public:
     static LibraryWallpaperKind InferKind(const std::filesystem::path& path) noexcept;
     static const wchar_t* KindKey(LibraryWallpaperKind kind) noexcept;
     static LibraryWallpaperKind ParseKind(std::wstring_view value) noexcept;
+    static bool IsTrustedWebUrl(std::wstring_view value) noexcept;
     static bool SelfTest();
 
 private:
