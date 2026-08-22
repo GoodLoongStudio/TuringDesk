@@ -72,7 +72,7 @@ jobs:
           Expand-Archive $nodeZip -DestinationPath $nodeExtract -Force
           $nodeSource = Join-Path $nodeExtract "node-v$env:NODE_VERSION-win-x64"
           Copy-Item (Join-Path $nodeSource "*") $nodeTarget -Recurse -Force
-      - name: Verify packaged x64 runtime
+      - name: Verify packaged x64 runtime and boot Harness
         shell: pwsh
         run: |
           $package = "build/package"
@@ -99,6 +99,12 @@ jobs:
           if ($wallpaper.ExitCode -ne 0) { throw "Packaged wallpaper self-test failed: $($wallpaper.ExitCode)" }
           $harness = Start-Process -FilePath (Join-Path $package "TuringDeskHarness.exe") -ArgumentList "--self-test" -Wait -PassThru
           if ($harness.ExitCode -ne 0) { throw "Packaged Harness host self-test failed: $($harness.ExitCode)" }
+          $smoke = Start-Process -FilePath (Join-Path $package "TuringDeskHarness.exe") -ArgumentList "--harness-smoke-test" -Wait -PassThru
+          if ($smoke.ExitCode -ne 0) {
+            $log = Join-Path $env:LOCALAPPDATA "TuringDesk\Logs\harness.log"
+            if (Test-Path $log) { Write-Host "--- Harness log ---"; Get-Content $log -Tail 300 }
+            throw "Packaged Harness smoke test failed: $($smoke.ExitCode)"
+          }
       - uses: actions/upload-artifact@v4
         with:
           name: TuringDesk-Native-Search-x64
@@ -158,7 +164,7 @@ jobs:
           Expand-Archive $nodeZip -DestinationPath $nodeExtract -Force
           $nodeSource = Join-Path $nodeExtract "node-v$env:NODE_VERSION-win-arm64"
           Copy-Item (Join-Path $nodeSource "*") $nodeTarget -Recurse -Force
-      - name: Verify packaged ARM64 runtime
+      - name: Verify packaged ARM64 runtime and boot Harness
         shell: pwsh
         run: |
           $package = "build/package"
@@ -185,6 +191,12 @@ jobs:
           if ($wallpaper.ExitCode -ne 0) { throw "Packaged wallpaper self-test failed: $($wallpaper.ExitCode)" }
           $harness = Start-Process -FilePath (Join-Path $package "TuringDeskHarness.exe") -ArgumentList "--self-test" -Wait -PassThru
           if ($harness.ExitCode -ne 0) { throw "Packaged Harness host self-test failed: $($harness.ExitCode)" }
+          $smoke = Start-Process -FilePath (Join-Path $package "TuringDeskHarness.exe") -ArgumentList "--harness-smoke-test" -Wait -PassThru
+          if ($smoke.ExitCode -ne 0) {
+            $log = Join-Path $env:LOCALAPPDATA "TuringDesk\Logs\harness.log"
+            if (Test-Path $log) { Write-Host "--- Harness log ---"; Get-Content $log -Tail 300 }
+            throw "Packaged Harness smoke test failed: $($smoke.ExitCode)"
+          }
       - uses: actions/upload-artifact@v4
         with:
           name: TuringDesk-Native-Search-ARM64
