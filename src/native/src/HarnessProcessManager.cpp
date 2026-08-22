@@ -48,6 +48,13 @@ std::wstring UserHomeDirectory() {
     return {};
 }
 
+bool NpxAvailable() {
+    wchar_t path[32768]{};
+    const DWORD length = SearchPathW(nullptr, L"npx.cmd", nullptr,
+                                     static_cast<DWORD>(std::size(path)), path, nullptr);
+    return length > 0 && length < std::size(path);
+}
+
 bool ProbeHarnessHttp() {
     HINTERNET session = WinHttpOpen(L"TuringDesk/0.1",
                                     WINHTTP_ACCESS_TYPE_NO_PROXY,
@@ -121,9 +128,14 @@ HarnessProcessManager::~HarnessProcessManager() {
 }
 
 bool HarnessProcessManager::Start() {
-    if (Running()) return true;
+    if (Running() || ServiceReady()) return true;
     Stop();
     impl_->lastError.clear();
+
+    if (!NpxAvailable()) {
+        impl_->lastError = L"未找到 npx。DeepSeek Harness 当前需要 Node.js；请安装 Node.js 后重试。";
+        return false;
+    }
 
     HANDLE job = CreateJobObjectW(nullptr, nullptr);
     if (!job) {
@@ -195,7 +207,15 @@ bool HarnessProcessManager::Running() const {
     return GetExitCodeProcess(impl_->process, &exitCode) && exitCode == STILL_ACTIVE;
 }
 
+bool HarnessProcessManager::ServiceReady() const {
+    return ProbeHarnessHttp();
+}
+
 bool HarnessProcessManager::WaitUntilReady(DWORD timeoutMs) {
+    if (ServiceReady()) {
+        impl_->lastError.clear();
+        return true;
+    }
     if (!Running()) {
         if (impl_->lastError.empty()) impl_->lastError = L"Harness 未运行";
         return false;
@@ -203,7 +223,7 @@ bool HarnessProcessManager::WaitUntilReady(DWORD timeoutMs) {
 
     const ULONGLONG start = GetTickCount64();
     do {
-        if (ProbeHarnessHttp()) {
+        if (ServiceReady()) {
             impl_->lastError.clear();
             return true;
         }
