@@ -239,10 +239,10 @@ void SearchWindow::ApplyWindows11Style() {
             GetProcAddress(user32, "SetWindowCompositionAttribute"));
         if (setComposition) {
             TdAccentPolicy policy{};
-            policy.state = 4; // ACCENT_ENABLE_ACRYLICBLURBEHIND
+            policy.state = 4;
             policy.gradientColor = 0xB823201E;
             TdCompositionData data{};
-            data.attribute = 19; // WCA_ACCENT_POLICY
+            data.attribute = 19;
             data.data = &policy;
             data.size = sizeof(policy);
             setComposition(hwnd_, &data);
@@ -295,8 +295,8 @@ void SearchWindow::SavePosition() {
     if (!hwnd_) return;
     RECT rect{};
     if (!GetWindowRect(hwnd_, &rect)) return;
-    savedX_ = rect.left;
-    savedY_ = rect.top;
+    savedX_ = static_cast<int>(rect.left);
+    savedY_ = static_cast<int>(rect.top);
     positionLoaded_ = true;
 
     const fs::path ini = SearchIniPath();
@@ -325,12 +325,17 @@ void SearchWindow::PositionWindow() {
     MONITORINFO info{sizeof(info)};
     if (!monitor || !GetMonitorInfoW(monitor, &info)) return;
 
+    const int workLeft = static_cast<int>(info.rcWork.left);
+    const int workTop = static_cast<int>(info.rcWork.top);
+    const int workRight = static_cast<int>(info.rcWork.right);
+    const int workBottom = static_cast<int>(info.rcWork.bottom);
+
     if (positionLoaded_) {
-        x = std::clamp(savedX_, info.rcWork.left, std::max(info.rcWork.left, info.rcWork.right - kWindowWidth));
-        y = std::clamp(savedY_, info.rcWork.top, std::max(info.rcWork.top, info.rcWork.bottom - kCollapsedHeight));
+        x = std::clamp(savedX_, workLeft, std::max(workLeft, workRight - kWindowWidth));
+        y = std::clamp(savedY_, workTop, std::max(workTop, workBottom - kCollapsedHeight));
     } else {
-        x = info.rcWork.left + (info.rcWork.right - info.rcWork.left - kWindowWidth) / 2;
-        y = info.rcWork.top + 18;
+        x = workLeft + (workRight - workLeft - kWindowWidth) / 2;
+        y = workTop + 18;
         savedX_ = x;
         savedY_ = y;
     }
@@ -466,7 +471,7 @@ LRESULT SearchWindow::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) 
         if (hit != HTCLIENT) return hit;
         POINT point{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
         ScreenToClient(hwnd_, &point);
-        if (point.y >= 58 && point.y < kCollapsedHeight) return HTCAPTION;
+        if (!expanded_ && point.y >= 58 && point.y < kCollapsedHeight) return HTCAPTION;
         return HTCLIENT;
     }
     case WM_EXITSIZEMOVE:
