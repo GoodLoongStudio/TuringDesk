@@ -46,6 +46,18 @@ function Show-NewLogLines {
     $Shown.Value = $lines.Count
 }
 
+function Get-NpmHeapSizeMb {
+    try {
+        $totalBytes = (Get-CimInstance Win32_ComputerSystem -ErrorAction Stop).TotalPhysicalMemory
+        $totalMb = [int][Math]::Floor($totalBytes / 1MB)
+        $heapMb = [int][Math]::Floor($totalMb * 0.50)
+        return [Math]::Max(3072, [Math]::Min(6144, $heapMb))
+    }
+    catch {
+        return 4096
+    }
+}
+
 if (-not $Force -and (Test-Path (Join-Path $NodeTarget "node.exe") -PathType Leaf) -and (Test-DshRuntime)) {
     Write-Host "Harness runtime is already ready: Node $NodeVersion + DSH $DshVersion" -ForegroundColor Green
     return
@@ -102,25 +114,35 @@ New-Item -ItemType Directory -Force -Path $NodeTarget | Out-Null
 Copy-Item (Join-Path $NodeCache "*") $NodeTarget -Recurse -Force
 $NodeExe = Join-Path $NodeTarget "node.exe"
 $NpmCmd = Join-Path $NodeTarget "npm.cmd"
-if (-not (Test-Path $NodeExe -PathType Leaf) -or -not (Test-Path $NpmCmd -PathType Leaf)) { throw "Installed Node runtime is incomplete" }
+$NpmCli = Join-Path $NodeTarget "node_modules\npm\bin\npm-cli.js"
+if (-not (Test-Path $NodeExe -PathType Leaf) -or -not (Test-Path $NpmCmd -PathType Leaf) -or -not (Test-Path $NpmCli -PathType Leaf)) {
+    throw "Installed Node runtime is incomplete"
+}
 Write-Host "Node: $(& $NodeExe --version)" -ForegroundColor Green
 
 if ($Force -or -not (Test-DshRuntime)) {
     Step "Installing DeepSeek Harness $DshVersion locally"
-    Write-Host "First install is large (DSH has many packages), but npm network/cache activity is now shown live." -ForegroundColor Yellow
+    Write-Host "First install is large (DSH has many packages), but npm network/cache activity is shown live." -ForegroundColor Yellow
     if (Test-Path $DshTarget) { Remove-Item $DshTarget -Recurse -Force }
     New-Item -ItemType Directory -Force -Path $DshTarget | Out-Null
 
     $OldPath = $env:PATH
+    $OldNodeOptions = $env:NODE_OPTIONS
+    $NpmHeapMb = Get-NpmHeapSizeMb
     $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
     $StdoutLog = Join-Path $NpmLogRoot "dsh-install-$stamp.out.log"
     $StderrLog = Join-Path $NpmLogRoot "dsh-install-$stamp.err.log"
     try {
         $env:PATH = "$NodeTarget;$OldPath"
+        $baseNodeOptions = if ([string]::IsNullOrWhiteSpace($OldNodeOptions)) { "" } else { ($OldNodeOptions -replace '--max-old-space-size(?:=|\s+)\d+', '').Trim() }
+        $env:NODE_OPTIONS = ("$baseNodeOptions --max-old-space-size=$NpmHeapMb").Trim()
+        Write-Host "npm Node heap: $NpmHeapMb MB (NODE_OPTIONS=$($env:NODE_OPTIONS))" -ForegroundColor Green
+
         & $NpmCmd ping --registry="https://registry.npmjs.org/" --cache "$NpmCache" --loglevel=notice
         if ($LASTEXITCODE -ne 0) { throw "npm registry is not reachable" }
 
         $Arguments = @(
+            $NpmCli,
             "install",
             "--prefix", $DshTarget,
             "--omit=dev",
@@ -144,7 +166,7 @@ if ($Force -or -not (Test-DshRuntime)) {
         Write-Host "npm cache: $NpmCache" -ForegroundColor DarkGray
         Write-Host "npm log:   $StdoutLog" -ForegroundColor DarkGray
         $Started = Get-Date
-        $Process = Start-Process -FilePath $NpmCmd -ArgumentList $Arguments -NoNewWindow -PassThru `
+        $Process = Start-Process -FilePath $NodeExe -ArgumentList $Arguments -NoNewWindow -PassThru `
             -RedirectStandardOutput $StdoutLog -RedirectStandardError $StderrLog
         $shownOut = 0
         $shownErr = 0
@@ -164,18 +186,24 @@ if ($Force -or -not (Test-DshRuntime)) {
                 throw "npm install timed out after 8 minutes. Cached downloads were kept at $NpmCache. Logs: $StdoutLog ; $StderrLog"
             }
         }
+        $Process.WaitForExit()
+        $Process.Refresh()
+        $ExitCode = $Process.ExitCode
         Show-NewLogLines -Path $StdoutLog -Shown ([ref]$shownOut) -Color DarkGray
         Show-NewLogLines -Path $StderrLog -Shown ([ref]$shownErr) -Color Yellow
-        if ($Process.ExitCode -ne 0) {
+        if ($ExitCode -ne 0) {
             Write-Host "`n--- npm stdout tail ---" -ForegroundColor Yellow
             if (Test-Path $StdoutLog) { Get-Content $StdoutLog -Tail 120 | Out-Host }
             Write-Host "`n--- npm stderr tail ---" -ForegroundColor Yellow
             if (Test-Path $StderrLog) { Get-Content $StderrLog -Tail 120 | Out-Host }
-            throw "npm install @deepseek-ai/dsh@$DshVersion failed with exit code $($Process.ExitCode). Logs: $StdoutLog ; $StderrLog"
+            throw "npm install @deepseek-ai/dsh@$DshVersion failed with exit code $ExitCode. Logs: $StdoutLog ; $StderrLog"
         }
         Write-Host ("DeepSeek Harness dependencies installed in {0:n1}s." -f ((Get-Date) - $Started).TotalSeconds) -ForegroundColor Green
     }
-    finally { $env:PATH = $OldPath }
+    finally {
+        $env:PATH = $OldPath
+        $env:NODE_OPTIONS = $OldNodeOptions
+    }
 }
 
 if (-not (Test-DshRuntime)) { throw "DeepSeek Harness runtime installation finished but lib/bin.js or package metadata is missing" }
