@@ -9,6 +9,7 @@ add_executable(TuringDesk WIN32
     src/AppSearch.cpp
     src/EverythingSearch.cpp
     src/L3Agent.cpp
+    src/HarnessProcessManager.cpp
 )
 
 add_executable(TuringDeskWallpaper WIN32
