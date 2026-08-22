@@ -21,6 +21,16 @@ function Step([string]$Text) {
     Write-Host "`n==> $Text" -ForegroundColor Cyan
 }
 
+function Get-PhysicalMemoryMb {
+    try {
+        $bytes = (Get-CimInstance Win32_ComputerSystem -ErrorAction Stop).TotalPhysicalMemory
+        return [int][Math]::Floor($bytes / 1MB)
+    }
+    catch {
+        return 8192
+    }
+}
+
 function Stop-ProcessAtPath([string]$ProcessName, [string]$ExpectedPath) {
     if ([string]::IsNullOrWhiteSpace($ExpectedPath)) { return }
     $Expected = [System.IO.Path]::GetFullPath($ExpectedPath)
@@ -188,6 +198,36 @@ function Download-Artifact([long]$RunId) {
     }
 }
 
+function Install-HarnessRuntimeFromRemotePackage([string]$DestinationDir, [string]$Sha) {
+    Step "Low-memory Harness bootstrap via GitHub ARM64 runner"
+    Write-Host "This PC has limited RAM, so the heavy npm install will run remotely. Only the finished HarnessRuntime is downloaded here." -ForegroundColor Yellow
+
+    $RemoteRunId = [long](Start-And-WaitForRun -Sha $Sha -FullPackage $true)
+    $RemoteDownloaded = Download-Artifact -RunId $RemoteRunId
+    try {
+        if (-not $RemoteDownloaded.HasHarnessRuntime) {
+            throw "Remote full ARM64 package completed but did not contain HarnessRuntime"
+        }
+
+        if (Test-Path $DestinationDir) {
+            Remove-Item $DestinationDir -Recurse -Force -ErrorAction Stop
+        }
+        New-Item -ItemType Directory -Force -Path $DestinationDir | Out-Null
+        Copy-Item (Join-Path $RemoteDownloaded.HarnessRuntime "*") $DestinationDir -Recurse -Force
+
+        if (-not (Test-InstalledHarnessRuntime)) {
+            throw "Remote HarnessRuntime was downloaded but the deployed runtime is incomplete"
+        }
+        Write-Host "Remote Harness runtime installed successfully." -ForegroundColor Green
+        return @{ Ready = $true; Bootstrapped = $true }
+    }
+    finally {
+        if ($RemoteDownloaded -and $RemoteDownloaded.Temp) {
+            Remove-Item $RemoteDownloaded.Temp -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
 function Deploy-HarnessRuntime($Downloaded) {
     $DestinationDir = Join-Path $DeployDir "HarnessRuntime"
     $DestinationNode = Join-Path $DestinationDir "Node\node.exe"
@@ -215,12 +255,18 @@ function Deploy-HarnessRuntime($Downloaded) {
         throw "Full package did not contain HarnessRuntime. Refusing to deploy a broken L4 entry."
     }
 
+    $PhysicalMemoryMb = Get-PhysicalMemoryMb
+    Write-Host ("Detected physical memory: {0:n0} MB" -f $PhysicalMemoryMb) -ForegroundColor DarkGray
+    if ($PhysicalMemoryMb -lt 6144) {
+        return (Install-HarnessRuntimeFromRemotePackage -DestinationDir $DestinationDir -Sha $MainSha)
+    }
+
     if (-not (Test-Path $BootstrapHarnessScript -PathType Leaf)) {
         throw "Local Harness bootstrap script is missing: $BootstrapHarnessScript"
     }
 
     Step "First-run local Harness runtime bootstrap"
-    Write-Host "No GitHub runtime package build is needed. Node + DSH will be installed once on this ARM64 test machine." -ForegroundColor Yellow
+    Write-Host "This PC has enough RAM for the one-time local Node + DSH install." -ForegroundColor Yellow
     & $BootstrapHarnessScript -Destination $DestinationDir
     if ($LASTEXITCODE -ne 0 -or -not (Test-InstalledHarnessRuntime)) {
         throw "Local Harness runtime bootstrap failed"
@@ -341,7 +387,7 @@ if ($LASTEXITCODE -ne 0) {
 Step "Resolving current main commit"
 $MainSha = Get-MainSha
 Write-Host "main: $MainSha" -ForegroundColor DarkGray
-Write-Host ($(if ($Full) { "Deploy mode: FULL release validation" } else { "Deploy mode: QUICK ARM64 validation + local one-time runtime bootstrap" })) -ForegroundColor DarkGray
+Write-Host ($(if ($Full) { "Deploy mode: FULL release validation" } else { "Deploy mode: QUICK ARM64 validation + automatic one-time runtime bootstrap" })) -ForegroundColor DarkGray
 
 $RunId = [long](Resolve-Run -Sha $MainSha)
 $Downloaded = Download-Artifact -RunId $RunId
