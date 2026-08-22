@@ -1,0 +1,134 @@
+name: Apply tdwall Library Migration
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/patch-tdwall-library.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Patch tdwall library integration
+        shell: python
+        run: |
+          from pathlib import Path
+
+          def replace_once(path, old, new):
+              p = Path(path)
+              text = p.read_text(encoding='utf-8')
+              if old not in text:
+                  raise SystemExit(f'anchor missing in {path}: {old[:100]!r}')
+              p.write_text(text.replace(old, new, 1), encoding='utf-8', newline='\n')
+
+          lib = 'src/native/src/WallpaperLibrary.cpp'
+          replace_once(lib,
+              '#include "turingdesk/WallpaperLibrary.h"\n',
+              '#include "turingdesk/WallpaperLibrary.h"\n#include "turingdesk/WallpaperPackage.h"\n')
+          replace_once(lib,
+              '    fs::create_directories(MediaDirectory(), ec);\n    fs::create_directories(ThumbnailDirectory(), ec);\n',
+              '    fs::create_directories(MediaDirectory(), ec);\n    fs::create_directories(PackageDirectory(), ec);\n    fs::create_directories(ThumbnailDirectory(), ec);\n')
+          replace_once(lib,
+              '    std::sort(items_.begin(), items_.end(), [](const WallpaperLibraryItem& a, const WallpaperLibraryItem& b) {\n',
+              '    if (!DiscoverPackages(error)) return false;\n\n    std::sort(items_.begin(), items_.end(), [](const WallpaperLibraryItem& a, const WallpaperLibraryItem& b) {\n')
+          replace_once(lib,
+              'fs::path WallpaperLibrary::MediaDirectory() const {\n    return root_ / L"Media";\n}\n\nfs::path WallpaperLibrary::ThumbnailDirectory() const {\n',
+              'fs::path WallpaperLibrary::MediaDirectory() const {\n    return root_ / L"Media";\n}\n\nfs::path WallpaperLibrary::PackageDirectory() const {\n    return root_ / L"Packages";\n}\n\nfs::path WallpaperLibrary::ThumbnailDirectory() const {\n')
+          discover = r'''bool WallpaperLibrary::DiscoverPackages(std::wstring* error) {
+    std::error_code ec;
+    const fs::path packages = PackageDirectory();
+    fs::create_directories(packages, ec);
+    if (ec) {
+        SetError(error, L"无法创建 .tdwall 包目录：" + packages.wstring());
+        return false;
+    }
+
+    fs::directory_iterator iterator(packages, ec);
+    const fs::directory_iterator end;
+    while (!ec && iterator != end) {
+        const fs::directory_entry entry = *iterator;
+        iterator.increment(ec);
+        std::error_code itemEc;
+        if (!entry.is_directory(itemEc) || itemEc) continue;
+        const fs::path package = entry.path();
+        if (_wcsicmp(package.extension().c_str(), L".tdwall") != 0) continue;
+
+        WallpaperPackageManifest manifest;
+        std::wstring validationError;
+        if (!WallpaperPackage::Validate(package, &manifest, &validationError)) continue;
+
+        LibraryWallpaperKind kind = LibraryWallpaperKind::Unknown;
+        switch (manifest.type) {
+        case WallpaperPackageType::Image: kind = LibraryWallpaperKind::Image; break;
+        case WallpaperPackageType::Video: kind = LibraryWallpaperKind::Video; break;
+        case WallpaperPackageType::Web: kind = LibraryWallpaperKind::Web; break;
+        case WallpaperPackageType::Scene: kind = LibraryWallpaperKind::Scene; break;
+        case WallpaperPackageType::Unknown: break;
+        }
+        if (kind == LibraryWallpaperKind::Unknown) continue;
+
+        const fs::path source = NormalizedAbsolute(package / manifest.entry);
+        if (FindSourceIndex(source)) continue;
+
+        WallpaperLibraryItem item;
+        item.id = MakeId();
+        item.kind = kind;
+        item.title = SanitizeText(manifest.title);
+        item.source = source;
+        item.managedCopy = true;
+        item.importedUnixSeconds = NowUnixSeconds();
+        std::wstring saveError;
+        if (!SaveItem(item, &saveError)) {
+            SetError(error, saveError.empty() ? L"无法登记 .tdwall 壁纸包" : std::move(saveError));
+            return false;
+        }
+        items_.push_back(std::move(item));
+    }
+    if (ec) {
+        SetError(error, L"扫描 .tdwall 包目录失败，error=" + std::to_wstring(ec.value()));
+        return false;
+    }
+    return true;
+}
+
+'''
+          replace_once(lib,
+              'bool WallpaperLibrary::SaveItem(const WallpaperLibraryItem& item, std::wstring* error) {\n',
+              discover + 'bool WallpaperLibrary::SaveItem(const WallpaperLibraryItem& item, std::wstring* error) {\n')
+          replace_once(lib,
+              '    WallpaperLibrary library(root / L"Library");\n    std::wstring error;\n    bool ok = library.Load(&error);\n',
+              '    const fs::path package = root / L"Library" / L"Packages" / L"ai-self-test.tdwall";\n    std::wstring error;\n    bool ok = WallpaperPackage::CreateWeb(package, L"AI Package", "<!doctype html><html><body>AI</body></html>", L"self-test", L"TuringDesk", &error);\n\n    WallpaperLibrary library(root / L"Library");\n    ok = ok && library.Load(&error);\n    ok = ok && !library.Search(L"AI Package").empty();\n')
+
+          tools = 'src/native/src/NativeTools.cpp'
+          replace_once(tools,
+              '    auto root = desktop / L"TuringDesk Wallpapers";\n',
+              '    wchar_t localAppData[32768]{};\n    const DWORD localLength = GetEnvironmentVariableW(L"LOCALAPPDATA", localAppData, static_cast<DWORD>(std::size(localAppData)));\n    if (localLength == 0 || localLength >= std::size(localAppData)) return {false, L"无法定位 TuringDesk 本地壁纸库。"};\n    auto root = fs::path(localAppData) / L"TuringDesk" / L"WallpaperLibrary" / L"Packages";\n')
+          replace_once(tools,
+              '    return {true, L"AI 壁纸包已生成并通过校验：" + package.wstring()};\n',
+              '    return {true, L"AI 壁纸包已生成、通过校验并进入 TuringDesk 壁纸库：" + package.wstring()};\n')
+
+          window = 'src/native/src/WallpaperLibraryWindow.cpp'
+          replace_once(window,
+              '        if (!self) return DefWindowProcW(hwnd, message, wParam, lParam);\n\n        if (message == WM_COMMAND) {\n',
+              '        if (!self) return DefWindowProcW(hwnd, message, wParam, lParam);\n\n        if (message == WM_ACTIVATE && LOWORD(wParam) != WA_INACTIVE && self->library) {\n            std::wstring error;\n            if (self->library->Load(&error)) self->RebuildList();\n            else if (!error.empty()) self->SetStatus(error);\n        }\n\n        if (message == WM_COMMAND) {\n')
+      - name: Commit migration
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/native/src/WallpaperLibrary.cpp src/native/src/NativeTools.cpp src/native/src/WallpaperLibraryWindow.cpp
+          git commit -m "wallpaper: connect AI tdwall packages to library" || exit 0
+          for i in 1 2 3 4 5; do
+            git pull --rebase origin main || true
+            if git push origin HEAD:main; then exit 0; fi
+            sleep 2
+          done
+          exit 1
