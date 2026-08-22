@@ -17,6 +17,7 @@
 #include "turingdesk/WallpaperMonitorLayout.h"
 #include "turingdesk/WallpaperPerformancePolicy.h"
 #include "turingdesk/WallpaperScaling.h"
+#include "turingdesk/WallpaperWebRuntimeCoordinator.h"
 
 #include <algorithm>
 #include <array>
@@ -139,7 +140,7 @@ fs::path ConfigPath() {
 }
 
 bool ValidScene(const std::wstring& scene) {
-    return scene == L"aurora" || scene == L"neon" || scene == L"grid" || scene == L"image" || scene == L"video";
+    return scene == L"aurora" || scene == L"neon" || scene == L"grid" || scene == L"image" || scene == L"video" || scene == L"web";
 }
 
 std::wstring FloatText(float value) {
@@ -661,19 +662,35 @@ private:
             next.video = item.source.wstring();
             return true;
         }
+        if (item.kind == Kind::Web) {
+            next.scene = L"web";
+            next.image = item.source.wstring();
+            return true;
+        }
         return false;
     }
 
     void ApplyLibraryItem(const turingdesk::wallpaper::WallpaperLibraryItem& item, const std::wstring& targetMonitorId) {
         using Kind = turingdesk::wallpaper::LibraryWallpaperKind;
-        if (item.kind == Kind::Web) {
-            libraryError_ = L"Web 壁纸已入库；运行后端将在路线第 9 项启用。";
-            RefreshSettings();
-            return;
-        }
         if (item.kind == Kind::Unknown) return;
 
         std::wstring error;
+        if (item.kind == Kind::Web) {
+            if (!turingdesk::wallpaper::ActivateWebWallpaperItem(item, targetMonitorId, &error)) {
+                libraryError_ = error.empty() ? L"Web 壁纸应用失败" : error;
+                RefreshSettings();
+                return;
+            }
+            config_ = LoadConfig();
+            ApplyConfig(config_, false);
+            error.clear();
+            library_.MarkUsed(item.id, &error);
+            libraryError_ = error;
+            libraryWindow_.Refresh();
+            automationWindow_.Refresh();
+            RefreshSettings();
+            return;
+        }
         if (!targetMonitorId.empty()) {
             const auto* monitor = turingdesk::wallpaper::FindMonitorByStableId(topology_, targetMonitorId);
             const std::wstring friendly = monitor ?
@@ -704,13 +721,14 @@ private:
         if (config_.scene == L"aurora") return std::wstring(L"scene-aurora");
         if (config_.scene == L"neon") return std::wstring(L"scene-neon");
         if (config_.scene == L"grid") return std::wstring(L"scene-grid");
-        const std::wstring source = config_.scene == L"image" ? config_.image :
+        const std::wstring source = (config_.scene == L"image" || config_.scene == L"web") ? config_.image :
                                     config_.scene == L"video" ? config_.video : L"";
         if (source.empty()) return std::nullopt;
         for (const auto& item : library_.Items()) {
             if (item.source.empty()) continue;
             const bool kindMatches = (config_.scene == L"image" && item.kind == turingdesk::wallpaper::LibraryWallpaperKind::Image) ||
-                                     (config_.scene == L"video" && item.kind == turingdesk::wallpaper::LibraryWallpaperKind::Video);
+                                     (config_.scene == L"video" && item.kind == turingdesk::wallpaper::LibraryWallpaperKind::Video) ||
+                                     (config_.scene == L"web" && item.kind == turingdesk::wallpaper::LibraryWallpaperKind::Web);
             if (!kindMatches) continue;
             const std::wstring itemPath = item.source.wstring();
             if (_wcsicmp(itemPath.c_str(), source.c_str()) == 0) return item.id;
@@ -875,6 +893,9 @@ private:
         } else if (config_.scene == L"video" && !config_.video.empty()) {
             descriptor.kind = turingdesk::wallpaper::ResolvedWallpaperKind::Video;
             descriptor.source = config_.video;
+        } else if (config_.scene == L"web" && !config_.image.empty()) {
+            descriptor.kind = turingdesk::wallpaper::ResolvedWallpaperKind::Web;
+            descriptor.source = config_.image;
         } else {
             descriptor.kind = turingdesk::wallpaper::ResolvedWallpaperKind::Scene;
             descriptor.sceneKey = config_.scene == L"neon" ? L"neon" : config_.scene == L"grid" ? L"grid" : L"aurora";
