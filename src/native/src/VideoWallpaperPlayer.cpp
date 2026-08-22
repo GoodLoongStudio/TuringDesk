@@ -13,8 +13,8 @@ namespace {
 
 class PlayerCallback final : public IMFPMediaPlayerCallback {
 public:
-    PlayerCallback(std::atomic_bool& ended, std::atomic_long& error)
-        : ended_(ended), error_(error) {}
+    PlayerCallback(std::atomic_bool& ended, std::atomic_bool& mediaReady, std::atomic_long& error)
+        : ended_(ended), mediaReady_(mediaReady), error_(error) {}
 
     HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void** object) override {
         if (!object) return E_POINTER;
@@ -40,6 +40,8 @@ public:
     void STDMETHODCALLTYPE OnMediaPlayerEvent(MFP_EVENT_HEADER* eventHeader) override {
         if (!eventHeader) return;
         if (FAILED(eventHeader->hrEvent)) error_.store(eventHeader->hrEvent, std::memory_order_relaxed);
+        if (eventHeader->eEventType == MFP_EVENT_TYPE_MEDIAITEM_SET)
+            mediaReady_.store(true, std::memory_order_release);
         if (eventHeader->eEventType == MFP_EVENT_TYPE_PLAYBACK_ENDED)
             ended_.store(true, std::memory_order_release);
     }
@@ -47,18 +49,43 @@ public:
 private:
     std::atomic_ulong refs_{1};
     std::atomic_bool& ended_;
+    std::atomic_bool& mediaReady_;
     std::atomic_long& error_;
 };
+
+RECT ToRect(const wallpaper::RectF& value) {
+    return RECT{
+        static_cast<LONG>(value.left + 0.5f),
+        static_cast<LONG>(value.top + 0.5f),
+        static_cast<LONG>(value.right + 0.5f),
+        static_cast<LONG>(value.bottom + 0.5f),
+    };
+}
+
+MFVideoNormalizedRect NormalizeSource(const wallpaper::RectF& source, float width, float height) {
+    MFVideoNormalizedRect result{};
+    result.left = source.left / width;
+    result.top = source.top / height;
+    result.right = source.right / width;
+    result.bottom = source.bottom / height;
+    return result;
+}
 
 } // namespace
 
 struct VideoWallpaperPlayer::Impl {
     bool mfStarted{};
     bool paused{};
+    bool placementDirty{true};
     HRESULT lastError{S_OK};
     HWND targetWindow{};
     SIZE lastClientSize{};
+    SIZE nativeSize{};
+    wallpaper::ScaleMode scaleMode{wallpaper::ScaleMode::Cover};
+    float focalX{0.5f};
+    float focalY{0.5f};
     std::atomic_bool ended{false};
+    std::atomic_bool mediaReady{false};
     std::atomic_long asyncError{S_OK};
     ComPtr<IMFPMediaPlayerCallback> callback;
     ComPtr<IMFPMediaPlayer> player;
@@ -86,6 +113,45 @@ struct VideoWallpaperPlayer::Impl {
         const SIZE current{rect.right - rect.left, rect.bottom - rect.top};
         if (current.cx == lastClientSize.cx && current.cy == lastClientSize.cy) return false;
         lastClientSize = current;
+        placementDirty = true;
+        return true;
+    }
+
+    void RefreshNativeSize() {
+        nativeSize = {};
+        if (!player) return;
+        SIZE video{};
+        SIZE aspect{};
+        if (SUCCEEDED(player->GetNativeVideoSize(&video, &aspect))) {
+            nativeSize = (aspect.cx > 0 && aspect.cy > 0) ? aspect : video;
+        }
+    }
+
+    bool ApplyPlacement() {
+        if (!player || !targetWindow) return false;
+        if (nativeSize.cx <= 0 || nativeSize.cy <= 0) RefreshNativeSize();
+        if (nativeSize.cx <= 0 || nativeSize.cy <= 0 || lastClientSize.cx <= 0 || lastClientSize.cy <= 0) return false;
+
+        const wallpaper::ScaleMode effective = scaleMode == wallpaper::ScaleMode::Tile
+            ? wallpaper::ScaleMode::Center
+            : scaleMode;
+        const auto placement = wallpaper::ComputePlacement(
+            static_cast<float>(nativeSize.cx), static_cast<float>(nativeSize.cy),
+            static_cast<float>(lastClientSize.cx), static_cast<float>(lastClientSize.cy),
+            effective, focalX, focalY);
+
+        const MFVideoNormalizedRect source = NormalizeSource(
+            placement.source, static_cast<float>(nativeSize.cx), static_cast<float>(nativeSize.cy));
+        const RECT destination = ToRect(placement.destination);
+
+        HRESULT hr = player->SetAspectRatioMode(MFVideoARMode_None);
+        if (SUCCEEDED(hr)) hr = player->SetVideoPosition(&source, &destination);
+        if (FAILED(hr)) {
+            lastError = hr;
+            return false;
+        }
+        placementDirty = false;
+        lastError = S_OK;
         return true;
     }
 
@@ -95,9 +161,12 @@ struct VideoWallpaperPlayer::Impl {
         callback.Reset();
         targetWindow = nullptr;
         lastClientSize = {};
+        nativeSize = {};
         ended.store(false, std::memory_order_relaxed);
+        mediaReady.store(false, std::memory_order_relaxed);
         asyncError.store(S_OK, std::memory_order_relaxed);
         paused = false;
+        placementDirty = true;
     }
 };
 
@@ -119,7 +188,7 @@ bool VideoWallpaperPlayer::Start(HWND targetWindow, const std::wstring& path) {
     if (!impl_->EnsureMediaFoundation()) return false;
 
     impl_->ResetPlayer();
-    auto* callback = new (std::nothrow) PlayerCallback(impl_->ended, impl_->asyncError);
+    auto* callback = new (std::nothrow) PlayerCallback(impl_->ended, impl_->mediaReady, impl_->asyncError);
     if (!callback) {
         impl_->lastError = E_OUTOFMEMORY;
         return false;
@@ -141,6 +210,7 @@ bool VideoWallpaperPlayer::Start(HWND targetWindow, const std::wstring& path) {
     if (FAILED(volumeResult)) impl_->lastError = volumeResult;
     else impl_->lastError = S_OK;
     impl_->paused = false;
+    impl_->placementDirty = true;
     return true;
 }
 
@@ -155,10 +225,18 @@ void VideoWallpaperPlayer::Tick() {
     const HRESULT asyncError = static_cast<HRESULT>(impl_->asyncError.exchange(S_OK, std::memory_order_acq_rel));
     if (FAILED(asyncError)) impl_->lastError = asyncError;
 
-    // MFPlay does not automatically rescale when its target HWND changes size.
-    // The wallpaper host can be resized by monitor/DPI/Explorer changes, so refresh
-    // the video only when the client rect actually changes instead of every 33 ms.
-    if (impl_->ClientSizeChanged()) UpdateVideo();
+    if (impl_->mediaReady.exchange(false, std::memory_order_acq_rel)) {
+        impl_->RefreshNativeSize();
+        impl_->placementDirty = true;
+    }
+
+    const bool resized = impl_->ClientSizeChanged();
+    if ((impl_->placementDirty || resized) && impl_->nativeSize.cx > 0 && impl_->nativeSize.cy > 0) {
+        impl_->ApplyPlacement();
+        UpdateVideo();
+    } else if (resized) {
+        UpdateVideo();
+    }
 
     if (!impl_->ended.exchange(false, std::memory_order_acq_rel)) return;
 
@@ -187,6 +265,22 @@ void VideoWallpaperPlayer::SetPaused(bool paused) {
     }
     impl_->paused = paused;
     if (!paused) UpdateVideo();
+}
+
+void VideoWallpaperPlayer::SetScaling(wallpaper::ScaleMode mode, float focalX, float focalY) {
+    if (!impl_) return;
+    impl_->scaleMode = mode;
+    impl_->focalX = wallpaper::ClampFocal(focalX);
+    impl_->focalY = wallpaper::ClampFocal(focalY);
+    impl_->placementDirty = true;
+    if (impl_->player && impl_->nativeSize.cx > 0 && impl_->nativeSize.cy > 0) {
+        impl_->ApplyPlacement();
+        UpdateVideo();
+    }
+}
+
+SIZE VideoWallpaperPlayer::NativeVideoSize() const {
+    return impl_ ? impl_->nativeSize : SIZE{};
 }
 
 bool VideoWallpaperPlayer::Active() const {
