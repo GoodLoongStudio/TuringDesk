@@ -51,6 +51,7 @@ add_executable(TuringDeskWallpaper WIN32
     src/WallpaperMonitorAssignments.cpp
     src/WallpaperIndependentLayout.cpp
     src/IndependentWallpaperHost.cpp
+    src/WebWallpaperHost.cpp
     src/WallpaperScaling.cpp
     src/WallpaperPerformancePolicy.cpp
     src/WallpaperApplicationRules.cpp
@@ -76,6 +77,7 @@ target_compile_definitions(TuringDesk PRIVATE
 )
 
 target_include_directories(TuringDeskWallpaper PRIVATE include)
+target_include_directories(TuringDeskWallpaper SYSTEM PRIVATE "${WEBVIEW2_INCLUDE_DIR}")
 target_compile_features(TuringDeskWallpaper PRIVATE cxx_std_23)
 target_compile_definitions(TuringDeskWallpaper PRIVATE
     UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN
@@ -123,6 +125,9 @@ target_link_libraries(TuringDeskWallpaper PRIVATE
     mfplat
     mfplay
     mfuuid
+    shlwapi
+    version
+    "${WEBVIEW2_LOADER_STATIC}"
 )
 
 target_link_libraries(TuringDeskHarness PRIVATE
