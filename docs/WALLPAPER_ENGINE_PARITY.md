@@ -17,7 +17,8 @@ Already present on `main`:
 - Image Cover / Contain / Stretch / Center / Tile with focal alignment.
 - Video Cover / Contain / Stretch / Center via MFPlay source crop/aspect policy; video Tile still uses a safe Center fallback pending a bounded implementation.
 - Adaptive wallpaper performance policy with configurable FPS, fullscreen/maximized actions, Remote Desktop, battery saver, lock and idle handling.
-- Video loop, mute/volume, playback rate and restart controls synchronized across monitor surfaces.
+- Video loop, mute/volume, playback rate, precise seek/restart and bounded recovery synchronized across monitor surfaces.
+- Persistent local wallpaper library with import, generated thumbnails, search, favorites, recent history and optional managed copies.
 
 ## Delivery order
 
@@ -49,16 +50,23 @@ Each item is completed in `main`, with native self-test/CI coverage added or upd
   - [x] Loop policy, mute/volume, playback rate and restart behavior.
   - [x] Smooth pause/resume without rebuilding the player.
   - [x] Synchronized controls across Clone monitor surfaces.
-  - [ ] Seek controls and timeline diagnostics.
-  - [ ] Controlled media/device failure recovery.
+  - [x] Precise ±10 second seek controls and timeline diagnostics.
+  - [x] Bounded media/device failure recovery: three attempts with cooldown/stability reset.
+  - [x] Control-before-play startup prevents transient audio leakage.
   - [ ] Exact hardware/software decoder diagnostics; MFPlay currently reports Windows Media Foundation/EVR system-managed negotiation.
+  - [x] ARM64/x64 native CI green through `46d7aace`.
 
 ### P1 — Wallpaper Engine-class daily use
 
-- [ ] 5. Wallpaper library
-  - Import image/video/web/scene wallpapers into a local library.
-  - Thumbnail generation, metadata, search, favorites and recently used.
-  - Non-destructive source references plus optional managed copies.
+- [x] 5. Wallpaper library
+  - [x] Import image/video/web/scene wallpapers into `%LOCALAPPDATA%\\TuringDesk\\WallpaperLibrary`.
+  - [x] Generate 320×180 Shell/WIC thumbnails for image/video imports when Windows provides a thumbnail.
+  - [x] Persistent metadata, search, favorites and recently used history.
+  - [x] Non-destructive source references plus optional managed copies.
+  - [x] Searchable All/Favorites/Recent native library UI with import, favorite, remove-record and apply actions.
+  - [x] Built-in Aurora/Neon/Grid scenes live in the same library model; Web items can be catalogued ahead of the item-9 backend.
+  - [x] Library persistence/search/favorite/recent behavior participates in `TuringDeskWallpaper --self-test`.
+  - [x] ARM64/x64 native CI green at `93c3f81e`.
 
 - [ ] 6. Per-monitor independent wallpaper assignment
   - Different wallpaper per monitor.
