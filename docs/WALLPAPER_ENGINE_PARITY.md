@@ -13,7 +13,9 @@ Already present on `main`:
 - Enable / stop / resume and tray controls.
 - Display-change reattachment and mount diagnostics.
 - Per-monitor DPI awareness.
-- Multi-monitor topology with Span / Clone / Primary-only layout and negative-coordinate support.
+- Multi-monitor topology with Span / Clone / Primary-only / Independent layout and negative-coordinate support.
+- Stable monitor identity using DisplayConfig target device paths, with GDI fallback.
+- Independent per-monitor Scene/image/video assignments persisted across reconnect and reorder.
 - Image Cover / Contain / Stretch / Center / Tile with focal alignment.
 - Video Cover / Contain / Stretch / Center via MFPlay source crop/aspect policy; video Tile still uses a safe Center fallback pending a bounded implementation.
 - Adaptive wallpaper performance policy with configurable FPS, fullscreen/maximized actions, Remote Desktop, battery saver, lock and idle handling.
@@ -49,12 +51,12 @@ Each item is completed in `main`, with native self-test/CI coverage added or upd
 - [ ] 4. Video playback controls
   - [x] Loop policy, mute/volume, playback rate and restart behavior.
   - [x] Smooth pause/resume without rebuilding the player.
-  - [x] Synchronized controls across Clone monitor surfaces.
+  - [x] Synchronized controls across Clone and Independent monitor surfaces.
   - [x] Precise ±10 second seek controls and timeline diagnostics.
   - [x] Bounded media/device failure recovery: three attempts with cooldown/stability reset.
   - [x] Control-before-play startup prevents transient audio leakage.
   - [ ] Exact hardware/software decoder diagnostics; MFPlay currently reports Windows Media Foundation/EVR system-managed negotiation.
-  - [x] ARM64/x64 native CI green through `46d7aace`.
+  - [x] ARM64/x64 native CI green through `0c532f38`.
 
 ### P1 — Wallpaper Engine-class daily use
 
@@ -68,10 +70,14 @@ Each item is completed in `main`, with native self-test/CI coverage added or upd
   - [x] Library persistence/search/favorite/recent behavior participates in `TuringDeskWallpaper --self-test`.
   - [x] ARM64/x64 native CI green at `93c3f81e`.
 
-- [ ] 6. Per-monitor independent wallpaper assignment
-  - Different wallpaper per monitor.
-  - Monitor identity persistence across reconnect/reorder.
-  - Graceful fallback when a saved monitor is missing.
+- [x] 6. Per-monitor independent wallpaper assignment
+  - [x] Different Scene/image/video wallpaper per monitor, including mixed types at the same time.
+  - [x] Stable monitor identity persists assignments across reconnect/reorder; saved offline monitors are retained.
+  - [x] Missing assignment/library/source/Web-backend cases fall back to the global wallpaper with actionable diagnostics.
+  - [x] Native wallpaper library exposes a target-monitor selector; choosing a monitor switches to Independent mode automatically.
+  - [x] Fullscreen/maximized/lock/idle performance policy and video seek/restart controls apply to Independent surfaces.
+  - [x] Assignment persistence and independent resolution participate in `TuringDeskWallpaper --self-test`.
+  - [x] ARM64/x64 native CI green at `0c532f38`.
 
 - [ ] 7. Playlists, schedules and profiles
   - Timed rotation, random/sequential playlists.
