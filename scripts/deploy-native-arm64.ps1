@@ -12,6 +12,7 @@ $Workflow = "native-search-windows.yml"
 $ExeName = "TuringDesk.exe"
 $WallpaperExeName = "TuringDeskWallpaper.exe"
 $HarnessExeName = "TuringDeskHarness.exe"
+$BootstrapHarnessScript = Join-Path $PSScriptRoot "bootstrap-harness-runtime-arm64.ps1"
 $CodexRepo = "openai/codex"
 $CodexRelease = "rust-v0.146.0"
 $CodexAsset = "codex-app-server-aarch64-pc-windows-msvc.exe.zip"
@@ -82,23 +83,10 @@ function Get-MainSha {
     return [string]$Sha
 }
 
-function Get-RunForCommit([string]$Sha, [switch]$SuccessfulOnly, [switch]$WorkflowDispatchOnly) {
-    $Args = @(
-        "run", "list",
-        "--repo", $Repo,
-        "--workflow", $Workflow,
-        "--commit", $Sha,
-        "--limit", "1",
-        "--json", "databaseId,headSha,status,conclusion,event"
-    )
-    if ($SuccessfulOnly) { $Args += @("--status", "success") }
-    if ($WorkflowDispatchOnly) { $Args += @("--event", "workflow_dispatch") }
-
-    $Json = & gh @Args
+function Get-RunsForCommit([string]$Sha) {
+    $Json = & gh run list --repo $Repo --workflow $Workflow --commit $Sha --limit 20 --json databaseId,headSha,status,conclusion,event,createdAt
     if ($LASTEXITCODE -ne 0) { throw "Unable to query GitHub Actions runs" }
-    $Runs = @($Json | ConvertFrom-Json)
-    if ($Runs.Count -eq 0) { return $null }
-    return $Runs[0]
+    return @($Json | ConvertFrom-Json)
 }
 
 function Wait-ForRun([long]$RunId) {
@@ -113,6 +101,8 @@ function Wait-ForRun([long]$RunId) {
 }
 
 function Start-And-WaitForRun([string]$Sha, [bool]$FullPackage) {
+    $Before = @((Get-RunsForCommit -Sha $Sha) | ForEach-Object { [long]$_.databaseId })
+
     if ($FullPackage) {
         Step "Starting FULL ARM64 package validation"
         & gh workflow run $Workflow --repo $Repo --ref main -f full_package=true | Out-Host
@@ -126,7 +116,10 @@ function Start-And-WaitForRun([string]$Sha, [bool]$FullPackage) {
     $Run = $null
     for ($i = 0; $i -lt 45; $i++) {
         Start-Sleep -Seconds 2
-        $Run = Get-RunForCommit $Sha -WorkflowDispatchOnly
+        $Run = (Get-RunsForCommit -Sha $Sha) |
+            Where-Object { ([long]$_.databaseId -notin $Before) -and $_.event -eq "workflow_dispatch" } |
+            Sort-Object createdAt -Descending |
+            Select-Object -First 1
         if ($Run) { break }
     }
     if (-not $Run) { throw "Workflow was started but its run could not be found" }
@@ -138,16 +131,21 @@ function Resolve-Run([string]$Sha) {
         return (Start-And-WaitForRun -Sha $Sha -FullPackage $true)
     }
 
-    $Successful = Get-RunForCommit $Sha -SuccessfulOnly
+    $Runs = Get-RunsForCommit -Sha $Sha
+    $Successful = $Runs | Where-Object { $_.status -eq "completed" -and $_.conclusion -eq "success" } |
+        Sort-Object createdAt -Descending | Select-Object -First 1
     if ($Successful) {
-        Step "Found successful QUICK build for current main: run $($Successful.databaseId)"
+        Step "Found successful ARM64 build for current main: run $($Successful.databaseId)"
         return [long]$Successful.databaseId
     }
 
-    $Existing = Get-RunForCommit $Sha
-    if ($Existing -and $Existing.status -ne "completed") {
-        Step "Using validation already running for current main: run $($Existing.databaseId)"
-        return (Wait-ForRun -RunId ([long]$Existing.databaseId))
+    # Only reuse an automatic push validation here. A full-package workflow_dispatch
+    # must never block a quick local UI deployment.
+    $PushRun = $Runs | Where-Object { $_.event -eq "push" -and $_.status -ne "completed" } |
+        Sort-Object createdAt -Descending | Select-Object -First 1
+    if ($PushRun) {
+        Step "Using automatic ARM64 validation already running: run $($PushRun.databaseId)"
+        return (Wait-ForRun -RunId ([long]$PushRun.databaseId))
     }
 
     return (Start-And-WaitForRun -Sha $Sha -FullPackage $false)
@@ -190,27 +188,6 @@ function Download-Artifact([long]$RunId) {
     }
 }
 
-function Ensure-HarnessRuntimeArtifact([string]$Sha, $Downloaded) {
-    if ($Downloaded.HasHarnessRuntime -or (Test-InstalledHarnessRuntime)) {
-        return $Downloaded
-    }
-
-    Write-Host "QUICK deploy detected that HarnessRuntime is missing on this machine." -ForegroundColor Yellow
-    Write-Host "Bootstrapping the bundled Node + DeepSeek Harness runtime once; later UI deploys stay quick." -ForegroundColor Yellow
-
-    if ($Downloaded.Temp) {
-        Remove-Item $Downloaded.Temp -Recurse -Force -ErrorAction SilentlyContinue
-    }
-
-    $FullRunId = [long](Start-And-WaitForRun -Sha $Sha -FullPackage $true)
-    $FullDownload = Download-Artifact -RunId $FullRunId
-    if (-not $FullDownload.HasHarnessRuntime) {
-        Remove-Item $FullDownload.Temp -Recurse -Force -ErrorAction SilentlyContinue
-        throw "Full ARM64 artifact did not contain HarnessRuntime. Refusing to deploy a broken L4 entry."
-    }
-    return $FullDownload
-}
-
 function Deploy-HarnessRuntime($Downloaded) {
     $DestinationDir = Join-Path $DeployDir "HarnessRuntime"
     $DestinationNode = Join-Path $DestinationDir "Node\node.exe"
@@ -226,15 +203,29 @@ function Deploy-HarnessRuntime($Downloaded) {
         if (-not (Test-Path $DestinationNode -PathType Leaf)) { throw "Deployed Node runtime is missing: $DestinationNode" }
         if (-not (Test-Path $DestinationDsh -PathType Leaf)) { throw "Deployed DeepSeek Harness entrypoint is missing: $DestinationDsh" }
         Write-Host "Bundled Harness runtime deployed." -ForegroundColor Green
-        return $true
+        return @{ Ready = $true; Bootstrapped = $true }
     }
 
     if ((Test-Path $DestinationNode -PathType Leaf) -and (Test-Path $DestinationDsh -PathType Leaf)) {
         Write-Host "QUICK deploy: keeping the existing DeepSeek Harness runtime." -ForegroundColor DarkGray
-        return $true
+        return @{ Ready = $true; Bootstrapped = $false }
     }
 
-    throw "HarnessRuntime is unavailable after bootstrap. Refusing to deploy a broken DeepSeek Harness entry."
+    if ($Full) {
+        throw "Full package did not contain HarnessRuntime. Refusing to deploy a broken L4 entry."
+    }
+
+    if (-not (Test-Path $BootstrapHarnessScript -PathType Leaf)) {
+        throw "Local Harness bootstrap script is missing: $BootstrapHarnessScript"
+    }
+
+    Step "First-run local Harness runtime bootstrap"
+    Write-Host "No GitHub runtime package build is needed. Node + DSH will be installed once on this ARM64 test machine." -ForegroundColor Yellow
+    & $BootstrapHarnessScript -Destination $DestinationDir
+    if ($LASTEXITCODE -ne 0 -or -not (Test-InstalledHarnessRuntime)) {
+        throw "Local Harness runtime bootstrap failed"
+    }
+    return @{ Ready = $true; Bootstrapped = $true }
 }
 
 function Deploy-BundledEverything([string]$ArtifactRoot) {
@@ -247,15 +238,13 @@ function Deploy-BundledEverything([string]$ArtifactRoot) {
             Write-Host "QUICK deploy: keeping existing Everything runtime." -ForegroundColor DarkGray
             return $DestinationExe
         }
-        Write-Host "QUICK deploy: Everything runtime is not installed yet; file search may be unavailable until a -Full deploy." -ForegroundColor Yellow
+        Write-Host "QUICK deploy: Everything runtime is not installed yet; local app search still works, full Everything indexing can be installed later." -ForegroundColor Yellow
         return $null
     }
 
     New-Item -ItemType Directory -Force -Path $DestinationDir | Out-Null
-    if (-not (Test-Path $DestinationExe)) {
-        Step "Installing bundled Everything files"
-        Copy-Item (Join-Path $SourceDir "*") $DestinationDir -Recurse -Force
-    }
+    Step "Installing bundled Everything files"
+    Copy-Item (Join-Path $SourceDir "*") $DestinationDir -Recurse -Force
 
     $Config = Join-Path $DestinationDir "TuringDesk-Everything.ini"
     @"
@@ -316,6 +305,19 @@ function Ensure-CodexRuntime {
     }
 }
 
+function Test-HarnessSmoke([string]$HarnessExe) {
+    Step "Running one-time local Harness smoke test"
+    $Process = Start-Process -FilePath $HarnessExe -ArgumentList "--harness-smoke-test" -Wait -PassThru
+    if ($Process.ExitCode -ne 0) {
+        $Log = Join-Path $env:LOCALAPPDATA "TuringDesk\Logs\harness.log"
+        if (Test-Path $Log) {
+            Write-Host "--- Harness log tail ---" -ForegroundColor Yellow
+            Get-Content $Log -Tail 120 | Out-Host
+        }
+        throw "Local Harness smoke test failed with exit code $($Process.ExitCode)"
+    }
+}
+
 function Should-ShowWallpaperSettings {
     $Config = Join-Path $env:LOCALAPPDATA "TuringDesk\wallpaper.ini"
     if (-not (Test-Path $Config)) { return $true }
@@ -339,11 +341,10 @@ if ($LASTEXITCODE -ne 0) {
 Step "Resolving current main commit"
 $MainSha = Get-MainSha
 Write-Host "main: $MainSha" -ForegroundColor DarkGray
-Write-Host ($(if ($Full) { "Deploy mode: FULL runtime validation" } else { "Deploy mode: QUICK native validation with automatic first-run runtime bootstrap" })) -ForegroundColor DarkGray
+Write-Host ($(if ($Full) { "Deploy mode: FULL release validation" } else { "Deploy mode: QUICK ARM64 validation + local one-time runtime bootstrap" })) -ForegroundColor DarkGray
 
 $RunId = [long](Resolve-Run -Sha $MainSha)
 $Downloaded = Download-Artifact -RunId $RunId
-$Downloaded = Ensure-HarnessRuntimeArtifact -Sha $MainSha -Downloaded $Downloaded
 try {
     Test-Binary -Exe $Downloaded.Exe -Name "Native Search"
     Test-Binary -Exe $Downloaded.WallpaperExe -Name "Native Wallpaper"
@@ -360,13 +361,16 @@ try {
     Copy-WithRetry -Source $Downloaded.WallpaperExe -Destination $DeployedWallpaper
     Copy-WithRetry -Source $Downloaded.HarnessExe -Destination $DeployedHarness
 
-    $HarnessReady = Deploy-HarnessRuntime -Downloaded $Downloaded
+    $HarnessState = Deploy-HarnessRuntime -Downloaded $Downloaded
     $EverythingExe = Deploy-BundledEverything -ArtifactRoot $Downloaded.Root
     Ensure-EverythingService -EverythingExe $EverythingExe
     Ensure-CodexRuntime | Out-Null
 
     Test-Binary -Exe $DeployedWallpaper -Name "Deployed Wallpaper"
     Test-Binary -Exe $DeployedHarness -Name "Deployed Harness host"
+    if ($HarnessState.Bootstrapped) {
+        Test-HarnessSmoke -HarnessExe $DeployedHarness
+    }
 
     Step "Starting TuringDesk Wallpaper"
     if (Should-ShowWallpaperSettings) {
@@ -381,7 +385,7 @@ try {
 
     Write-Host "`nDeployment complete. Press Alt+Space to open Search." -ForegroundColor Green
     Write-Host "Use the top-right 设置 button to open the TuringDesk 设置中心." -ForegroundColor Green
-    Write-Host "DeepSeek Harness runtime is available from 设置中心 -> DeepSeek Harness (L4)." -ForegroundColor Green
+    Write-Host "DeepSeek Harness is available from 设置中心 -> DeepSeek Harness (L4)." -ForegroundColor Green
     Write-Host "Path: $DeployDir" -ForegroundColor DarkGray
 }
 finally {
