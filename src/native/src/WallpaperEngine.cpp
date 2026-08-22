@@ -48,10 +48,15 @@ constexpr int kVerticalComboId = 4110;
 constexpr int kFpsComboId = 4111;
 constexpr int kFullscreenActionComboId = 4112;
 constexpr int kMaximizedActionComboId = 4113;
+constexpr int kVideoLoopCheckId = 4114;
+constexpr int kVideoMuteCheckId = 4115;
+constexpr int kVideoVolumeComboId = 4116;
+constexpr int kVideoRateComboId = 4117;
+constexpr int kVideoRestartButtonId = 4118;
 constexpr int kTraySettings = 4201;
 constexpr int kTrayToggle = 4202;
 constexpr int kTrayExit = 4203;
-constexpr int kConfigVersion = 7;
+constexpr int kConfigVersion = 8;
 constexpr LONG_PTR kRaisedDesktopFlag = WS_EX_NOREDIRECTIONBITMAP;
 
 HMENU ControlId(int id) {
@@ -60,7 +65,7 @@ HMENU ControlId(int id) {
 
 struct Config {
     bool enabled{true};
-    bool pauseFullscreen{true}; // V6 compatibility; V7 uses fullscreenAction.
+    bool pauseFullscreen{true}; // V6 compatibility; V7+ uses fullscreenAction.
     std::wstring scene{L"aurora"};
     std::wstring image;
     std::wstring video;
@@ -77,6 +82,10 @@ struct Config {
     turingdesk::wallpaper::PerformanceAction lockedSessionAction{turingdesk::wallpaper::PerformanceAction::Stop};
     turingdesk::wallpaper::PerformanceAction idleAction{turingdesk::wallpaper::PerformanceAction::Throttle};
     DWORD idleThresholdSeconds{120};
+    bool videoLoop{true};
+    bool videoMuted{true};
+    float videoVolume{0.0f};
+    float videoRate{1.0f};
 };
 
 enum class MountMode {
@@ -115,15 +124,18 @@ std::wstring FloatText(float value) {
     return text;
 }
 
-float ReadProfileFloat(const std::wstring& path, const wchar_t* key, float fallback) {
+float ReadProfileNumber(const std::wstring& path, const wchar_t* key, float fallback) {
     wchar_t text[64]{};
     const std::wstring fallbackText = FloatText(fallback);
     GetPrivateProfileStringW(L"Wallpaper", key, fallbackText.c_str(), text,
                              static_cast<DWORD>(std::size(text)), path.c_str());
     wchar_t* end = nullptr;
     const float value = std::wcstof(text, &end);
-    if (end == text) return fallback;
-    return turingdesk::wallpaper::ClampFocal(value);
+    return end == text ? fallback : value;
+}
+
+float ReadProfileFloat(const std::wstring& path, const wchar_t* key, float fallback) {
+    return turingdesk::wallpaper::ClampFocal(ReadProfileNumber(path, key, fallback));
 }
 
 std::wstring ReadProfileText(const std::wstring& path, const wchar_t* key, const wchar_t* fallback) {
@@ -161,6 +173,12 @@ void SaveConfig(const Config& config) {
     WritePrivateProfileStringW(L"Wallpaper", L"LockedSessionAction", turingdesk::wallpaper::PerformanceActionKey(config.lockedSessionAction), path.c_str());
     WritePrivateProfileStringW(L"Wallpaper", L"IdleAction", turingdesk::wallpaper::PerformanceActionKey(config.idleAction), path.c_str());
     WritePrivateProfileStringW(L"Wallpaper", L"IdleThresholdSeconds", idleSeconds.c_str(), path.c_str());
+    WritePrivateProfileStringW(L"Wallpaper", L"VideoLoop", config.videoLoop ? L"1" : L"0", path.c_str());
+    WritePrivateProfileStringW(L"Wallpaper", L"VideoMuted", config.videoMuted ? L"1" : L"0", path.c_str());
+    const auto videoVolume = FloatText(std::clamp(config.videoVolume, 0.0f, 1.0f));
+    const auto videoRate = FloatText(std::clamp(config.videoRate, 0.25f, 4.0f));
+    WritePrivateProfileStringW(L"Wallpaper", L"VideoVolume", videoVolume.c_str(), path.c_str());
+    WritePrivateProfileStringW(L"Wallpaper", L"VideoRate", videoRate.c_str(), path.c_str());
 }
 
 Config LoadConfig() {
@@ -195,6 +213,13 @@ Config LoadConfig() {
         config.fullscreenAction = config.pauseFullscreen
             ? turingdesk::wallpaper::PerformanceAction::Pause
             : turingdesk::wallpaper::PerformanceAction::Normal;
+    }
+
+    if (version >= 8) {
+        config.videoLoop = GetPrivateProfileIntW(L"Wallpaper", L"VideoLoop", 1, path.c_str()) != 0;
+        config.videoMuted = GetPrivateProfileIntW(L"Wallpaper", L"VideoMuted", 1, path.c_str()) != 0;
+        config.videoVolume = std::clamp(ReadProfileNumber(path, L"VideoVolume", 0.0f), 0.0f, 1.0f);
+        config.videoRate = std::clamp(ReadProfileNumber(path, L"VideoRate", 1.0f), 0.25f, 4.0f);
     }
 
     if (!ValidScene(config.scene)) config.scene = L"aurora";
@@ -392,7 +417,7 @@ public:
 
         settings_ = CreateWindowExW(WS_EX_TOOLWINDOW, kSettingsClass, L"TuringDesk 壁纸",
                                     WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU,
-                                    CW_USEDEFAULT, CW_USEDEFAULT, 760, 700,
+                                    CW_USEDEFAULT, CW_USEDEFAULT, 760, 800,
                                     nullptr, nullptr, instance_, this);
         if (!settings_) return;
 
@@ -457,17 +482,37 @@ public:
 
         label(L"系统策略", 20, 326, 88, 24);
         label(L"远程桌面/节能/Idle 默认降频；锁屏默认停止。降频目标 15 FPS。", 116, 326, 580, 42);
-        status_ = label(L"", 20, 382, 688, 150);
+
+        label(L"视频播放", 20, 378, 88, 24);
+        videoLoopCheck_ = CreateWindowExW(0, L"BUTTON", L"循环", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
+                                          116, 374, 92, 26, settings_, ControlId(kVideoLoopCheckId), instance_, nullptr);
+        videoMuteCheck_ = CreateWindowExW(0, L"BUTTON", L"静音", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
+                                          220, 374, 92, 26, settings_, ControlId(kVideoMuteCheckId), instance_, nullptr);
+        label(L"音量", 326, 378, 48, 24);
+        videoVolumeCombo_ = CreateWindowExW(0, L"COMBOBOX", L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST,
+                                            378, 374, 108, 150, settings_, ControlId(kVideoVolumeComboId), instance_, nullptr);
+        for (const wchar_t* volume : {L"0%", L"25%", L"50%", L"75%", L"100%"})
+            SendMessageW(videoVolumeCombo_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(volume));
+        label(L"倍速", 500, 378, 48, 24);
+        videoRateCombo_ = CreateWindowExW(0, L"COMBOBOX", L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST,
+                                          552, 374, 100, 150, settings_, ControlId(kVideoRateComboId), instance_, nullptr);
+        for (const wchar_t* rate : {L"0.5×", L"1.0×", L"1.5×", L"2.0×"})
+            SendMessageW(videoRateCombo_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(rate));
+        videoRestartButton_ = CreateWindowExW(0, L"BUTTON", L"从头重播", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+                                               116, 414, 110, 30, settings_, ControlId(kVideoRestartButtonId), instance_, nullptr);
+
+        status_ = label(L"", 20, 462, 688, 150);
 
         applyButton_ = CreateWindowExW(0, L"BUTTON", L"应用到桌面", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON,
-                                       408, 574, 112, 36, settings_, ControlId(kApplyButtonId), instance_, nullptr);
+                                       408, 674, 112, 36, settings_, ControlId(kApplyButtonId), instance_, nullptr);
         toggleButton_ = CreateWindowExW(0, L"BUTTON", L"停止", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
-                                        530, 574, 84, 36, settings_, ControlId(kToggleButtonId), instance_, nullptr);
+                                        530, 674, 84, 36, settings_, ControlId(kToggleButtonId), instance_, nullptr);
         closeButton_ = CreateWindowExW(0, L"BUTTON", L"关闭", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
-                                       624, 574, 84, 36, settings_, ControlId(kCloseButtonId), instance_, nullptr);
+                                       624, 674, 84, 36, settings_, ControlId(kCloseButtonId), instance_, nullptr);
 
         for (HWND control : {sceneCombo_, imageButton_, layoutCombo_, scaleCombo_, horizontalCombo_, verticalCombo_,
-                             fpsCombo_, fullscreenActionCombo_, maximizedActionCombo_, applyButton_, toggleButton_, closeButton_}) {
+                             fpsCombo_, fullscreenActionCombo_, maximizedActionCombo_, videoLoopCheck_, videoMuteCheck_,
+                             videoVolumeCombo_, videoRateCombo_, videoRestartButton_, applyButton_, toggleButton_, closeButton_}) {
             SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
         }
         SendMessageW(status_, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
@@ -612,6 +657,12 @@ private:
             case kImageButtonId:
                 if (HIWORD(wParam) == BN_CLICKED) self->ChooseImage();
                 return 0;
+            case kVideoRestartButtonId:
+                if (HIWORD(wParam) == BN_CLICKED) {
+                    if (!self->videoSet_.Restart() && self->status_) SetWindowTextW(self->status_, L"当前没有可重播的视频壁纸。");
+                    else self->RefreshSettings();
+                }
+                return 0;
             case kApplyButtonId:
                 if (HIWORD(wParam) == BN_CLICKED) self->ApplyFromSettings();
                 return 0;
@@ -638,6 +689,11 @@ private:
             self->fpsCombo_ = nullptr;
             self->fullscreenActionCombo_ = nullptr;
             self->maximizedActionCombo_ = nullptr;
+            self->videoLoopCheck_ = nullptr;
+            self->videoMuteCheck_ = nullptr;
+            self->videoVolumeCombo_ = nullptr;
+            self->videoRateCombo_ = nullptr;
+            self->videoRestartButton_ = nullptr;
             self->applyButton_ = nullptr;
             self->toggleButton_ = nullptr;
             self->closeButton_ = nullptr;
@@ -893,7 +949,7 @@ private:
 
     void RemoveTray() {
         if (!trayAdded_) return;
-        Shell_NotifyIconW(NIM_DELETE, &tray_) != FALSE;
+        Shell_NotifyIconW(NIM_DELETE, &tray_);
         trayAdded_ = false;
     }
 
@@ -1080,6 +1136,8 @@ private:
         config_.focalY = turingdesk::wallpaper::ClampFocal(config_.focalY);
         config_.fpsCap = turingdesk::wallpaper::NormalizeFpsCap(config_.fpsCap);
         config_.throttleFps = turingdesk::wallpaper::NormalizeFpsCap(config_.throttleFps);
+        config_.videoVolume = std::clamp(config_.videoVolume, 0.0f, 1.0f);
+        config_.videoRate = std::clamp(config_.videoRate, 0.25f, 4.0f);
         if (persist) SaveConfig(config_);
         pendingImage_.clear();
         pendingVideo_.clear();
@@ -1107,6 +1165,10 @@ private:
             lastMediaError_ = L"视频文件不存在";
             return false;
         }
+        videoSet_.SetLooping(config_.videoLoop);
+        videoSet_.SetMuted(config_.videoMuted);
+        videoSet_.SetVolume(config_.videoVolume);
+        videoSet_.SetPlaybackRate(config_.videoRate);
         auto regions = turingdesk::wallpaper::DrawRegionsInHost(topology_, turingdesk::wallpaper::ParseLayoutMode(config_.layout));
         if (!videoSet_.Start(host_, config_.video, regions, turingdesk::wallpaper::ParseScaleMode(config_.scale), config_.focalX, config_.focalY)) {
             lastMediaError_ = videoSet_.LastErrorText();
@@ -1148,7 +1210,11 @@ private:
         const int selectedHorizontal = static_cast<int>(SendMessageW(horizontalCombo_, CB_GETCURSEL, 0, 0));
         const int selectedVertical = static_cast<int>(SendMessageW(verticalCombo_, CB_GETCURSEL, 0, 0));
         const int selectedFps = static_cast<int>(SendMessageW(fpsCombo_, CB_GETCURSEL, 0, 0));
+        const int selectedVolume = static_cast<int>(SendMessageW(videoVolumeCombo_, CB_GETCURSEL, 0, 0));
+        const int selectedRate = static_cast<int>(SendMessageW(videoRateCombo_, CB_GETCURSEL, 0, 0));
         constexpr int fpsValues[] = {15, 30, 45, 60, 120};
+        constexpr float volumeValues[] = {0.0f, 0.25f, 0.5f, 0.75f, 1.0f};
+        constexpr float rateValues[] = {0.5f, 1.0f, 1.5f, 2.0f};
 
         Config next = config_;
         next.enabled = true;
@@ -1161,6 +1227,10 @@ private:
         next.fullscreenAction = ActionFromCombo(fullscreenActionCombo_);
         next.maximizedAction = ActionFromCombo(maximizedActionCombo_);
         next.pauseFullscreen = next.fullscreenAction == turingdesk::wallpaper::PerformanceAction::Pause;
+        next.videoLoop = SendMessageW(videoLoopCheck_, BM_GETCHECK, 0, 0) == BST_CHECKED;
+        next.videoMuted = SendMessageW(videoMuteCheck_, BM_GETCHECK, 0, 0) == BST_CHECKED;
+        if (selectedVolume >= 0 && selectedVolume < static_cast<int>(std::size(volumeValues))) next.videoVolume = volumeValues[selectedVolume];
+        if (selectedRate >= 0 && selectedRate < static_cast<int>(std::size(rateValues))) next.videoRate = rateValues[selectedRate];
         next.image.clear();
         next.video.clear();
 
@@ -1215,6 +1285,19 @@ private:
         if (fpsCombo_) SendMessageW(fpsCombo_, CB_SETCURSEL, fpsSelected, 0);
         if (fullscreenActionCombo_) SendMessageW(fullscreenActionCombo_, CB_SETCURSEL, ActionIndex(config_.fullscreenAction), 0);
         if (maximizedActionCombo_) SendMessageW(maximizedActionCombo_, CB_SETCURSEL, ActionIndex(config_.maximizedAction), 0);
+
+        if (videoLoopCheck_) SendMessageW(videoLoopCheck_, BM_SETCHECK, config_.videoLoop ? BST_CHECKED : BST_UNCHECKED, 0);
+        if (videoMuteCheck_) SendMessageW(videoMuteCheck_, BM_SETCHECK, config_.videoMuted ? BST_CHECKED : BST_UNCHECKED, 0);
+        constexpr float volumeValues[] = {0.0f, 0.25f, 0.5f, 0.75f, 1.0f};
+        int volumeSelected = 0;
+        for (int i = 0; i < static_cast<int>(std::size(volumeValues)); ++i)
+            if (std::fabs(volumeValues[i] - config_.videoVolume) < 0.13f) volumeSelected = i;
+        if (videoVolumeCombo_) SendMessageW(videoVolumeCombo_, CB_SETCURSEL, volumeSelected, 0);
+        constexpr float rateValues[] = {0.5f, 1.0f, 1.5f, 2.0f};
+        int rateSelected = 1;
+        for (int i = 0; i < static_cast<int>(std::size(rateValues)); ++i)
+            if (std::fabs(rateValues[i] - config_.videoRate) < 0.26f) rateSelected = i;
+        if (videoRateCombo_) SendMessageW(videoRateCombo_, CB_SETCURSEL, rateSelected, 0);
         SetWindowTextW(toggleButton_, config_.enabled ? L"停止" : L"恢复");
 
         std::wstring status;
@@ -1231,7 +1314,10 @@ private:
             if (!currentPerformance_.reason.empty()) status += L" · 原因：" + currentPerformance_.reason;
             if (selected == 4) {
                 if (!lastMediaError_.empty()) status = L"视频壁纸错误：" + lastMediaError_;
-                else if (scaleMode == turingdesk::wallpaper::ScaleMode::Tile) status += L" · 视频 Tile 当前安全降级为 Center";
+                else {
+                    if (scaleMode == turingdesk::wallpaper::ScaleMode::Tile) status += L" · 视频 Tile 当前安全降级为 Center";
+                    status += L"\r\n" + videoSet_.DiagnosticsText();
+                }
             }
             status += L"\r\n" + turingdesk::wallpaper::DescribeMonitorTopology(topology_);
         }
@@ -1252,6 +1338,11 @@ private:
     HWND fpsCombo_{};
     HWND fullscreenActionCombo_{};
     HWND maximizedActionCombo_{};
+    HWND videoLoopCheck_{};
+    HWND videoMuteCheck_{};
+    HWND videoVolumeCombo_{};
+    HWND videoRateCombo_{};
+    HWND videoRestartButton_{};
     HWND applyButton_{};
     HWND toggleButton_{};
     HWND closeButton_{};
