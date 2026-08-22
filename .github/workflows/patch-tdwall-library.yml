@@ -1,5 +1,5 @@
 name: Apply tdwall Library Migration
-# trigger-revision: 7
+# trigger-revision: 8
 
 on:
   push:
@@ -79,8 +79,6 @@ jobs:
         case WallpaperPackageType::Video: kind = LibraryWallpaperKind::Video; break;
         case WallpaperPackageType::Web: kind = LibraryWallpaperKind::Web; break;
         case WallpaperPackageType::Scene:
-            // The current Scene apply path only accepts the three built-in IDs.
-            // Keep packaged Scene validation, but do not advertise it as runnable yet.
             continue;
         case WallpaperPackageType::Unknown: break;
         }
