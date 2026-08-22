@@ -42,44 +42,72 @@ function Test-PathInsideRoot([string]$Candidate, [string]$Root) {
     catch { return $false }
 }
 
-function Stop-BundledHarnessProcesses {
-    $runtimeNode = Join-Path $DeployDir "Runtime\Node"
-    $expectedHarness = [System.IO.Path]::GetFullPath((Join-Path $DeployDir "TuringDeskHarness.exe"))
+function Stop-TuringDeskOwnedRuntimeProcesses {
+    # A running TuringDesk.exe can immediately relaunch its bundled Everything
+    # instance after Everything.exe is killed. Stop the complete TuringDesk-owned
+    # process tree before replacing runtime files. The executable path check is
+    # intentionally strict so a user's system/global Everything, Node, or Codex is
+    # never touched.
+    $ownedNames = @(
+        "TuringDesk.exe",
+        "TuringDeskWallpaper.exe",
+        "TuringDeskHarness.exe",
+        "Everything.exe",
+        "node.exe",
+        "codex-app-server.exe"
+    )
 
-    foreach ($process in @(Get-Process -Name "TuringDeskHarness" -ErrorAction SilentlyContinue)) {
-        try {
-            if ($process.Path -and ([System.IO.Path]::GetFullPath($process.Path) -eq $expectedHarness)) {
-                Write-Host "Stopping TuringDeskHarness PID $($process.Id)" -ForegroundColor DarkGray
-                & taskkill.exe /PID $process.Id /T /F 2>$null | Out-Null
-            }
-        }
-        catch { }
-    }
-
+    $stopped = 0
     try {
-        foreach ($process in @(Get-CimInstance Win32_Process -Filter "Name='node.exe'" -ErrorAction Stop)) {
+        foreach ($process in @(Get-CimInstance Win32_Process -ErrorAction Stop)) {
+            if ($ownedNames -notcontains [string]$process.Name) { continue }
             $exe = [string]$process.ExecutablePath
-            if ($exe -and (Test-PathInsideRoot -Candidate $exe -Root $runtimeNode)) {
-                Write-Host "Stopping TuringDesk bundled Node PID $($process.ProcessId)" -ForegroundColor DarkGray
-                & taskkill.exe /PID $process.ProcessId /T /F 2>$null | Out-Null
-            }
+            if (-not $exe -or -not (Test-PathInsideRoot -Candidate $exe -Root $DeployDir)) { continue }
+
+            Write-Host "Stopping TuringDesk-owned $($process.Name) PID $($process.ProcessId)" -ForegroundColor DarkGray
+            & taskkill.exe /PID $process.ProcessId /T /F 2>$null | Out-Null
+            if ($LASTEXITCODE -eq 0) { $stopped++ }
         }
     }
-    catch { }
-    Start-Sleep -Milliseconds 500
+    catch {
+        Write-Host "Process scan warning: $($_.Exception.Message)" -ForegroundColor DarkYellow
+    }
+
+    if ($stopped -gt 0) {
+        # Give Windows a short bounded interval to release executable image mappings.
+        for ($i = 0; $i -lt 30; $i++) {
+            $remaining = $false
+            try {
+                foreach ($process in @(Get-CimInstance Win32_Process -ErrorAction Stop)) {
+                    if ($ownedNames -notcontains [string]$process.Name) { continue }
+                    $exe = [string]$process.ExecutablePath
+                    if ($exe -and (Test-PathInsideRoot -Candidate $exe -Root $DeployDir)) {
+                        $remaining = $true
+                        break
+                    }
+                }
+            }
+            catch { break }
+            if (-not $remaining) { break }
+            Start-Sleep -Milliseconds 100
+        }
+    }
+
+    # Executable image sections can remain mapped very briefly after process exit.
+    Start-Sleep -Milliseconds 300
 }
 
 function Remove-WithRetry([string]$Path) {
     if (-not (Test-Path $Path)) { return }
     $last = $null
-    for ($i = 1; $i -le 20; $i++) {
+    for ($i = 1; $i -le 24; $i++) {
         try {
             Remove-Item $Path -Recurse -Force -ErrorAction Stop
             return
         }
         catch {
             $last = $_
-            if (($i % 5) -eq 0) { Stop-BundledHarnessProcesses }
+            if (($i % 4) -eq 0) { Stop-TuringDeskOwnedRuntimeProcesses }
             Start-Sleep -Milliseconds 250
         }
     }
@@ -135,7 +163,7 @@ if ($alreadyReady) {
 }
 
 Step "Installing repository-vendored ARM64 RuntimeBundle (offline)"
-Stop-BundledHarnessProcesses
+Stop-TuringDeskOwnedRuntimeProcesses
 Remove-WithRetry $NodeDir
 Remove-WithRetry $EverythingDir
 Remove-WithRetry $CodexDir
