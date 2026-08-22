@@ -1,8 +1,10 @@
 #include "turingdesk/L3Agent.h"
 #include <windows.h>
 #include <cstdint>
+#include <cwctype>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <string>
 #include <system_error>
 #include <vector>
