@@ -1,0 +1,160 @@
+name: Patch Harness Window Bounds
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/patch-harness-window-bounds.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Patch Harness window sizing
+        shell: python
+        run: |
+          from pathlib import Path
+          p = Path('src/native/src/HarnessHost.cpp')
+          s = p.read_text(encoding='utf-8')
+
+          marker = '''std::wstring HarnessLogHint() {
+    const std::wstring logPath = turingdesk::HarnessProcessManager::LogPath();
+    return logPath.empty() ? std::wstring{} : L"\\r\\n日志：" + logPath;
+}
+
+'''
+          helper = marker + '''RECT HarnessWorkAreaForCursor() {
+    POINT cursor{};
+    if (!GetCursorPos(&cursor)) cursor = POINT{0, 0};
+    HMONITOR monitor = MonitorFromPoint(cursor, MONITOR_DEFAULTTOPRIMARY);
+    MONITORINFO info{};
+    info.cbSize = sizeof(info);
+    if (monitor && GetMonitorInfoW(monitor, &info)) return info.rcWork;
+
+    RECT work{};
+    if (SystemParametersInfoW(SPI_GETWORKAREA, 0, &work, 0)) return work;
+    work.right = GetSystemMetrics(SM_CXSCREEN);
+    work.bottom = GetSystemMetrics(SM_CYSCREEN);
+    return work;
+}
+
+RECT InitialHarnessWindowRect() {
+    const RECT work = HarnessWorkAreaForCursor();
+    const LONG workWidth = work.right - work.left;
+    const LONG workHeight = work.bottom - work.top;
+
+    // Keep the default comfortably inside the usable desktop while retaining a
+    // productive size on larger displays. rcWork already excludes the taskbar.
+    LONG width = workWidth * 9 / 10;
+    LONG height = workHeight * 9 / 10;
+    if (width > 1100) width = 1100;
+    if (height > 760) height = 760;
+    if (width <= 0) width = workWidth;
+    if (height <= 0) height = workHeight;
+
+    RECT result{};
+    result.left = work.left + (workWidth - width) / 2;
+    result.top = work.top + (workHeight - height) / 2;
+    result.right = result.left + width;
+    result.bottom = result.top + height;
+    return result;
+}
+
+void ApplyHarnessMaximizedWorkArea(HWND hwnd, MINMAXINFO* minMax) {
+    if (!hwnd || !minMax) return;
+    HMONITOR monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+    MONITORINFO info{};
+    info.cbSize = sizeof(info);
+    if (!monitor || !GetMonitorInfoW(monitor, &info)) return;
+
+    const RECT& work = info.rcWork;
+    const RECT& bounds = info.rcMonitor;
+    minMax->ptMaxPosition.x = work.left - bounds.left;
+    minMax->ptMaxPosition.y = work.top - bounds.top;
+    minMax->ptMaxSize.x = work.right - work.left;
+    minMax->ptMaxSize.y = work.bottom - work.top;
+    minMax->ptMaxTrackSize = minMax->ptMaxSize;
+}
+
+bool HarnessWindowLayoutSelfTest() {
+    const RECT work{100, 50, 1380, 730};
+    const LONG workWidth = work.right - work.left;
+    const LONG workHeight = work.bottom - work.top;
+    LONG width = workWidth * 9 / 10;
+    LONG height = workHeight * 9 / 10;
+    if (width > 1100) width = 1100;
+    if (height > 760) height = 760;
+    RECT result{
+        work.left + (workWidth - width) / 2,
+        work.top + (workHeight - height) / 2,
+        0,
+        0,
+    };
+    result.right = result.left + width;
+    result.bottom = result.top + height;
+    return result.left >= work.left && result.top >= work.top &&
+           result.right <= work.right && result.bottom <= work.bottom &&
+           width == 1100 && height == 612;
+}
+
+'''
+          if 'RECT HarnessWorkAreaForCursor()' not in s:
+              if marker not in s:
+                  raise SystemExit('HarnessLogHint marker not found')
+              s = s.replace(marker, helper)
+
+          old_create = '''        hwnd_ = CreateWindowExW(0, kWindowClass, L"TuringDesk · DeepSeek Harness",
+                                WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
+                                CW_USEDEFAULT, CW_USEDEFAULT, 1180, 820,
+                                nullptr, nullptr, instance_, this);'''
+          new_create = '''        const RECT initialBounds = InitialHarnessWindowRect();
+        hwnd_ = CreateWindowExW(0, kWindowClass, L"TuringDesk · DeepSeek Harness",
+                                WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
+                                initialBounds.left, initialBounds.top,
+                                initialBounds.right - initialBounds.left,
+                                initialBounds.bottom - initialBounds.top,
+                                nullptr, nullptr, instance_, this);'''
+          if old_create in s:
+              s = s.replace(old_create, new_create)
+          elif 'const RECT initialBounds = InitialHarnessWindowRect();' not in s:
+              raise SystemExit('CreateWindowExW marker not found')
+
+          timer_case = '''        case WM_TIMER:
+            if (wParam == kReadyTimerId) {
+                PollHarness();
+                return 0;
+            }
+            break;
+'''
+          minmax_case = timer_case + '''        case WM_GETMINMAXINFO:
+            ApplyHarnessMaximizedWorkArea(hwnd_, reinterpret_cast<MINMAXINFO*>(lParam));
+            return 0;
+'''
+          if 'case WM_GETMINMAXINFO:' not in s:
+              if timer_case not in s:
+                  raise SystemExit('WM_TIMER marker not found')
+              s = s.replace(timer_case, minmax_case)
+
+          old_self = '''        const int result = turingdesk::HarnessProcessManager::SelfTest() ? 0 : 5;'''
+          new_self = '''        const bool healthy = turingdesk::HarnessProcessManager::SelfTest() && HarnessWindowLayoutSelfTest();
+        const int result = healthy ? 0 : 5;'''
+          if old_self in s:
+              s = s.replace(old_self, new_self)
+
+          p.write_text(s, encoding='utf-8')
+      - name: Commit patch
+        shell: bash
+        run: |
+          rm .github/workflows/patch-harness-window-bounds.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/native/src/HarnessHost.cpp .github/workflows/patch-harness-window-bounds.yml
+          git commit -m "fix: keep Harness window above taskbar"
+          git push origin HEAD:main
