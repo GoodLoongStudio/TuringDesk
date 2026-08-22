@@ -15,6 +15,7 @@ if (-not (Test-Path $SmartDownload -PathType Leaf)) { throw "Smart download help
 $CacheRoot = Join-Path $env:LOCALAPPDATA "TuringDesk\RuntimeCache"
 $NodeCache = Join-Path $CacheRoot "Node\$NodeVersion\arm64"
 $NpmCache = Join-Path $CacheRoot "npm"
+$NpmLogRoot = Join-Path $CacheRoot "logs"
 $DownloadRoot = Join-Path $CacheRoot "downloads"
 $NodeTarget = Join-Path $Destination "Node"
 $DshTarget = Join-Path $Destination "Dsh"
@@ -32,6 +33,19 @@ function Test-DshRuntime {
     catch { return $false }
 }
 
+function Show-NewLogLines {
+    param(
+        [string]$Path,
+        [ref]$Shown,
+        [ConsoleColor]$Color = [ConsoleColor]::DarkGray
+    )
+    if (-not (Test-Path $Path -PathType Leaf)) { return }
+    $lines = @(Get-Content $Path -ErrorAction SilentlyContinue)
+    if ($lines.Count -le $Shown.Value) { return }
+    $lines | Select-Object -Skip $Shown.Value | ForEach-Object { Write-Host $_ -ForegroundColor $Color }
+    $Shown.Value = $lines.Count
+}
+
 if (-not $Force -and (Test-Path (Join-Path $NodeTarget "node.exe") -PathType Leaf) -and (Test-DshRuntime)) {
     Write-Host "Harness runtime is already ready: Node $NodeVersion + DSH $DshVersion" -ForegroundColor Green
     return
@@ -39,6 +53,7 @@ if (-not $Force -and (Test-Path (Join-Path $NodeTarget "node.exe") -PathType Lea
 
 New-Item -ItemType Directory -Force -Path $CacheRoot | Out-Null
 New-Item -ItemType Directory -Force -Path $NpmCache | Out-Null
+New-Item -ItemType Directory -Force -Path $NpmLogRoot | Out-Null
 New-Item -ItemType Directory -Force -Path $DownloadRoot | Out-Null
 New-Item -ItemType Directory -Force -Path $Destination | Out-Null
 
@@ -92,11 +107,14 @@ Write-Host "Node: $(& $NodeExe --version)" -ForegroundColor Green
 
 if ($Force -or -not (Test-DshRuntime)) {
     Step "Installing DeepSeek Harness $DshVersion locally"
-    Write-Host "DSH dependencies use a persistent npm cache. Successful downloads are reused automatically." -ForegroundColor Yellow
+    Write-Host "First install is large (DSH has many packages), but npm network/cache activity is now shown live." -ForegroundColor Yellow
     if (Test-Path $DshTarget) { Remove-Item $DshTarget -Recurse -Force }
     New-Item -ItemType Directory -Force -Path $DshTarget | Out-Null
 
     $OldPath = $env:PATH
+    $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
+    $StdoutLog = Join-Path $NpmLogRoot "dsh-install-$stamp.out.log"
+    $StderrLog = Join-Path $NpmLogRoot "dsh-install-$stamp.err.log"
     try {
         $env:PATH = "$NodeTarget;$OldPath"
         & $NpmCmd ping --registry="https://registry.npmjs.org/" --cache "$NpmCache" --loglevel=notice
@@ -113,8 +131,9 @@ if ($Force -or -not (Test-DshRuntime)) {
             "--registry=https://registry.npmjs.org/",
             "--cache", $NpmCache,
             "--prefer-offline",
-            "--progress=true",
-            "--loglevel=notice",
+            "--foreground-scripts",
+            "--timing",
+            "--loglevel=http",
             "--fetch-retries=3",
             "--fetch-retry-mintimeout=1000",
             "--fetch-retry-maxtimeout=10000",
@@ -122,21 +141,39 @@ if ($Force -or -not (Test-DshRuntime)) {
             "@deepseek-ai/dsh@$DshVersion"
         )
 
+        Write-Host "npm cache: $NpmCache" -ForegroundColor DarkGray
+        Write-Host "npm log:   $StdoutLog" -ForegroundColor DarkGray
         $Started = Get-Date
-        $Process = Start-Process -FilePath $NpmCmd -ArgumentList $Arguments -NoNewWindow -PassThru
+        $Process = Start-Process -FilePath $NpmCmd -ArgumentList $Arguments -NoNewWindow -PassThru `
+            -RedirectStandardOutput $StdoutLog -RedirectStandardError $StderrLog
+        $shownOut = 0
+        $shownErr = 0
         while (-not $Process.HasExited) {
-            Start-Sleep -Seconds 5
+            Start-Sleep -Seconds 2
             $Process.Refresh()
+            Show-NewLogLines -Path $StdoutLog -Shown ([ref]$shownOut) -Color DarkGray
+            Show-NewLogLines -Path $StderrLog -Shown ([ref]$shownErr) -Color Yellow
+
             $Elapsed = (Get-Date) - $Started
-            if ([int]$Elapsed.TotalSeconds -gt 600) {
+            if ([int]$Elapsed.TotalSeconds -gt 480) {
                 try { Stop-Process -Id $Process.Id -Force -ErrorAction SilentlyContinue } catch { }
-                throw "npm install timed out after 10 minutes. Cached downloads are kept at $NpmCache for the next retry."
-            }
-            if (([int]$Elapsed.TotalSeconds % 30) -lt 5) {
-                Write-Host ("Still installing DSH... {0:n0}s elapsed; cache: {1}" -f $Elapsed.TotalSeconds, $NpmCache) -ForegroundColor DarkGray
+                Write-Host "`n--- npm stdout tail ---" -ForegroundColor Yellow
+                if (Test-Path $StdoutLog) { Get-Content $StdoutLog -Tail 120 | Out-Host }
+                Write-Host "`n--- npm stderr tail ---" -ForegroundColor Yellow
+                if (Test-Path $StderrLog) { Get-Content $StderrLog -Tail 120 | Out-Host }
+                throw "npm install timed out after 8 minutes. Cached downloads were kept at $NpmCache. Logs: $StdoutLog ; $StderrLog"
             }
         }
-        if ($Process.ExitCode -ne 0) { throw "npm install @deepseek-ai/dsh@$DshVersion failed with exit code $($Process.ExitCode)" }
+        Show-NewLogLines -Path $StdoutLog -Shown ([ref]$shownOut) -Color DarkGray
+        Show-NewLogLines -Path $StderrLog -Shown ([ref]$shownErr) -Color Yellow
+        if ($Process.ExitCode -ne 0) {
+            Write-Host "`n--- npm stdout tail ---" -ForegroundColor Yellow
+            if (Test-Path $StdoutLog) { Get-Content $StdoutLog -Tail 120 | Out-Host }
+            Write-Host "`n--- npm stderr tail ---" -ForegroundColor Yellow
+            if (Test-Path $StderrLog) { Get-Content $StderrLog -Tail 120 | Out-Host }
+            throw "npm install @deepseek-ai/dsh@$DshVersion failed with exit code $($Process.ExitCode). Logs: $StdoutLog ; $StderrLog"
+        }
+        Write-Host ("DeepSeek Harness dependencies installed in {0:n1}s." -f ((Get-Date) - $Started).TotalSeconds) -ForegroundColor Green
     }
     finally { $env:PATH = $OldPath }
 }
