@@ -2,6 +2,7 @@
 #include <wincred.h>
 #include <windows.h>
 #include <algorithm>
+#include <cwctype>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -198,7 +199,7 @@ HarnessSettingsBridgeState PrepareHarnessSettingsBridge() {
 
     const fs::path settingsPath = root / L"model-settings.json";
     std::ifstream stream(settingsPath, std::ios::binary);
-    if (!stream) return state; // Harness may still run with its own defaults when TuringDesk is unconfigured.
+    if (!stream) return state;
 
     const std::string json((std::istreambuf_iterator<char>(stream)), std::istreambuf_iterator<char>());
     state.providerId = Utf8ToWide(ExtractJsonString(json, "\"ProviderId\""));
