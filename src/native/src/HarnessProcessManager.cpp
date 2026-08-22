@@ -94,19 +94,21 @@ std::wstring BuildDirectDshCommand(const std::wstring& nodePath, const std::wstr
 }
 
 std::wstring BuildDirectNpxCommand(const std::wstring& nodePath, const std::wstring& npxCli) {
-    // The official Windows first run can spend several minutes resolving and
-    // populating npm's cache before port 3080 exists. Keep npm's HTTP/timing
-    // diagnostics visible in harness.log instead of making that work look frozen.
-    return Quote(nodePath) + L" " + Quote(npxCli) + L" --yes --loglevel=http --timing " +
+    // Keep DeepSeek's official README flow while making npm's Windows network
+    // path deterministic. Chromium performs aggressive IPv4/IPv6 fallback;
+    // Node can otherwise spend a long time on a poor IPv6 route even when the
+    // same registry opens instantly in a browser.
+    return Quote(nodePath) + L" --dns-result-order=ipv4first " + Quote(npxCli) +
+           L" --yes --registry=https://registry.npmjs.org/ --prefer-offline" +
+           L" --fetch-retries=4 --fetch-retry-factor=2" +
+           L" --fetch-retry-mintimeout=1000 --fetch-retry-maxtimeout=15000" +
+           L" --fetch-timeout=60000 --no-audit --no-fund --loglevel=http --timing " +
            std::wstring(kHarnessPackage) + L" " + kHarnessArgs;
 }
 
 LaunchSpec ResolveLaunchSpec() {
     std::wstring node = ResolvePath(L"node.exe");
 
-    // If the user already installed the official package globally, execute the
-    // published dsh lib/bin.js directly with the system Node runtime. This avoids
-    // an extra cmd.exe/dsh.cmd wrapper while running exactly the upstream package.
     const std::wstring dshCmd = ResolvePath(L"dsh.cmd");
     if (!node.empty() && !dshCmd.empty()) {
         const fs::path prefix = fs::path(dshCmd).parent_path();
@@ -116,9 +118,6 @@ LaunchSpec ResolveLaunchSpec() {
         }
     }
 
-    // Default official README path: npx @deepseek-ai/dsh web. Run npm's actual
-    // npx-cli.js with node.exe directly so Win32 process lifetime and redirected
-    // stdout/stderr are deterministic and do not depend on .cmd quoting semantics.
     const std::wstring npxCmd = ResolvePath(L"npx.cmd");
     if (!npxCmd.empty()) {
         const fs::path nodeRoot = fs::path(npxCmd).parent_path();
@@ -249,10 +248,7 @@ struct HarnessProcessManager::Impl {
 };
 
 HarnessProcessManager::HarnessProcessManager() : impl_(std::make_unique<Impl>()) {}
-
-HarnessProcessManager::~HarnessProcessManager() {
-    Stop();
-}
+HarnessProcessManager::~HarnessProcessManager() { Stop(); }
 
 bool HarnessProcessManager::Start() {
     if (Running() || ServiceReady()) return true;
@@ -340,8 +336,7 @@ bool HarnessProcessManager::Start() {
         WriteLogLine(logHandle, L"[TuringDesk] ERROR: CreateProcessW failed: " + Win32ErrorText(createError));
         FlushFileBuffers(logHandle);
         CloseHandle(logHandle);
-        impl_->lastError = L"无法启动 DeepSeek Harness：" + Win32ErrorText(createError) +
-                           L" · 日志：" + logPath.wstring();
+        impl_->lastError = L"无法启动 DeepSeek Harness：" + Win32ErrorText(createError) + L" · 日志：" + logPath.wstring();
         CloseHandle(job);
         return false;
     }
@@ -350,8 +345,7 @@ bool HarnessProcessManager::Start() {
         WriteLogLine(logHandle, L"[TuringDesk] ERROR: AssignProcessToJobObject failed: " + Win32ErrorText(GetLastError()));
         FlushFileBuffers(logHandle);
         CloseHandle(logHandle);
-        impl_->lastError = L"无法接管 Harness 进程树：" + Win32ErrorText(GetLastError()) +
-                           L" · 日志：" + logPath.wstring();
+        impl_->lastError = L"无法接管 Harness 进程树：" + Win32ErrorText(GetLastError()) + L" · 日志：" + logPath.wstring();
         TerminateProcess(processInfo.hProcess, 1);
         CloseHandle(processInfo.hThread);
         CloseHandle(processInfo.hProcess);
@@ -363,8 +357,7 @@ bool HarnessProcessManager::Start() {
         WriteLogLine(logHandle, L"[TuringDesk] ERROR: ResumeThread failed: " + Win32ErrorText(GetLastError()));
         FlushFileBuffers(logHandle);
         CloseHandle(logHandle);
-        impl_->lastError = L"无法恢复 Harness 进程：" + Win32ErrorText(GetLastError()) +
-                           L" · 日志：" + logPath.wstring();
+        impl_->lastError = L"无法恢复 Harness 进程：" + Win32ErrorText(GetLastError()) + L" · 日志：" + logPath.wstring();
         TerminateJobObject(job, 1);
         CloseHandle(processInfo.hThread);
         CloseHandle(processInfo.hProcess);
@@ -382,10 +375,7 @@ bool HarnessProcessManager::Start() {
     return true;
 }
 
-void HarnessProcessManager::Stop() {
-    if (!impl_) return;
-    impl_->CloseHandles();
-}
+void HarnessProcessManager::Stop() { if (impl_) impl_->CloseHandles(); }
 
 bool HarnessProcessManager::Running() const {
     if (!impl_ || !impl_->process) return false;
@@ -400,9 +390,7 @@ DWORD HarnessProcessManager::ExitCode() const {
     return exitCode;
 }
 
-bool HarnessProcessManager::ServiceReady() const {
-    return ProbeHarnessHttp();
-}
+bool HarnessProcessManager::ServiceReady() const { return ProbeHarnessHttp(); }
 
 bool HarnessProcessManager::WaitUntilReady(DWORD timeoutMs) {
     if (ServiceReady()) {
@@ -412,8 +400,7 @@ bool HarnessProcessManager::WaitUntilReady(DWORD timeoutMs) {
     if (!Running()) {
         const DWORD exitCode = ExitCode();
         if (exitCode != STILL_ACTIVE) {
-            impl_->lastError = L"Harness 在 Web UI 就绪前退出，ExitCode=" + std::to_wstring(exitCode) +
-                               L" · 日志：" + LogPath();
+            impl_->lastError = L"Harness 在 Web UI 就绪前退出，ExitCode=" + std::to_wstring(exitCode) + L" · 日志：" + LogPath();
         } else if (impl_->lastError.empty()) {
             impl_->lastError = L"Harness 未运行";
         }
@@ -428,8 +415,7 @@ bool HarnessProcessManager::WaitUntilReady(DWORD timeoutMs) {
         }
         if (!Running()) {
             const DWORD exitCode = ExitCode();
-            impl_->lastError = L"Harness 在 Web UI 就绪前退出，ExitCode=" + std::to_wstring(exitCode) +
-                               L" · 日志：" + LogPath();
+            impl_->lastError = L"Harness 在 Web UI 就绪前退出，ExitCode=" + std::to_wstring(exitCode) + L" · 日志：" + LogPath();
             return false;
         }
         Sleep(100);
@@ -439,14 +425,8 @@ bool HarnessProcessManager::WaitUntilReady(DWORD timeoutMs) {
     return false;
 }
 
-const std::wstring& HarnessProcessManager::LastError() const {
-    return impl_->lastError;
-}
-
-std::wstring HarnessProcessManager::DefaultUrl() {
-    return L"http://localhost:3080";
-}
-
+const std::wstring& HarnessProcessManager::LastError() const { return impl_->lastError; }
+std::wstring HarnessProcessManager::DefaultUrl() { return L"http://localhost:3080"; }
 std::wstring HarnessProcessManager::LogPath() {
     const fs::path path = HarnessLogPathFs();
     return path.empty() ? std::wstring{} : path.wstring();
@@ -455,7 +435,7 @@ std::wstring HarnessProcessManager::LogPath() {
 std::wstring HarnessProcessManager::BuildLaunchCommand() {
     const LaunchSpec resolved = ResolveLaunchSpec();
     if (resolved.Valid()) return resolved.commandLine;
-    return L"node.exe npx-cli.js --yes --loglevel=http --timing @deepseek-ai/dsh web --no-open --host 127.0.0.1 --port 3080";
+    return L"node.exe --dns-result-order=ipv4first npx-cli.js --yes --registry=https://registry.npmjs.org/ --prefer-offline --fetch-retries=4 --fetch-timeout=60000 --no-audit --no-fund --loglevel=http --timing @deepseek-ai/dsh web --no-open --host 127.0.0.1 --port 3080";
 }
 
 bool HarnessProcessManager::SelfTest() {
@@ -475,6 +455,9 @@ bool HarnessProcessManager::SelfTest() {
     return DefaultUrl() == L"http://localhost:3080" &&
            npxCommand.find(L"npx-cli.js") != std::wstring::npos &&
            npxCommand.find(kHarnessPackage) != std::wstring::npos &&
+           npxCommand.find(L"--dns-result-order=ipv4first") != std::wstring::npos &&
+           npxCommand.find(L"--registry=https://registry.npmjs.org/") != std::wstring::npos &&
+           npxCommand.find(L"--prefer-offline") != std::wstring::npos &&
            npxCommand.find(L"--loglevel=http") != std::wstring::npos &&
            npxCommand.find(L"--timing") != std::wstring::npos &&
            npxCommand.find(L"--no-open") != std::wstring::npos &&
