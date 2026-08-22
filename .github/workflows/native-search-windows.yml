@@ -15,6 +15,11 @@ on:
         required: false
         default: false
         type: boolean
+      build_x64:
+        description: Also build and validate x64 (off by default during ARM64 development)
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: write
@@ -31,6 +36,7 @@ env:
 
 jobs:
   build-x64:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.build_x64 }}
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v5
@@ -62,7 +68,7 @@ jobs:
           Copy-Item "build/src/native/Release/TuringDeskWallpaper.exe" (Join-Path $package "TuringDeskWallpaper.exe") -Force
           Copy-Item "build/src/native/Release/TuringDeskHarness.exe" (Join-Path $package "TuringDeskHarness.exe") -Force
       - name: Package full x64 runtime
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.full_package }}
+        if: ${{ inputs.full_package }}
         shell: pwsh
         run: |
           $package = "build/package"
@@ -104,7 +110,7 @@ jobs:
           $dshBin = Join-Path $dshTarget "node_modules\@deepseek-ai\dsh\lib\bin.js"
           if (-not (Test-Path $dshBin -PathType Leaf)) { throw "Bundled Harness entrypoint missing: $dshBin" }
       - name: Verify full packaged x64 runtime and boot Harness
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.full_package }}
+        if: ${{ inputs.full_package }}
         shell: pwsh
         run: |
           $package = "build/package"
