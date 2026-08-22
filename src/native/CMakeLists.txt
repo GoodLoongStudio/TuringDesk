@@ -46,6 +46,7 @@ add_executable(TuringDesk WIN32
 
 add_executable(TuringDeskWallpaper WIN32
     src/WallpaperEngine.cpp
+    src/WallpaperMonitorLayout.cpp
     src/VideoWallpaperPlayer.cpp
 )
 
