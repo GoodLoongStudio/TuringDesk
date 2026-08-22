@@ -49,10 +49,12 @@ private:
     void RemoveTray();
     void HandleTray(UINT mouseMessage);
     void ExitApplication();
+    void UpdateFocusVisual();
 
     HINSTANCE instance_{};
     HWND hwnd_{};
     HWND edit_{};
+    HWND searchIcon_{};
     HWND settingsButton_{};
     HWND wallpaperButton_{};
     WNDPROC oldEditProc_{};
@@ -68,6 +70,7 @@ private:
     bool expanded_{false};
     bool exiting_{false};
     bool positionLoaded_{false};
+    bool editFocused_{false};
     int savedX_{0};
     int savedY_{0};
     std::wstring currentQuery_;
@@ -77,13 +80,18 @@ private:
     UINT taskbarCreated_{0};
     HBRUSH editBrush_{};
     HBRUSH buttonBrush_{};
+    HBRUSH staticBrush_{};
     HFONT uiFont_{};
+    HFONT smallFont_{};
+    HFONT iconFont_{};
 
     Microsoft::WRL::ComPtr<ID2D1Factory> d2dFactory_;
     Microsoft::WRL::ComPtr<ID2D1HwndRenderTarget> renderTarget_;
     Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> textBrush_;
     Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> secondaryBrush_;
     Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> selectionBrush_;
+    Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> borderBrush_;
+    Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> accentBrush_;
     Microsoft::WRL::ComPtr<IDWriteFactory> writeFactory_;
     Microsoft::WRL::ComPtr<IDWriteTextFormat> titleFormat_;
     Microsoft::WRL::ComPtr<IDWriteTextFormat> subtitleFormat_;
