@@ -1,4 +1,5 @@
 #include "turingdesk/AppSearch.h"
+#include "turingdesk/DirectToolRuntime.h"
 #include "turingdesk/EverythingSearch.h"
 #include "turingdesk/L3Agent.h"
 #include "turingdesk/SearchWindow.h"
@@ -15,6 +16,8 @@ bool RunNativeSelfTest() {
 
     turingdesk::EverythingSearch files;
     if (!files.SelfTest()) return false;
+
+    if (!turingdesk::DirectToolRuntime::SelfTest()) return false;
 
     turingdesk::L3Agent l3;
     std::wstring reply;

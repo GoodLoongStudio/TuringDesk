@@ -4,7 +4,7 @@ add_executable(TuringDesk WIN32
     src/ModelSettingsWindow.cpp
     src/L3CliWindow.cpp
     src/CodexRuntime.cpp
-    src/DirectAgentRuntime.cpp
+    src/DirectAgentRuntimeV2.cpp
     src/NativeTools.cpp
     src/AppSearch.cpp
     src/EverythingSearch.cpp

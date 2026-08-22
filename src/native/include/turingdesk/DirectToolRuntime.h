@@ -18,6 +18,7 @@ public:
     DirectToolRuntime() = default;
     ~DirectToolRuntime();
 
+    static bool SelfTest();
     bool CanHandle(const L3Agent& agent) const;
     std::wstring StatusText(const L3Agent& agent) const;
     void AskAsync(const L3Agent& agent, std::wstring prompt, DeltaCallback onDelta, DoneCallback onDone);
