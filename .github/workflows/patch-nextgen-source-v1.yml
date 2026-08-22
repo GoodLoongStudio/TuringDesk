@@ -1,0 +1,126 @@
+name: Apply Nextgen Source Patch v1
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/patch-nextgen-source-v1.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Patch Codex-first L3 and goz labels
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          function Replace-Exact([string]$Path, [string]$Old, [string]$New) {
+            $text = [IO.File]::ReadAllText((Resolve-Path $Path))
+            if (-not $text.Contains($Old)) { throw "Expected source block not found in $Path" }
+            [IO.File]::WriteAllText((Resolve-Path $Path), $text.Replace($Old, $New), [Text.UTF8Encoding]::new($false))
+          }
+
+          $oldRoute = @'
+ActiveRuntime ChooseRuntime(CliState& state) {
+    // L3 must remain TuringDesk-owned and lightweight. Prefer the native, registered
+    // tool runtime and never auto-promote ordinary L3 turns into the Codex sidecar.
+    if (state.directTools->CanHandle(*state.agent)) return ActiveRuntime::DirectTools;
+    return ActiveRuntime::DirectModel;
+}
+'@
+          $newRoute = @'
+ActiveRuntime ChooseRuntime(CliState& state) {
+    // Codex CLI is the preferred L3 agent runtime. Native/direct runtimes remain
+    // compatibility fallbacks only for providers that do not yet expose the
+    // Responses wire protocol required by Codex.
+    if (state.codex->CanHandle(*state.agent)) return ActiveRuntime::Codex;
+    if (state.directTools->CanHandle(*state.agent)) return ActiveRuntime::DirectTools;
+    return ActiveRuntime::DirectModel;
+}
+'@
+          Replace-Exact 'src/native/src/L3CliWindow.cpp' $oldRoute $newRoute
+          Replace-Exact 'src/native/src/L3CliWindow.cpp' 'Responses 可直连（L3 不自动使用）' 'Responses 可直连（默认使用 Codex CLI）'
+          Replace-Exact 'src/native/src/L3CliWindow.cpp' 'TuringDesk L3 CLI' '图灵智能桌面 · AI Agent'
+
+          $oldBinary = @'
+    const auto bundled = ModuleDirectory() / L"Codex" / L"codex-app-server.exe";
+    std::error_code ec;
+    if (fs::exists(bundled, ec)) return bundled.wstring();
+
+    auto found = SearchExecutable(L"codex-app-server.exe");
+    if (!found.empty()) return found;
+
+    found = SearchExecutable(L"codex.exe");
+    if (!found.empty()) {
+        isCliBinary = true;
+        return found;
+    }
+'@
+          $newBinary = @'
+    std::error_code ec;
+    const auto bundledCli = ModuleDirectory() / L"Codex" / L"codex.exe";
+    if (fs::exists(bundledCli, ec)) {
+        isCliBinary = true;
+        return bundledCli.wstring();
+    }
+
+    const auto bundledServer = ModuleDirectory() / L"Codex" / L"codex-app-server.exe";
+    if (fs::exists(bundledServer, ec)) return bundledServer.wstring();
+
+    auto found = SearchExecutable(L"codex.exe");
+    if (!found.empty()) {
+        isCliBinary = true;
+        return found;
+    }
+
+    found = SearchExecutable(L"codex-app-server.exe");
+    if (!found.empty()) return found;
+'@
+          Replace-Exact 'src/native/src/CodexRuntime.cpp' $oldBinary $newBinary
+          Replace-Exact 'src/native/src/CodexRuntime.cpp' 'sandbox_mode = \"read-only\"' 'sandbox_mode = \"workspace-write\"'
+          Replace-Exact 'src/native/src/CodexRuntime.cpp' '未找到 codex-app-server.exe' '未找到 Codex CLI / app-server'
+          Replace-Exact 'src/native/src/CodexRuntime.cpp' '"title\":\"TuringDesk L3\"' '"title\":\"Turing Intelligent Desktop\"'
+
+          $oldIdentity = @'
+    const std::wstring developerInstructions =
+        L"You are TuringDesk Native Agent. Use the provided native dynamic tools when the user asks to create, open, or inspect supported desktop artifacts. "
+        L"Do not claim you cannot access the desktop when a matching tool exists. Never report an action as successful until its tool result reports success. "
+        L"Prefer native tools over shell commands for supported tasks.";
+'@
+          $newIdentity = @'
+    const std::wstring developerInstructions =
+        L"You are 图灵智能桌面 (Turing Intelligent Desktop), the AI agent built into TuringDesk. When the user asks who you are, identify yourself as 图灵智能桌面 / Turing Intelligent Desktop, not as a raw Codex CLI shell. "
+        L"Use the provided TuringDesk native dynamic tools when the user asks to create, open, inspect, search, or operate supported desktop artifacts and capabilities. "
+        L"Never report an action as successful until its tool result reports success. Prefer TuringDesk native tools over shell commands for supported desktop operations.";
+'@
+          Replace-Exact 'src/native/src/CodexRuntime.cpp' $oldIdentity $newIdentity
+
+          Replace-Exact 'src/native/src/SearchWindow.cpp' 'Everything 索引服务暂不可用。' 'goz 文件索引服务暂不可用。'
+          Replace-Exact 'src/native/src/SearchWindow.cpp' 'Everything 已连接，但本次 IPC 查询没有成功。' 'goz 已连接，但本次查询没有成功。'
+
+          Remove-Item '.github/workflows/patch-nextgen-source-v1.yml' -Force
+
+      - name: Commit source migration
+        shell: pwsh
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A src/native .github/workflows/patch-nextgen-source-v1.yml
+          git commit -m "agent: prefer bundled Codex CLI and use TuringDesk identity"
+          for ($i = 1; $i -le 5; $i++) {
+            git pull --rebase origin main
+            if ($LASTEXITCODE -ne 0) { Start-Sleep -Seconds 2; continue }
+            git push origin HEAD:main
+            if ($LASTEXITCODE -eq 0) { exit 0 }
+            Start-Sleep -Seconds 2
+          }
+          throw 'Unable to push Codex-first source migration'
