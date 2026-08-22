@@ -40,6 +40,7 @@ add_executable(TuringDesk WIN32
     src/CodexRuntime.cpp
     src/DirectAgentRuntimeV2.cpp
     src/NativeTools.cpp
+    src/WallpaperPackage.cpp
     src/AppSearch.cpp
     src/EverythingSearch.cpp
     src/L3Agent.cpp
@@ -66,6 +67,7 @@ add_executable(TuringDeskWallpaper WIN32
     src/WallpaperLibrary.cpp
     src/WallpaperLibraryWeb.cpp
     src/WallpaperLibraryWindow.cpp
+    src/WallpaperPackage.cpp
     src/VideoWallpaperPlayer.cpp
     src/VideoWallpaperSet.cpp
 )
