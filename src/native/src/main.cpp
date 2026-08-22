@@ -1,6 +1,6 @@
 #include "turingdesk/AppSearch.h"
 #include "turingdesk/DirectToolRuntime.h"
-#include "turingdesk/EverythingSearch.h"
+#include "turingdesk/GozSearch.h"
 #include "turingdesk/HarnessProcessManager.h"
 #include "turingdesk/L3Agent.h"
 #include "turingdesk/SearchWindow.h"
@@ -21,7 +21,7 @@ bool RunNativeSelfTest() {
     const auto appResults = apps.Query(L"Notepad", 5);
     if (apps.Count() < 5 || appResults.empty()) return false;
 
-    turingdesk::EverythingSearch files;
+    turingdesk::GozSearch files;
     if (!files.SelfTest()) return false;
 
     if (!turingdesk::DirectToolRuntime::SelfTest()) return false;
