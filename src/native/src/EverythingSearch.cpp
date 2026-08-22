@@ -142,13 +142,15 @@ HWND EverythingSearch::FindEverythingWindow() {
 
 bool EverythingSearch::Available() const {
     if (FindEverythingWindow()) return true;
-    if (!StartBundledEverything()) return false;
 
-    for (int i = 0; i < 30; ++i) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
-        if (FindEverythingWindow()) return true;
-    }
-    return false;
+    // Availability is queried from the search window UI thread. Starting the bundled
+    // Everything instance is asynchronous, so never wait here for its IPC window to
+    // appear: a cold start must not freeze typing for up to several seconds. The
+    // throttled launcher below is safe to call on subsequent queries; as soon as the
+    // Everything notification window exists, the next availability/query pass will
+    // automatically recover to the ready state.
+    StartBundledEverything();
+    return FindEverythingWindow() != nullptr;
 }
 
 bool EverythingSearch::Query(HWND replyWindow, const std::wstring& queryText, DWORD maxResults) const {
