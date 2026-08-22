@@ -30,6 +30,7 @@ add_executable(TuringDesk WIN32
     src/L3Agent.cpp
     src/L3PersistenceSelfTest.cpp
     src/HarnessProcessManager.cpp
+    src/HarnessSettingsBridge.cpp
 )
 
 add_executable(TuringDeskWallpaper WIN32
@@ -64,6 +65,7 @@ set_source_files_properties(src/WallpaperEngine.cpp PROPERTIES
 add_executable(TuringDeskHarness WIN32
     src/HarnessHost.cpp
     src/HarnessProcessManager.cpp
+    src/HarnessSettingsBridge.cpp
     src/HarnessBundledRuntimeBootstrap.cpp
 )
 
@@ -133,6 +135,7 @@ target_link_libraries(TuringDeskHarness PRIVATE
     gdi32
     shell32
     ole32
+    advapi32
     winhttp
     shlwapi
     version
