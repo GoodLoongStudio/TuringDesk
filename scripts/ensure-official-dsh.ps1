@@ -49,6 +49,33 @@ function Ensure-NpmGlobalBinOnUserPath {
     }
 }
 
+function Invoke-OfficialDshInstall([string]$NpmPath, [string]$CachePath, [switch]$PreferOnline) {
+    $mode = if ($PreferOnline) { "prefer-online retry" } else { "prefer-offline cache-first" }
+    Write-Host "npm mode: $mode" -ForegroundColor DarkGray
+    Write-Host "npm registry: https://registry.npmjs.org/" -ForegroundColor DarkGray
+    Write-Host "npm cache: $CachePath" -ForegroundColor DarkGray
+
+    $args = @(
+        "install", "-g", $Package,
+        "--registry=https://registry.npmjs.org/",
+        "--cache=$CachePath",
+        $(if ($PreferOnline) { "--prefer-online" } else { "--prefer-offline" }),
+        "--fetch-retries=4",
+        "--fetch-retry-factor=2",
+        "--fetch-retry-mintimeout=1000",
+        "--fetch-retry-maxtimeout=15000",
+        "--fetch-timeout=60000",
+        "--foreground-scripts",
+        "--no-audit",
+        "--no-fund",
+        "--loglevel=http",
+        "--timing"
+    )
+
+    & $NpmPath @args
+    return $LASTEXITCODE
+}
+
 $dsh = Resolve-Dsh
 if ($dsh) {
     Write-Host "Official DeepSeek Harness already installed: $dsh" -ForegroundColor Green
@@ -66,16 +93,25 @@ Write-Host "Official npm CLI package: $Package" -ForegroundColor DarkGray
 Write-Host "Official command after installation: dsh" -ForegroundColor DarkGray
 Write-Host "This is a one-time installation of the official upstream package. TuringDesk will not create a private HarnessRuntime." -ForegroundColor DarkGray
 
+$npmCache = Join-Path $env:LOCALAPPDATA "TuringDesk\RuntimeCache\npm-official"
+New-Item -ItemType Directory -Force -Path $npmCache | Out-Null
+
 # The upstream package currently has a large dependency tree. On a 4 GB Windows
-# machine npm can hit V8's ~2 GB default heap while resolving it, so give the
-# installer a bounded 3 GB ceiling. This affects only this one installation
-# process; the installed Harness does not reserve 3 GB at runtime.
+# machine npm can hit V8's ~2 GB default heap while resolving it, so give this
+# one installation process a bounded 3 GB ceiling. Downloaded package data is
+# persisted in npm-official and reused by retries and later installs.
 $oldNodeOptions = $env:NODE_OPTIONS
 try {
     $env:NODE_OPTIONS = "--max-old-space-size=3072"
-    & $npm.Source install -g $Package --prefer-offline --no-audit --no-fund --loglevel=notice
-    if ($LASTEXITCODE -ne 0) {
-        throw "Official DeepSeek Harness installation failed with exit code $LASTEXITCODE"
+
+    $exitCode = Invoke-OfficialDshInstall -NpmPath $npm.Source -CachePath $npmCache
+    if ($exitCode -ne 0) {
+        Write-Host "First npm attempt failed with exit code $exitCode. Retrying against the same official registry while reusing the cache..." -ForegroundColor Yellow
+        $exitCode = Invoke-OfficialDshInstall -NpmPath $npm.Source -CachePath $npmCache -PreferOnline
+    }
+
+    if ($exitCode -ne 0) {
+        throw "Official DeepSeek Harness installation failed with exit code $exitCode"
     }
 }
 finally {
