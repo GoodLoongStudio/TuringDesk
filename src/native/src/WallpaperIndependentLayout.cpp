@@ -1,9 +1,9 @@
 #include "turingdesk/WallpaperIndependentLayout.h"
+#include "turingdesk/WebWallpaperHost.h"
 
 #include <windows.h>
 
 #include <algorithm>
-#include <cwctype>
 #include <fstream>
 #include <system_error>
 
@@ -34,18 +34,10 @@ std::wstring SceneKeyForLibraryId(std::wstring_view id) {
     return L"aurora";
 }
 
-bool LooksLikeHttps(std::wstring_view value) noexcept {
-    constexpr std::wstring_view prefix = L"https://";
-    if (value.size() <= prefix.size()) return false;
-    for (std::size_t i = 0; i < prefix.size(); ++i) {
-        if (std::towlower(value[i]) != prefix[i]) return false;
-    }
-    return true;
-}
-
 bool SourceAvailable(const WallpaperLibraryItem& item) {
     if (item.kind == LibraryWallpaperKind::Scene) return true;
-    if (item.kind == LibraryWallpaperKind::Web && LooksLikeHttps(item.source.wstring())) return true;
+    if (item.kind == LibraryWallpaperKind::Web)
+        return WebWallpaperProcessSet::IsSupportedSource(item.source.wstring());
     std::error_code ec;
     return !item.source.empty() && fs::exists(item.source, ec) && fs::is_regular_file(item.source, ec);
 }
@@ -148,29 +140,34 @@ bool SelfTestIndependentWallpaperResolution() {
         out << "<html></html>";
     }
     const auto webItem = library.ImportFile(web, {}, &error);
+    const auto remoteWebItem = library.ImportWebUrl(L"https://example.com/wallpaper", L"Remote Web", &error);
 
     MonitorTopology topology;
-    topology.virtualBounds = {0, 0, 5760, 1080};
+    topology.virtualBounds = {0, 0, 7680, 1080};
     topology.primaryBounds = {0, 0, 1920, 1080};
     topology.monitors = {
         {nullptr, {0, 0, 1920, 1080}, true, 96, 96, L"A", L"monitor-a", L"Panel A"},
         {nullptr, {1920, 0, 3840, 1080}, false, 96, 96, L"B", L"monitor-b", L"Panel B"},
         {nullptr, {3840, 0, 5760, 1080}, false, 96, 96, L"C", L"monitor-c", L"Panel C"},
+        {nullptr, {5760, 0, 7680, 1080}, false, 96, 96, L"D", L"monitor-d", L"Panel D"},
     };
 
     ok = ok && assignments.Assign(topology.monitors[0], L"scene-neon", &error);
     ok = ok && assignments.Assign(topology.monitors[1], L"missing-item", &error);
     if (webItem) ok = ok && assignments.Assign(topology.monitors[2], webItem->id, &error);
+    if (remoteWebItem) ok = ok && assignments.Assign(topology.monitors[3], remoteWebItem->id, &error);
 
     GlobalWallpaperDescriptor fallback;
     fallback.kind = ResolvedWallpaperKind::Scene;
     fallback.sceneKey = L"aurora";
     const auto resolved = ResolveIndependentWallpapers(topology, assignments, library, fallback);
-    ok = ok && resolved.size() == 3;
-    if (resolved.size() == 3) {
+    ok = ok && resolved.size() == 4;
+    if (resolved.size() == 4) {
         ok = ok && !resolved[0].fallback && resolved[0].kind == ResolvedWallpaperKind::Scene && resolved[0].sceneKey == L"neon";
         ok = ok && resolved[1].fallback && resolved[1].sceneKey == L"aurora" && !resolved[1].fallbackReason.empty();
         ok = ok && !resolved[2].fallback && resolved[2].kind == ResolvedWallpaperKind::Web && !resolved[2].source.empty();
+        ok = ok && !resolved[3].fallback && resolved[3].kind == ResolvedWallpaperKind::Web &&
+             resolved[3].source.wstring() == L"https://example.com/wallpaper";
     }
     ok = ok && !IndependentLayoutHasVideo(resolved) && IndependentLayoutHasWeb(resolved);
 
