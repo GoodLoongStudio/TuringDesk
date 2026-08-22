@@ -10,6 +10,7 @@ $ArtifactName = "TuringDesk-Native-Search-ARM64"
 $Workflow = "native-search-windows.yml"
 $ExeName = "TuringDesk.exe"
 $WallpaperExeName = "TuringDeskWallpaper.exe"
+$HarnessExeName = "TuringDeskHarness.exe"
 $CodexRepo = "openai/codex"
 $CodexRelease = "rust-v0.146.0"
 $CodexAsset = "codex-app-server-aarch64-pc-windows-msvc.exe.zip"
@@ -34,16 +35,15 @@ function Stop-ProcessAtPath([string]$ProcessName, [string]$ExpectedPath) {
 function Stop-DeployedInstance {
     Step "Stopping previous TuringDesk processes"
 
-    foreach ($Process in @(Get-Process -Name "TuringDesk" -ErrorAction SilentlyContinue)) {
-        try { Stop-Process -Id $Process.Id -Force -ErrorAction SilentlyContinue } catch { }
-    }
-    foreach ($Process in @(Get-Process -Name "TuringDeskWallpaper" -ErrorAction SilentlyContinue)) {
-        try { Stop-Process -Id $Process.Id -Force -ErrorAction SilentlyContinue } catch { }
+    foreach ($ProcessName in @("TuringDesk", "TuringDeskWallpaper", "TuringDeskHarness")) {
+        foreach ($Process in @(Get-Process -Name $ProcessName -ErrorAction SilentlyContinue)) {
+            try { Stop-Process -Id $Process.Id -Force -ErrorAction SilentlyContinue } catch { }
+        }
     }
 
     Stop-ProcessAtPath -ProcessName "codex-app-server" -ExpectedPath (Join-Path $DeployDir "Codex\codex-app-server.exe")
     Stop-ProcessAtPath -ProcessName "Everything" -ExpectedPath (Join-Path $DeployDir "Everything\Everything.exe")
-    Start-Sleep -Milliseconds 250
+    Start-Sleep -Milliseconds 500
 }
 
 function Copy-WithRetry([string]$Source, [string]$Destination) {
@@ -74,6 +74,14 @@ function Test-WallpaperBinary([string]$Exe) {
     $Process = Start-Process -FilePath $Exe -ArgumentList "--self-test" -Wait -PassThru
     if ($Process.ExitCode -ne 0) {
         throw "Wallpaper self-test failed with exit code $($Process.ExitCode)"
+    }
+}
+
+function Test-HarnessBinary([string]$Exe) {
+    Step "Running Native Harness host self-test"
+    $Process = Start-Process -FilePath $Exe -ArgumentList "--self-test" -Wait -PassThru
+    if ($Process.ExitCode -ne 0) {
+        throw "Harness host self-test failed with exit code $($Process.ExitCode)"
     }
 }
 
@@ -171,6 +179,7 @@ function Download-Artifact([long]$RunId) {
 
     $SearchExe = Get-ChildItem -Path $Temp -Filter $ExeName -Recurse | Select-Object -First 1
     $WallpaperExe = Get-ChildItem -Path $Temp -Filter $WallpaperExeName -Recurse | Select-Object -First 1
+    $HarnessExe = Get-ChildItem -Path $Temp -Filter $HarnessExeName -Recurse | Select-Object -First 1
     if (-not $SearchExe) {
         Remove-Item $Temp -Recurse -Force -ErrorAction SilentlyContinue
         throw "$ExeName was not found in ARM64 artifact"
@@ -179,13 +188,53 @@ function Download-Artifact([long]$RunId) {
         Remove-Item $Temp -Recurse -Force -ErrorAction SilentlyContinue
         throw "$WallpaperExeName was not found in ARM64 artifact"
     }
+    if (-not $HarnessExe) {
+        Remove-Item $Temp -Recurse -Force -ErrorAction SilentlyContinue
+        throw "$HarnessExeName was not found in ARM64 artifact"
+    }
+
+    $Root = $SearchExe.Directory.FullName
+    $HarnessRuntime = Join-Path $Root "HarnessRuntime"
+    $BundledNode = Join-Path $HarnessRuntime "Node\node.exe"
+    $BundledDsh = Join-Path $HarnessRuntime "Dsh\node_modules\@deepseek-ai\dsh\lib\bin.js"
+    if (-not (Test-Path $BundledNode -PathType Leaf)) {
+        Remove-Item $Temp -Recurse -Force -ErrorAction SilentlyContinue
+        throw "Bundled Node runtime was not found in ARM64 artifact: $BundledNode"
+    }
+    if (-not (Test-Path $BundledDsh -PathType Leaf)) {
+        Remove-Item $Temp -Recurse -Force -ErrorAction SilentlyContinue
+        throw "Bundled DeepSeek Harness runtime was not found in ARM64 artifact: $BundledDsh"
+    }
 
     return @{
         Exe = $SearchExe.FullName
         WallpaperExe = $WallpaperExe.FullName
-        Root = $SearchExe.Directory.FullName
+        HarnessExe = $HarnessExe.FullName
+        HarnessRuntime = $HarnessRuntime
+        Root = $Root
         Temp = $Temp
     }
+}
+
+function Deploy-HarnessRuntime([string]$ArtifactRoot) {
+    $SourceDir = Join-Path $ArtifactRoot "HarnessRuntime"
+    $DestinationDir = Join-Path $DeployDir "HarnessRuntime"
+    if (-not (Test-Path $SourceDir -PathType Container)) {
+        throw "ARM64 artifact does not contain HarnessRuntime"
+    }
+
+    Step "Deploying bundled DeepSeek Harness runtime"
+    if (Test-Path $DestinationDir) {
+        Remove-Item $DestinationDir -Recurse -Force -ErrorAction Stop
+    }
+    New-Item -ItemType Directory -Force -Path $DestinationDir | Out-Null
+    Copy-Item (Join-Path $SourceDir "*") $DestinationDir -Recurse -Force
+
+    $Node = Join-Path $DestinationDir "Node\node.exe"
+    $Dsh = Join-Path $DestinationDir "Dsh\node_modules\@deepseek-ai\dsh\lib\bin.js"
+    if (-not (Test-Path $Node -PathType Leaf)) { throw "Deployed Node runtime is missing: $Node" }
+    if (-not (Test-Path $Dsh -PathType Leaf)) { throw "Deployed DeepSeek Harness entrypoint is missing: $Dsh" }
+    Write-Host "Bundled Harness runtime deployed." -ForegroundColor Green
 }
 
 function Deploy-BundledEverything([string]$ArtifactRoot) {
@@ -312,6 +361,7 @@ $Downloaded = Download-Artifact -RunId $RunId
 try {
     Test-Binary $Downloaded.Exe
     Test-WallpaperBinary $Downloaded.WallpaperExe
+    Test-HarnessBinary $Downloaded.HarnessExe
 
     Step "Deploying to $DeployDir"
     Stop-DeployedInstance
@@ -319,9 +369,14 @@ try {
 
     $DeployedExe = Join-Path $DeployDir $ExeName
     $DeployedWallpaper = Join-Path $DeployDir $WallpaperExeName
+    $DeployedHarness = Join-Path $DeployDir $HarnessExeName
     Copy-WithRetry -Source $Downloaded.Exe -Destination $DeployedExe
     Copy-WithRetry -Source $Downloaded.WallpaperExe -Destination $DeployedWallpaper
+    Copy-WithRetry -Source $Downloaded.HarnessExe -Destination $DeployedHarness
+    Deploy-HarnessRuntime -ArtifactRoot $Downloaded.Root
+
     Test-WallpaperBinary $DeployedWallpaper
+    Test-HarnessBinary $DeployedHarness
     Install-WallpaperShortcut $DeployedWallpaper
 
     $EverythingExe = Deploy-BundledEverything -ArtifactRoot $Downloaded.Root
@@ -341,7 +396,10 @@ try {
     Start-Process $DeployedExe
     Write-Host "`nDeployment complete. Press Alt+Space to open Search." -ForegroundColor Green
     Write-Host "Search 'TuringDesk 壁纸设置' or use the wallpaper tray icon to change scenes." -ForegroundColor Green
+    Write-Host "Open AI settings to launch the independent DeepSeek Harness (L4) window." -ForegroundColor Green
     Write-Host "Wallpaper settings: $DeployedWallpaper --settings" -ForegroundColor DarkGray
+    Write-Host "Harness host: $DeployedHarness" -ForegroundColor DarkGray
+    Write-Host "Harness log: $(Join-Path $env:LOCALAPPDATA 'TuringDesk\Logs\harness.log')" -ForegroundColor DarkGray
     Write-Host "Path: $DeployDir"
 }
 finally {
