@@ -1,4 +1,5 @@
 #include "turingdesk/HarnessProcessManager.h"
+#include "turingdesk/HarnessSettingsBridge.h"
 #include <winhttp.h>
 #include <algorithm>
 #include <filesystem>
@@ -87,14 +88,44 @@ std::wstring Quote(const std::wstring& value) {
     return L"\"" + value + L"\"";
 }
 
+class ScopedEnvironmentOverride {
+public:
+    ScopedEnvironmentOverride(const wchar_t* name, const std::wstring& value) : name_(name ? name : L"") {
+        if (name_.empty() || value.empty()) return;
+        const DWORD needed = GetEnvironmentVariableW(name_.c_str(), nullptr, 0);
+        if (needed > 0) {
+            previous_.resize(needed);
+            const DWORD written = GetEnvironmentVariableW(name_.c_str(), previous_.data(), needed);
+            if (written > 0 && written < needed) {
+                previous_.resize(written);
+                hadPrevious_ = true;
+            } else {
+                previous_.clear();
+            }
+        }
+        active_ = SetEnvironmentVariableW(name_.c_str(), value.c_str()) != FALSE;
+    }
+
+    ~ScopedEnvironmentOverride() {
+        if (!active_) return;
+        SetEnvironmentVariableW(name_.c_str(), hadPrevious_ ? previous_.c_str() : nullptr);
+    }
+
+    ScopedEnvironmentOverride(const ScopedEnvironmentOverride&) = delete;
+    ScopedEnvironmentOverride& operator=(const ScopedEnvironmentOverride&) = delete;
+
+private:
+    std::wstring name_;
+    std::wstring previous_;
+    bool hadPrevious_{};
+    bool active_{};
+};
+
 std::wstring BuildDirectDshCommand(const std::wstring& nodePath, const std::wstring& dshBin) {
     return Quote(nodePath) + L" " + Quote(dshBin) + L" " + kHarnessArgs;
 }
 
 LaunchSpec ResolveLaunchSpec() {
-    // Deliberately do not search PATH and do not invoke npm/npx. The only
-    // supported production runtime is the pinned repository RuntimeBundle
-    // deployed beside TuringDeskHarness.exe.
     const fs::path appDir = ExecutableDirectory();
     if (appDir.empty()) return {};
 
@@ -224,6 +255,11 @@ HarnessProcessManager::HarnessProcessManager() : impl_(std::make_unique<Impl>())
 HarnessProcessManager::~HarnessProcessManager() { Stop(); }
 
 bool HarnessProcessManager::Start() {
+    const HarnessSettingsBridgeState bridge = PrepareHarnessSettingsBridge();
+    if (!bridge.error.empty()) {
+        impl_->lastError = L"无法同步 TuringDesk AI 设置到 DeepSeek Harness：" + bridge.error;
+        return false;
+    }
     if (Running() || ServiceReady()) return true;
     Stop();
     impl_->lastError.clear();
@@ -272,6 +308,15 @@ bool HarnessProcessManager::Start() {
     WriteLogLine(logHandle, L"[TuringDesk] mode: " + launch.mode);
     WriteLogLine(logHandle, L"[TuringDesk] application: " + launch.application);
     WriteLogLine(logHandle, L"[TuringDesk] command: " + launch.commandLine);
+    if (bridge.configured) {
+        WriteLogLine(logHandle, L"[TuringDesk] shared model: provider=" + bridge.providerId + L" model=" + bridge.model);
+        WriteLogLine(logHandle, L"[TuringDesk] shared base URL: " + bridge.baseUrl);
+        WriteLogLine(logHandle, bridge.hasApiKey
+            ? L"[TuringDesk] shared API key: injected from Windows Credential Manager"
+            : L"[TuringDesk] shared API key: none (local/keyless provider expected)");
+    } else {
+        WriteLogLine(logHandle, L"[TuringDesk] shared model: TuringDesk AI settings are not configured yet");
+    }
     WriteLogLine(logHandle, L"[TuringDesk] external browser: disabled; UI is hosted by TuringDesk WebView2");
     WriteLogLine(logHandle, L"[TuringDesk] network bootstrap: disabled; using repository RuntimeBundle");
     WriteLogLine(logHandle, L"[TuringDesk] waiting for upstream stdout/stderr...");
@@ -302,9 +347,15 @@ bool HarnessProcessManager::Start() {
     PROCESS_INFORMATION processInfo{};
     const std::wstring home = UserHomeDirectory();
     const DWORD flags = CREATE_NO_WINDOW | CREATE_SUSPENDED;
-    const BOOL created = CreateProcessW(launch.application.c_str(), commandBuffer.data(), nullptr, nullptr, TRUE, flags,
-                                        nullptr, home.empty() ? nullptr : home.c_str(), &startup, &processInfo);
-    const DWORD createError = created ? ERROR_SUCCESS : GetLastError();
+    BOOL created = FALSE;
+    DWORD createError = ERROR_SUCCESS;
+    {
+        ScopedEnvironmentOverride dshHome(L"DSH_HOME", bridge.dshHome);
+        ScopedEnvironmentOverride apiKey(L"TURINGDESK_API_KEY", bridge.apiKey);
+        created = CreateProcessW(launch.application.c_str(), commandBuffer.data(), nullptr, nullptr, TRUE, flags,
+                                 nullptr, home.empty() ? nullptr : home.c_str(), &startup, &processInfo);
+        createError = created ? ERROR_SUCCESS : GetLastError();
+    }
     CloseHandle(inputHandle);
 
     if (!created) {
@@ -425,7 +476,8 @@ bool HarnessProcessManager::SelfTest() {
                command.find(L"--host ::") == std::wstring::npos;
     };
 
-    return DefaultUrl() == L"http://localhost:3080" &&
+    return HarnessSettingsBridgeSelfTest() &&
+           DefaultUrl() == L"http://localhost:3080" &&
            dshCommand.find(L"Runtime\\Node\\node.exe") != std::wstring::npos &&
            dshCommand.find(L"@deepseek-ai\\dsh\\lib\\bin.js") != std::wstring::npos &&
            dshCommand.find(L"npx") == std::wstring::npos &&
