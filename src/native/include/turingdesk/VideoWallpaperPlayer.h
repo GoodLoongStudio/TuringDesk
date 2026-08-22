@@ -26,7 +26,6 @@ public:
     void SetVolume(float volume);
     void SetPlaybackRate(float rate);
     bool Restart();
-    bool SeekRelativeSeconds(double seconds);
 
     SIZE NativeVideoSize() const;
     bool Active() const;
@@ -34,8 +33,6 @@ public:
     bool Muted() const;
     float Volume() const;
     float PlaybackRate() const;
-    double PositionSeconds() const;
-    double DurationSeconds() const;
     HRESULT LastError() const;
     std::wstring LastErrorText() const;
     std::wstring DiagnosticsText() const;
