@@ -4,6 +4,7 @@
 #include <chrono>
 #include <cwchar>
 #include <cwctype>
+#include <mutex>
 #include <system_error>
 #include <utility>
 
@@ -16,6 +17,7 @@ constexpr ULONGLONG kCacheRefreshMs = 1000;
 WallpaperApplicationRules g_cachedRules;
 ULONGLONG g_cacheTick{};
 bool g_cacheLoaded{};
+std::mutex g_cacheMutex;
 
 fs::path DefaultStoragePath() {
     wchar_t local[32768]{};
@@ -157,7 +159,6 @@ bool WallpaperApplicationRules::Load(std::wstring* error) {
     items_.clear();
     std::error_code ec;
     if (!fs::exists(storagePath_, ec)) return true;
-
     const int rawCount = static_cast<int>(GetPrivateProfileIntW(L"Rules", L"Count", 0, storagePath_.c_str()));
     const int count = std::clamp(rawCount, 0, 2048);
     for (int i = 0; i < count; ++i) {
@@ -374,6 +375,7 @@ bool WallpaperApplicationRules::SelfTest() {
 }
 
 ApplicationRuleMatch EvaluateCachedApplicationRules(HWND wallpaperWindow, HWND settingsWindow) {
+    const std::lock_guard<std::mutex> lock(g_cacheMutex);
     const ULONGLONG now = GetTickCount64();
     if (!g_cacheLoaded || now - g_cacheTick >= kCacheRefreshMs) {
         std::wstring ignored;
@@ -385,6 +387,7 @@ ApplicationRuleMatch EvaluateCachedApplicationRules(HWND wallpaperWindow, HWND s
 }
 
 void InvalidateApplicationRuleCache() noexcept {
+    const std::lock_guard<std::mutex> lock(g_cacheMutex);
     g_cacheLoaded = false;
     g_cacheTick = 0;
 }
