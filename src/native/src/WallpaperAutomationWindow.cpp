@@ -1,4 +1,5 @@
 #include "turingdesk/WallpaperAutomationWindow.h"
+#include "turingdesk/WallpaperApplicationRulesWindow.h"
 
 #include <algorithm>
 #include <array>
@@ -43,6 +44,7 @@ constexpr int kScheduleDeleteId = 6038;
 constexpr int kDayBaseId = 6040;
 constexpr int kCloseId = 6050;
 constexpr int kStatusId = 6051;
+constexpr int kApplicationRulesId = 6052;
 
 HMENU ControlId(int id) {
     return reinterpret_cast<HMENU>(static_cast<INT_PTR>(id));
@@ -107,6 +109,7 @@ struct WallpaperAutomationWindow::Impl {
     HWND targetCombo{};
     std::array<HWND, 7> dayChecks{};
     HWND status{};
+    WallpaperApplicationRulesWindow applicationRulesWindow;
 
     WallpaperAutomationStore* automation{};
     WallpaperLibrary* library{};
@@ -124,6 +127,7 @@ struct WallpaperAutomationWindow::Impl {
     std::vector<int> endMinutes;
 
     ~Impl() {
+        applicationRulesWindow.Close();
         if (window && IsWindow(window)) DestroyWindow(window);
     }
 
@@ -504,6 +508,7 @@ struct WallpaperAutomationWindow::Impl {
         RebuildProfiles();
         RebuildPlaylists();
         RebuildSchedules();
+        applicationRulesWindow.Refresh();
         std::wstring text = L"Profile " + std::to_wstring(automation->Profiles().size()) +
                             L" · Playlist " + std::to_wstring(automation->Playlists().size()) +
                             L" · Schedule " + std::to_wstring(automation->Schedules().size());
@@ -542,6 +547,7 @@ struct WallpaperAutomationWindow::Impl {
             else if (id == kScheduleTargetKindId && notification == CBN_SELCHANGE) self->RebuildTargets();
             else if (id == kScheduleSaveId && notification == BN_CLICKED) self->SaveSchedule();
             else if (id == kScheduleDeleteId && notification == BN_CLICKED) self->DeleteSchedule();
+            else if (id == kApplicationRulesId && notification == BN_CLICKED) self->applicationRulesWindow.Show(self->instance);
             else if (id == kCloseId && notification == BN_CLICKED) ShowWindow(hwnd, SW_HIDE);
             return 0;
         }
@@ -550,6 +556,7 @@ struct WallpaperAutomationWindow::Impl {
             return 0;
         }
         if (message == WM_DESTROY) {
+            self->applicationRulesWindow.Close();
             self->window = nullptr;
             self->enabledCheck = nullptr;
             self->profileCombo = nullptr;
@@ -616,6 +623,7 @@ struct WallpaperAutomationWindow::Impl {
         enabledCheck = controlFont(CreateWindowExW(0, L"BUTTON", L"启用 Playlist / Schedule 自动切换",
                                                    WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
                                                    220, 15, 300, 26, window, ControlId(kEnableId), instance, nullptr));
+        button(L"应用规则…", kApplicationRulesId, 540, 12, 110, 32);
 
         label(L"Profile · 保存完整桌面配置", 20, 58, 280, 24);
         profileCombo = combo(kProfileComboId, 20, 86, 250, 150);
