@@ -7,6 +7,7 @@
 #include "turingdesk/VideoWallpaperPlayer.h"
 #include "turingdesk/VideoWallpaperSet.h"
 #include "turingdesk/WallpaperMonitorLayout.h"
+#include "turingdesk/WallpaperScaling.h"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -39,10 +40,13 @@ constexpr int kToggleButtonId = 4104;
 constexpr int kCloseButtonId = 4105;
 constexpr int kPauseCheckId = 4106;
 constexpr int kLayoutComboId = 4107;
+constexpr int kScaleComboId = 4108;
+constexpr int kHorizontalComboId = 4109;
+constexpr int kVerticalComboId = 4110;
 constexpr int kTraySettings = 4201;
 constexpr int kTrayToggle = 4202;
 constexpr int kTrayExit = 4203;
-constexpr int kConfigVersion = 5;
+constexpr int kConfigVersion = 6;
 constexpr LONG_PTR kRaisedDesktopFlag = WS_EX_NOREDIRECTIONBITMAP;
 
 HMENU ControlId(int id) {
@@ -56,6 +60,9 @@ struct Config {
     std::wstring image;
     std::wstring video;
     std::wstring layout{L"span"};
+    std::wstring scale{L"cover"};
+    float focalX{0.5f};
+    float focalY{0.5f};
 };
 
 enum class MountMode {
@@ -88,6 +95,23 @@ bool ValidScene(const std::wstring& scene) {
     return scene == L"aurora" || scene == L"neon" || scene == L"grid" || scene == L"image" || scene == L"video";
 }
 
+std::wstring FloatText(float value) {
+    wchar_t text[32]{};
+    swprintf_s(text, L"%.3f", value);
+    return text;
+}
+
+float ReadProfileFloat(const std::wstring& path, const wchar_t* key, float fallback) {
+    wchar_t text[64]{};
+    const std::wstring fallbackText = FloatText(fallback);
+    GetPrivateProfileStringW(L"Wallpaper", key, fallbackText.c_str(), text,
+                             static_cast<DWORD>(std::size(text)), path.c_str());
+    wchar_t* end = nullptr;
+    const float value = std::wcstof(text, &end);
+    if (end == text) return fallback;
+    return turingdesk::wallpaper::ClampFocal(value);
+}
+
 void SaveConfig(const Config& config) {
     const auto path = ConfigPath().wstring();
     const auto version = std::to_wstring(kConfigVersion);
@@ -98,6 +122,11 @@ void SaveConfig(const Config& config) {
     WritePrivateProfileStringW(L"Wallpaper", L"Image", config.image.c_str(), path.c_str());
     WritePrivateProfileStringW(L"Wallpaper", L"Video", config.video.c_str(), path.c_str());
     WritePrivateProfileStringW(L"Wallpaper", L"Layout", config.layout.c_str(), path.c_str());
+    WritePrivateProfileStringW(L"Wallpaper", L"Scale", config.scale.c_str(), path.c_str());
+    const auto focalX = FloatText(config.focalX);
+    const auto focalY = FloatText(config.focalY);
+    WritePrivateProfileStringW(L"Wallpaper", L"FocalX", focalX.c_str(), path.c_str());
+    WritePrivateProfileStringW(L"Wallpaper", L"FocalY", focalY.c_str(), path.c_str());
 }
 
 Config LoadConfig() {
@@ -116,6 +145,10 @@ Config LoadConfig() {
     config.video = text;
     GetPrivateProfileStringW(L"Wallpaper", L"Layout", L"span", text, static_cast<DWORD>(std::size(text)), path.c_str());
     config.layout = turingdesk::wallpaper::LayoutModeKey(turingdesk::wallpaper::ParseLayoutMode(text));
+    GetPrivateProfileStringW(L"Wallpaper", L"Scale", L"cover", text, static_cast<DWORD>(std::size(text)), path.c_str());
+    config.scale = turingdesk::wallpaper::ScaleModeKey(turingdesk::wallpaper::ParseScaleMode(text));
+    config.focalX = ReadProfileFloat(path, L"FocalX", 0.5f);
+    config.focalY = ReadProfileFloat(path, L"FocalY", 0.5f);
 
     if (!ValidScene(config.scene)) config.scene = L"aurora";
     if (config.scene == L"image" && config.image.empty()) config.scene = L"aurora";
@@ -331,7 +364,7 @@ public:
 
         settings_ = CreateWindowExW(WS_EX_TOOLWINDOW, kSettingsClass, L"TuringDesk 壁纸",
                                     WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU,
-                                    CW_USEDEFAULT, CW_USEDEFAULT, 620, 440,
+                                    CW_USEDEFAULT, CW_USEDEFAULT, 700, 560,
                                     nullptr, nullptr, instance_, this);
         if (!settings_) return;
 
@@ -347,7 +380,7 @@ public:
         label(L"场景", 20, 62, 56, 24);
         sceneCombo_ = CreateWindowExW(0, L"COMBOBOX", L"",
                                       WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST,
-                                      92, 58, 300, 180, settings_, ControlId(kSceneComboId), instance_, nullptr);
+                                      104, 58, 330, 180, settings_, ControlId(kSceneComboId), instance_, nullptr);
         SendMessageW(sceneCombo_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Aurora Flow · 极光流动"));
         SendMessageW(sceneCombo_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Neon Flow · 霓虹网格"));
         SendMessageW(sceneCombo_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Quiet Grid · 静谧网格"));
@@ -356,32 +389,57 @@ public:
 
         imageButton_ = CreateWindowExW(0, L"BUTTON", L"选择图片 / 视频…",
                                        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
-                                       410, 58, 160, 30, settings_, ControlId(kImageButtonId), instance_, nullptr);
+                                       452, 58, 180, 30, settings_, ControlId(kImageButtonId), instance_, nullptr);
 
-        label(L"多屏布局", 20, 106, 70, 24);
+        label(L"多屏布局", 20, 106, 76, 24);
         layoutCombo_ = CreateWindowExW(0, L"COMBOBOX", L"",
                                        WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST,
-                                       92, 102, 300, 150, settings_, ControlId(kLayoutComboId), instance_, nullptr);
+                                       104, 102, 330, 150, settings_, ControlId(kLayoutComboId), instance_, nullptr);
         SendMessageW(layoutCombo_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"跨屏延展 · Span"));
         SendMessageW(layoutCombo_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"每屏独立填充 · Clone"));
         SendMessageW(layoutCombo_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"仅主显示器 · Primary"));
 
+        label(L"缩放", 20, 150, 76, 24);
+        scaleCombo_ = CreateWindowExW(0, L"COMBOBOX", L"",
+                                      WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST,
+                                      104, 146, 330, 180, settings_, ControlId(kScaleComboId), instance_, nullptr);
+        SendMessageW(scaleCombo_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"填充裁切 · Cover"));
+        SendMessageW(scaleCombo_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"适应 · Contain"));
+        SendMessageW(scaleCombo_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"拉伸 · Stretch"));
+        SendMessageW(scaleCombo_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"居中原尺寸 · Center"));
+        SendMessageW(scaleCombo_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"平铺 · Tile"));
+
+        label(L"焦点", 20, 194, 76, 24);
+        horizontalCombo_ = CreateWindowExW(0, L"COMBOBOX", L"",
+                                           WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST,
+                                           104, 190, 158, 120, settings_, ControlId(kHorizontalComboId), instance_, nullptr);
+        SendMessageW(horizontalCombo_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"左"));
+        SendMessageW(horizontalCombo_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"水平居中"));
+        SendMessageW(horizontalCombo_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"右"));
+        verticalCombo_ = CreateWindowExW(0, L"COMBOBOX", L"",
+                                         WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST,
+                                         276, 190, 158, 120, settings_, ControlId(kVerticalComboId), instance_, nullptr);
+        SendMessageW(verticalCombo_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"上"));
+        SendMessageW(verticalCombo_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"垂直居中"));
+        SendMessageW(verticalCombo_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"下"));
+
         pauseCheck_ = CreateWindowExW(0, L"BUTTON", L"全屏应用时暂停动态壁纸",
                                       WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
-                                      92, 144, 300, 26, settings_, ControlId(kPauseCheckId), instance_, nullptr);
-        status_ = label(L"", 20, 184, 550, 118);
+                                      104, 234, 330, 26, settings_, ControlId(kPauseCheckId), instance_, nullptr);
+        status_ = label(L"", 20, 276, 632, 136);
 
         applyButton_ = CreateWindowExW(0, L"BUTTON", L"应用到桌面",
                                        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON,
-                                       270, 332, 104, 34, settings_, ControlId(kApplyButtonId), instance_, nullptr);
+                                       348, 448, 112, 36, settings_, ControlId(kApplyButtonId), instance_, nullptr);
         toggleButton_ = CreateWindowExW(0, L"BUTTON", L"停止",
                                         WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
-                                        382, 332, 84, 34, settings_, ControlId(kToggleButtonId), instance_, nullptr);
+                                        470, 448, 84, 36, settings_, ControlId(kToggleButtonId), instance_, nullptr);
         closeButton_ = CreateWindowExW(0, L"BUTTON", L"关闭",
                                        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
-                                       474, 332, 84, 34, settings_, ControlId(kCloseButtonId), instance_, nullptr);
+                                       564, 448, 84, 36, settings_, ControlId(kCloseButtonId), instance_, nullptr);
 
-        for (HWND control : {sceneCombo_, imageButton_, layoutCombo_, pauseCheck_, applyButton_, toggleButton_, closeButton_}) {
+        for (HWND control : {sceneCombo_, imageButton_, layoutCombo_, scaleCombo_, horizontalCombo_, verticalCombo_,
+                             pauseCheck_, applyButton_, toggleButton_, closeButton_}) {
             SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
         }
         SendMessageW(status_, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
@@ -469,6 +527,9 @@ private:
             self->sceneCombo_ = nullptr;
             self->imageButton_ = nullptr;
             self->layoutCombo_ = nullptr;
+            self->scaleCombo_ = nullptr;
+            self->horizontalCombo_ = nullptr;
+            self->verticalCombo_ = nullptr;
             self->pauseCheck_ = nullptr;
             self->applyButton_ = nullptr;
             self->toggleButton_ = nullptr;
@@ -827,16 +888,35 @@ private:
 
     void DrawImage(const D2D1_SIZE_F& target) {
         FillRegionBackground(target, D2D1::ColorF(0.0f, 0.0f, 0.0f));
-        const auto source = imageBitmap_->GetSize();
-        const float scale = std::max(target.width / std::max(1.0f, source.width),
-                                     target.height / std::max(1.0f, source.height));
-        const float width = source.width * scale;
-        const float height = source.height * scale;
-        const D2D1_RECT_F dest = D2D1::RectF((target.width - width) * 0.5f,
-                                              (target.height - height) * 0.5f,
-                                              (target.width + width) * 0.5f,
-                                              (target.height + height) * 0.5f);
-        renderTarget_->DrawBitmap(imageBitmap_.Get(), dest, 1.0f, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR);
+        const auto sourceSize = imageBitmap_->GetSize();
+        const auto mode = turingdesk::wallpaper::ParseScaleMode(config_.scale);
+        const auto placement = turingdesk::wallpaper::ComputePlacement(
+            sourceSize.width, sourceSize.height, target.width, target.height,
+            mode, config_.focalX, config_.focalY);
+        const D2D1_RECT_F source = D2D1::RectF(
+            placement.source.left, placement.source.top, placement.source.right, placement.source.bottom);
+
+        if (placement.tiled) {
+            const float tileWidth = std::max(1.0f, placement.destination.right - placement.destination.left);
+            const float tileHeight = std::max(1.0f, placement.destination.bottom - placement.destination.top);
+            constexpr int kMaxTileDraws = 4096;
+            int draws = 0;
+            for (float y = 0.0f; y < target.height && draws < kMaxTileDraws; y += tileHeight) {
+                for (float x = 0.0f; x < target.width && draws < kMaxTileDraws; x += tileWidth) {
+                    const D2D1_RECT_F destination = D2D1::RectF(x, y, x + tileWidth, y + tileHeight);
+                    renderTarget_->DrawBitmap(imageBitmap_.Get(), destination, 1.0f,
+                                              D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, &source);
+                    ++draws;
+                }
+            }
+            return;
+        }
+
+        const D2D1_RECT_F destination = D2D1::RectF(
+            placement.destination.left, placement.destination.top,
+            placement.destination.right, placement.destination.bottom);
+        renderTarget_->DrawBitmap(imageBitmap_.Get(), destination, 1.0f,
+                                  D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, &source);
     }
 
     void DrawAurora(const D2D1_SIZE_F& size) {
@@ -906,6 +986,9 @@ private:
         lastMediaError_.clear();
         config_ = next;
         config_.layout = turingdesk::wallpaper::LayoutModeKey(turingdesk::wallpaper::ParseLayoutMode(config_.layout));
+        config_.scale = turingdesk::wallpaper::ScaleModeKey(turingdesk::wallpaper::ParseScaleMode(config_.scale));
+        config_.focalX = turingdesk::wallpaper::ClampFocal(config_.focalX);
+        config_.focalY = turingdesk::wallpaper::ClampFocal(config_.focalY);
         if (persist) SaveConfig(config_);
         pendingImage_.clear();
         pendingVideo_.clear();
@@ -934,7 +1017,9 @@ private:
 
         auto regions = turingdesk::wallpaper::DrawRegionsInHost(
             topology_, turingdesk::wallpaper::ParseLayoutMode(config_.layout));
-        if (!videoSet_.Start(host_, config_.video, regions)) {
+        if (!videoSet_.Start(host_, config_.video, regions,
+                             turingdesk::wallpaper::ParseScaleMode(config_.scale),
+                             config_.focalX, config_.focalY)) {
             lastMediaError_ = videoSet_.LastErrorText();
             if (lastMediaError_.empty()) lastMediaError_ = L"Media Foundation 无法启动该视频";
             return false;
@@ -972,10 +1057,17 @@ private:
     void ApplyFromSettings() {
         const int selected = static_cast<int>(SendMessageW(sceneCombo_, CB_GETCURSEL, 0, 0));
         const int selectedLayout = static_cast<int>(SendMessageW(layoutCombo_, CB_GETCURSEL, 0, 0));
+        const int selectedScale = static_cast<int>(SendMessageW(scaleCombo_, CB_GETCURSEL, 0, 0));
+        const int selectedHorizontal = static_cast<int>(SendMessageW(horizontalCombo_, CB_GETCURSEL, 0, 0));
+        const int selectedVertical = static_cast<int>(SendMessageW(verticalCombo_, CB_GETCURSEL, 0, 0));
         Config next = config_;
         next.enabled = true;
         next.pauseFullscreen = SendMessageW(pauseCheck_, BM_GETCHECK, 0, 0) == BST_CHECKED;
         next.layout = selectedLayout == 1 ? L"clone" : selectedLayout == 2 ? L"primary" : L"span";
+        next.scale = selectedScale == 1 ? L"contain" : selectedScale == 2 ? L"stretch" :
+                     selectedScale == 3 ? L"center" : selectedScale == 4 ? L"tile" : L"cover";
+        next.focalX = selectedHorizontal == 0 ? 0.0f : selectedHorizontal == 2 ? 1.0f : 0.5f;
+        next.focalY = selectedVertical == 0 ? 0.0f : selectedVertical == 2 ? 1.0f : 0.5f;
         next.image.clear();
         next.video.clear();
 
@@ -1014,6 +1106,17 @@ private:
         const int layoutSelected = layoutMode == turingdesk::wallpaper::LayoutMode::Clone ? 1 :
                                    layoutMode == turingdesk::wallpaper::LayoutMode::PrimaryOnly ? 2 : 0;
         if (layoutCombo_) SendMessageW(layoutCombo_, CB_SETCURSEL, layoutSelected, 0);
+
+        const auto scaleMode = turingdesk::wallpaper::ParseScaleMode(config_.scale);
+        const int scaleSelected = scaleMode == turingdesk::wallpaper::ScaleMode::Contain ? 1 :
+                                  scaleMode == turingdesk::wallpaper::ScaleMode::Stretch ? 2 :
+                                  scaleMode == turingdesk::wallpaper::ScaleMode::Center ? 3 :
+                                  scaleMode == turingdesk::wallpaper::ScaleMode::Tile ? 4 : 0;
+        if (scaleCombo_) SendMessageW(scaleCombo_, CB_SETCURSEL, scaleSelected, 0);
+        if (horizontalCombo_) SendMessageW(horizontalCombo_, CB_SETCURSEL,
+                                            config_.focalX < 0.25f ? 0 : config_.focalX > 0.75f ? 2 : 1, 0);
+        if (verticalCombo_) SendMessageW(verticalCombo_, CB_SETCURSEL,
+                                          config_.focalY < 0.25f ? 0 : config_.focalY > 0.75f ? 2 : 1, 0);
         SendMessageW(pauseCheck_, BM_SETCHECK, config_.pauseFullscreen ? BST_CHECKED : BST_UNCHECKED, 0);
         SetWindowTextW(toggleButton_, config_.enabled ? L"停止" : L"恢复");
 
@@ -1025,11 +1128,16 @@ private:
         } else {
             const wchar_t* scene = selected == 0 ? L"Aurora Flow" : selected == 1 ? L"Neon Flow" : selected == 2 ? L"Quiet Grid" : selected == 3 ? L"图片壁纸" : L"视频壁纸";
             status = std::wstring(scene) + L" 已应用 · " + turingdesk::wallpaper::LayoutModeDisplayName(layoutMode) +
+                     L" · " + turingdesk::wallpaper::ScaleModeDisplayName(scaleMode) +
                      L" · " + std::to_wstring(topology_.monitors.size()) + L" 屏 · 桌面层：" + MountModeText(mountMode_);
             if (selected <= 2) status += L" · Direct2D 约 30 FPS";
             else if (selected == 4) {
                 if (!lastMediaError_.empty()) status = L"视频壁纸错误：" + lastMediaError_;
-                else status += L" · Media Foundation · 静音循环";
+                else {
+                    status += L" · Media Foundation · 静音循环";
+                    if (scaleMode == turingdesk::wallpaper::ScaleMode::Tile)
+                        status += L" · 视频 Tile 当前安全降级为 Center";
+                }
             }
             status += L"\r\n" + turingdesk::wallpaper::DescribeMonitorTopology(topology_);
         }
@@ -1044,6 +1152,9 @@ private:
     HWND sceneCombo_{};
     HWND imageButton_{};
     HWND layoutCombo_{};
+    HWND scaleCombo_{};
+    HWND horizontalCombo_{};
+    HWND verticalCombo_{};
     HWND pauseCheck_{};
     HWND applyButton_{};
     HWND toggleButton_{};
@@ -1116,6 +1227,7 @@ int RunSelfTest(HINSTANCE instance) {
 
     const bool pathOk = !ConfigPath().empty();
     const bool layoutGeometryOk = turingdesk::wallpaper::SelfTestMonitorLayoutGeometry();
+    const bool scalingGeometryOk = turingdesk::wallpaper::SelfTestScalingGeometry();
     const auto topology = turingdesk::wallpaper::QueryMonitorTopology();
     const bool topologyOk = topology.Valid();
     const bool mediaFoundationOk = turingdesk::VideoWallpaperPlayer::MediaFoundationAvailable();
@@ -1126,6 +1238,7 @@ int RunSelfTest(HINSTANCE instance) {
     if (!pathOk) return 27;
     if (!layoutGeometryOk) return 29;
     if (!topologyOk) return 30;
+    if (!scalingGeometryOk) return 31;
     return mediaFoundationOk ? 0 : 28;
 }
 
