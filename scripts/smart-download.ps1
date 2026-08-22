@@ -47,15 +47,15 @@ function Invoke-TuringDeskBitsDownload {
         [Parameter(Mandatory=$true)][string]$Destination,
         [Parameter(Mandatory=$true)][string]$Name,
         [int]$TimeoutSeconds = 300,
-        [int]$StallSeconds = 25
+        [int]$StallSeconds = 20
     )
 
     if (-not (Get-Command Start-BitsTransfer -ErrorAction SilentlyContinue)) { return $false }
 
     $job = $null
     try {
-        Write-Host "Trying Windows BITS (system/browser-like network path)..." -ForegroundColor DarkGray
-        $job = Start-BitsTransfer -Source $Url -Destination $Destination -DisplayName "TuringDesk $Name" -Asynchronous -ErrorAction Stop
+        Write-Host "Trying Windows BITS at foreground priority..." -ForegroundColor DarkGray
+        $job = Start-BitsTransfer -Source $Url -Destination $Destination -DisplayName "TuringDesk $Name" -Priority Foreground -Asynchronous -ErrorAction Stop
         $started = Get-Date
         $lastProgress = Get-Date
         [Int64]$lastBytes = -1
@@ -83,10 +83,10 @@ function Invoke-TuringDeskBitsDownload {
             if (((Get-Date) - $started).TotalSeconds -ge $TimeoutSeconds) {
                 throw "BITS timed out after $TimeoutSeconds seconds"
             }
-            if ($bytes -gt 0 -and ((Get-Date) - $lastProgress).TotalSeconds -ge $StallSeconds) {
-                throw "BITS stalled for $StallSeconds seconds"
+            if (((Get-Date) - $lastProgress).TotalSeconds -ge $StallSeconds) {
+                throw "BITS made no progress for $StallSeconds seconds"
             }
-            Start-Sleep -Milliseconds 750
+            Start-Sleep -Milliseconds 500
         }
     }
     catch {
@@ -154,7 +154,7 @@ function Invoke-TuringDeskSmartDownload {
 
     if (Get-Command curl.exe -ErrorAction SilentlyContinue) {
         Write-Host "Trying curl over IPv4 with low-speed detection..." -ForegroundColor DarkGray
-        & curl.exe --ipv4 -fL --retry 3 --retry-all-errors --retry-delay 1 --connect-timeout 15 --max-time $TimeoutSeconds --speed-limit 65536 --speed-time 20 --progress-bar $Url -o $partial
+        & curl.exe --ipv4 -fL --retry 3 --retry-all-errors --retry-delay 1 --connect-timeout 10 --max-time $TimeoutSeconds --speed-limit 131072 --speed-time 15 --progress-bar $Url -o $partial
         if ($LASTEXITCODE -eq 0 -and (Test-TuringDeskDownloadedFile -Path $partial -ExpectedSha256 $ExpectedSha256)) {
             Move-Item $partial $Destination -Force
             return $Destination
@@ -175,5 +175,5 @@ function Invoke-TuringDeskSmartDownload {
     }
     Remove-Item $partial -Force -ErrorAction SilentlyContinue
 
-    throw "Unable to download $Name from the official source after cache, browser-download reuse, BITS, IPv4 curl, and Invoke-WebRequest fallbacks."
+    throw "Unable to download $Name from the official source after cache, browser-download reuse, foreground BITS, IPv4 curl, and Invoke-WebRequest fallbacks."
 }
