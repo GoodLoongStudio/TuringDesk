@@ -1,4 +1,4 @@
-name: Native Windows x64 + ARM64
+name: Native Windows ARM64
 
 on:
   push:
@@ -19,57 +19,10 @@ permissions:
   contents: write
 
 concurrency:
-  group: native-windows-${{ github.ref }}-${{ github.event_name }}
+  group: native-arm64-${{ github.ref }}-${{ github.event_name }}
   cancel-in-progress: true
 
 jobs:
-  build-x64:
-    if: ${{ github.event_name != 'workflow_run' }}
-    runs-on: windows-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          ref: main
-
-      - name: Configure x64
-        run: cmake -S . -B build-x64 -A x64
-
-      - name: Build x64
-        run: cmake --build build-x64 --config Release --parallel
-
-      - name: Native Search x64 self-test
-        shell: pwsh
-        run: |
-          $p = Start-Process -FilePath ".\build-x64\src\native\Release\TuringDesk.exe" -ArgumentList "--self-test" -Wait -PassThru
-          if ($p.ExitCode -ne 0) { throw "Native Search x64 self-test failed: $($p.ExitCode)" }
-
-      - name: Native Wallpaper x64 self-test
-        shell: pwsh
-        run: |
-          $p = Start-Process -FilePath ".\build-x64\src\native\Release\TuringDeskWallpaper.exe" -ArgumentList "--self-test" -Wait -PassThru
-          if ($p.ExitCode -ne 0) { throw "Native Wallpaper x64 self-test failed: $($p.ExitCode)" }
-
-      - name: Native Harness x64 self-test
-        shell: pwsh
-        run: |
-          $p = Start-Process -FilePath ".\build-x64\src\native\Release\TuringDeskHarness.exe" -ArgumentList "--self-test" -Wait -PassThru
-          if ($p.ExitCode -ne 0) { throw "Native Harness x64 self-test failed: $($p.ExitCode)" }
-
-      - name: Prepare x64 artifact
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force -Path build-x64/package | Out-Null
-          Copy-Item build-x64/src/native/Release/TuringDesk.exe build-x64/package/TuringDesk.exe -Force
-          Copy-Item build-x64/src/native/Release/TuringDeskWallpaper.exe build-x64/package/TuringDeskWallpaper.exe -Force
-          Copy-Item build-x64/src/native/Release/TuringDeskHarness.exe build-x64/package/TuringDeskHarness.exe -Force
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: TuringDesk-Native-x64
-          path: build-x64/package/**
-          retention-days: 3
-
   build-arm64:
     if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: windows-11-arm
@@ -117,27 +70,33 @@ jobs:
           Copy-Item build/src/native/Release/TuringDeskHarness.exe build/package/TuringDeskHarness.exe -Force
           .\scripts\prepare-third-party-runtime-arm64.ps1 -DeployDir (Resolve-Path build/package).Path
 
-      - name: Redeploy while bundled Everything is running
+      - name: Redeploy while unchanged bundled Everything is running
         shell: pwsh
         run: |
           $package = (Resolve-Path 'build/package').Path
           $everything = Join-Path $package 'Everything\Everything.exe'
           $config = Join-Path $package 'Everything\TuringDesk-Everything.ini'
           if (-not (Test-Path $everything -PathType Leaf)) { throw 'Bundled Everything is missing before replacement test' }
+          $beforeHash = (Get-FileHash -Algorithm SHA256 $everything).Hash
 
-          $everythingProcess = Start-Process -FilePath $everything -ArgumentList "-config `"$config`" -startup" -PassThru
+          Start-Process -FilePath $everything -ArgumentList "-config `"$config`" -startup" | Out-Null
           Start-Sleep -Seconds 1
           $running = Get-CimInstance Win32_Process -Filter "Name='Everything.exe'" -ErrorAction SilentlyContinue |
             Where-Object { $_.ExecutablePath -and ([System.IO.Path]::GetFullPath($_.ExecutablePath) -eq [System.IO.Path]::GetFullPath($everything)) }
-          if (-not $running) { throw 'Bundled Everything did not stay running for replacement regression test' }
+          if (-not $running) { throw 'Bundled Everything did not stay running for redeploy regression test' }
 
+          # Force the installer through its refresh path while the exact vendored
+          # Everything binary is image-mapped. It must preserve that unchanged EXE.
           Set-Content (Join-Path $package 'Runtime\runtime-manifest.sha256') -Value 'force-redeploy' -Encoding ASCII
           .\scripts\prepare-third-party-runtime-arm64.ps1 -DeployDir $package
 
           $stillRunning = Get-CimInstance Win32_Process -Filter "Name='Everything.exe'" -ErrorAction SilentlyContinue |
             Where-Object { $_.ExecutablePath -and ([System.IO.Path]::GetFullPath($_.ExecutablePath) -eq [System.IO.Path]::GetFullPath($everything)) }
-          if ($stillRunning) { throw 'Bundled Everything survived runtime replacement' }
-          if (-not (Test-Path $everything -PathType Leaf)) { throw 'Bundled Everything was not restored after runtime replacement' }
+          if (-not $stillRunning) { throw 'Unchanged bundled Everything was unnecessarily stopped during runtime refresh' }
+          if (-not (Test-Path $everything -PathType Leaf)) { throw 'Bundled Everything disappeared during runtime refresh' }
+          $afterHash = (Get-FileHash -Algorithm SHA256 $everything).Hash
+          if ($afterHash -ne $beforeHash) { throw 'Bundled Everything changed during unchanged-component refresh' }
+          & $everything -config $config -quit 2>$null | Out-Null
 
       - name: Validate deployed ARM64 package
         shell: pwsh
@@ -176,24 +135,23 @@ jobs:
 
   report:
     if: always()
-    needs: [build-x64, build-arm64]
+    needs: [build-arm64]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
         with:
           ref: ci-status
-      - name: Write native CI status
+      - name: Write isolated ARM64 CI status
         shell: bash
         env:
-          X64_RESULT: ${{ needs.build-x64.result }}
           ARM64_RESULT: ${{ needs.build-arm64.result }}
         run: |
           mkdir -p ci
           cat > "ci/native-${GITHUB_SHA}.json" <<EOF
           {
             "sha": "${GITHUB_SHA}",
-            "mode": "native-x64-plus-arm64-offline-runtime",
-            "x64": "${X64_RESULT}",
+            "mode": "native-arm64-only-offline-runtime",
+            "x64": "disabled",
             "arm64": "${ARM64_RESULT}",
             "run_id": "${GITHUB_RUN_ID}"
           }
@@ -201,7 +159,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add "ci/native-${GITHUB_SHA}.json"
-          git commit -m "ci: report native build ${GITHUB_SHA}" || exit 0
+          git commit -m "ci: report ARM64 native build ${GITHUB_SHA}" || exit 0
           for i in 1 2 3; do
             git pull --rebase origin ci-status || true
             if git push origin HEAD:ci-status; then exit 0; fi
