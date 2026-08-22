@@ -33,6 +33,7 @@ if errorlevel 1 goto :fail
 
 echo.
 echo [3/4] Preparing repository-vendored ARM64 runtime (no third-party download)...
+echo       First goz setup may request UAC once to install its MFT/USN index service.
 powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\prepare-third-party-runtime-arm64.ps1"
 if errorlevel 1 goto :fail
 
@@ -43,7 +44,8 @@ if errorlevel 1 goto :fail
 
 echo.
 echo DeepSeek Harness: pinned official package from this repository RuntimeBundle.
-echo Node / Harness / Everything / Codex are deployed from local repository files.
+echo Node / Harness / goz / full Codex CLI are deployed from local repository files.
+echo goz provides the TuringDesk L2 MFT/USN file index service.
 echo Harness smoke test passed before TuringDesk was launched.
 echo ========================================
 echo   SUCCESS - TuringDesk ARM64 is running
