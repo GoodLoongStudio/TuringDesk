@@ -164,6 +164,10 @@ jobs:
             $codexArchive = Join-Path $codexDir $codexArchiveName
             $codexUrl = "https://github.com/openai/codex/releases/download/$($lock.codex.release)/$codexArchiveName"
             Download $codexUrl $codexArchive
+            $expectedCodex = ([string]$lock.codex.sha256).ToLowerInvariant()
+            if ([string]::IsNullOrWhiteSpace($expectedCodex) -or (Sha256 $codexArchive) -ne $expectedCodex) {
+              throw 'Codex ARM64 checksum mismatch'
+            }
 
             # WebView2 build SDK / static loader
             $webSdkDir = Join-Path $runtime 'webview2-sdk'
