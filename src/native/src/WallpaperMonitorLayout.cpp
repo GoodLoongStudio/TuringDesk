@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cwchar>
 #include <sstream>
+#include <utility>
 
 namespace turingdesk::wallpaper {
 namespace {
@@ -44,6 +45,28 @@ RECT OffsetIntoHost(const RECT& desktopRect, const RECT& hostDesktopBounds) noex
     RECT result = desktopRect;
     OffsetRect(&result, -hostDesktopBounds.left, -hostDesktopBounds.top);
     return result;
+}
+
+void AddSystemMetricFallback(MonitorTopology& topology) {
+    if (!topology.monitors.empty()) return;
+
+    const int x = GetSystemMetrics(SM_XVIRTUALSCREEN);
+    const int y = GetSystemMetrics(SM_YVIRTUALSCREEN);
+    int width = GetSystemMetrics(SM_CXVIRTUALSCREEN);
+    int height = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+    if (width <= 0 || height <= 0) {
+        width = GetSystemMetrics(SM_CXSCREEN);
+        height = GetSystemMetrics(SM_CYSCREEN);
+    }
+    if (width <= 0 || height <= 0) return;
+
+    MonitorInfo fallback;
+    fallback.desktopRect = RECT{x, y, x + width, y + height};
+    fallback.primary = true;
+    fallback.deviceName = L"SYSTEM_METRICS_FALLBACK";
+    topology.monitors.push_back(fallback);
+    topology.virtualBounds = fallback.desktopRect;
+    topology.primaryBounds = fallback.desktopRect;
 }
 
 } // namespace
@@ -90,6 +113,8 @@ MonitorTopology QueryMonitorTopology() {
             target->topology->monitors.push_back(std::move(item));
             return TRUE;
         }, reinterpret_cast<LPARAM>(&context));
+
+    AddSystemMetricFallback(topology);
 
     if (!topology.monitors.empty() &&
         (topology.primaryBounds.right <= topology.primaryBounds.left ||
