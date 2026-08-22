@@ -58,6 +58,21 @@ function Get-NpmHeapSizeMb {
     }
 }
 
+function Get-FileLengthSafe([string]$Path) {
+    try {
+        if (Test-Path $Path -PathType Leaf) { return [Int64](Get-Item $Path).Length }
+    }
+    catch { }
+    return [Int64]0
+}
+
+function Show-NpmFailureTail([string]$StdoutLog, [string]$StderrLog) {
+    Write-Host "`n--- npm stdout tail ---" -ForegroundColor Yellow
+    if (Test-Path $StdoutLog) { Get-Content $StdoutLog -Tail 120 | Out-Host }
+    Write-Host "`n--- npm stderr tail ---" -ForegroundColor Yellow
+    if (Test-Path $StderrLog) { Get-Content $StderrLog -Tail 120 | Out-Host }
+}
+
 if (-not $Force -and (Test-Path (Join-Path $NodeTarget "node.exe") -PathType Leaf) -and (Test-DshRuntime)) {
     Write-Host "Harness runtime is already ready: Node $NodeVersion + DSH $DshVersion" -ForegroundColor Green
     return
@@ -122,7 +137,7 @@ Write-Host "Node: $(& $NodeExe --version)" -ForegroundColor Green
 
 if ($Force -or -not (Test-DshRuntime)) {
     Step "Installing DeepSeek Harness $DshVersion locally"
-    Write-Host "First install is large (DSH has many packages), but npm network/cache activity is shown live." -ForegroundColor Yellow
+    Write-Host "First install is large. Network, cache and live npm process health are shown below." -ForegroundColor Yellow
     if (Test-Path $DshTarget) { Remove-Item $DshTarget -Recurse -Force }
     New-Item -ItemType Directory -Force -Path $DshTarget | Out-Null
 
@@ -170,32 +185,61 @@ if ($Force -or -not (Test-DshRuntime)) {
             -RedirectStandardOutput $StdoutLog -RedirectStandardError $StderrLog
         $shownOut = 0
         $shownErr = 0
+        $lastHeartbeat = Get-Date
+        $lastProgress = Get-Date
+        [double]$lastCpuSeconds = 0
+        [Int64]$lastOutLength = 0
+        [Int64]$lastErrLength = 0
+        $stallLimitSeconds = 300
+        $absoluteLimitSeconds = 1200
+
         while (-not $Process.HasExited) {
             Start-Sleep -Seconds 2
             $Process.Refresh()
             Show-NewLogLines -Path $StdoutLog -Shown ([ref]$shownOut) -Color DarkGray
             Show-NewLogLines -Path $StderrLog -Shown ([ref]$shownErr) -Color Yellow
 
-            $Elapsed = (Get-Date) - $Started
-            if ([int]$Elapsed.TotalSeconds -gt 480) {
+            $now = Get-Date
+            $Elapsed = $now - $Started
+            $outLength = Get-FileLengthSafe $StdoutLog
+            $errLength = Get-FileLengthSafe $StderrLog
+            $cpuSeconds = try { [double]$Process.TotalProcessorTime.TotalSeconds } catch { $lastCpuSeconds }
+            $workingSetMb = try { [Math]::Round($Process.WorkingSet64 / 1MB, 0) } catch { 0 }
+
+            if (($cpuSeconds -gt ($lastCpuSeconds + 0.10)) -or ($outLength -ne $lastOutLength) -or ($errLength -ne $lastErrLength)) {
+                $lastProgress = $now
+            }
+
+            $idleSeconds = [int]($now - $lastProgress).TotalSeconds
+            if (($now - $lastHeartbeat).TotalSeconds -ge 15) {
+                $state = if ($idleSeconds -lt 30) { "ACTIVE" } else { "WAITING" }
+                Write-Host ("npm {0}: elapsed={1:n0}s  CPU={2:n1}s  RAM={3:n0}MB  no-progress={4}s" -f $state, $Elapsed.TotalSeconds, $cpuSeconds, $workingSetMb, $idleSeconds) -ForegroundColor DarkGray
+                $lastHeartbeat = $now
+            }
+
+            $lastCpuSeconds = $cpuSeconds
+            $lastOutLength = $outLength
+            $lastErrLength = $errLength
+
+            if ($idleSeconds -ge $stallLimitSeconds) {
                 try { Stop-Process -Id $Process.Id -Force -ErrorAction SilentlyContinue } catch { }
-                Write-Host "`n--- npm stdout tail ---" -ForegroundColor Yellow
-                if (Test-Path $StdoutLog) { Get-Content $StdoutLog -Tail 120 | Out-Host }
-                Write-Host "`n--- npm stderr tail ---" -ForegroundColor Yellow
-                if (Test-Path $StderrLog) { Get-Content $StderrLog -Tail 120 | Out-Host }
-                throw "npm install timed out after 8 minutes. Cached downloads were kept at $NpmCache. Logs: $StdoutLog ; $StderrLog"
+                Show-NpmFailureTail -StdoutLog $StdoutLog -StderrLog $StderrLog
+                throw "npm install made no observable progress for $stallLimitSeconds seconds. Cache was kept at $NpmCache. Logs: $StdoutLog ; $StderrLog"
+            }
+            if ([int]$Elapsed.TotalSeconds -gt $absoluteLimitSeconds) {
+                try { Stop-Process -Id $Process.Id -Force -ErrorAction SilentlyContinue } catch { }
+                Show-NpmFailureTail -StdoutLog $StdoutLog -StderrLog $StderrLog
+                throw "npm install exceeded the 20 minute safety limit even though progress was observed. Cache was kept at $NpmCache. Logs: $StdoutLog ; $StderrLog"
             }
         }
+
         $Process.WaitForExit()
         $Process.Refresh()
         $ExitCode = $Process.ExitCode
         Show-NewLogLines -Path $StdoutLog -Shown ([ref]$shownOut) -Color DarkGray
         Show-NewLogLines -Path $StderrLog -Shown ([ref]$shownErr) -Color Yellow
         if ($ExitCode -ne 0) {
-            Write-Host "`n--- npm stdout tail ---" -ForegroundColor Yellow
-            if (Test-Path $StdoutLog) { Get-Content $StdoutLog -Tail 120 | Out-Host }
-            Write-Host "`n--- npm stderr tail ---" -ForegroundColor Yellow
-            if (Test-Path $StderrLog) { Get-Content $StderrLog -Tail 120 | Out-Host }
+            Show-NpmFailureTail -StdoutLog $StdoutLog -StderrLog $StderrLog
             throw "npm install @deepseek-ai/dsh@$DshVersion failed with exit code $ExitCode. Logs: $StdoutLog ; $StderrLog"
         }
         Write-Host ("DeepSeek Harness dependencies installed in {0:n1}s." -f ((Get-Date) - $Started).TotalSeconds) -ForegroundColor Green
