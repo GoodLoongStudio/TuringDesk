@@ -1,6 +1,7 @@
 #include "turingdesk/AppSearch.h"
 #include "turingdesk/DirectToolRuntime.h"
 #include "turingdesk/EverythingSearch.h"
+#include "turingdesk/HarnessProcessManager.h"
 #include "turingdesk/L3Agent.h"
 #include "turingdesk/SearchWindow.h"
 #include <windows.h>
@@ -20,6 +21,7 @@ bool RunNativeSelfTest() {
     if (!files.SelfTest()) return false;
 
     if (!turingdesk::DirectToolRuntime::SelfTest()) return false;
+    if (!turingdesk::HarnessProcessManager::SelfTest()) return false;
 
     turingdesk::L3Agent l3;
     std::wstring reply;
