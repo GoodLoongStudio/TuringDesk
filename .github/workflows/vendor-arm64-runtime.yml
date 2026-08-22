@@ -135,8 +135,10 @@ jobs:
             $gozExe = Join-Path $gozBuild 'goz.exe'
             $gozdExe = Join-Path $gozBuild 'gozd.exe'
             if (-not (Test-Path $gozExe) -or -not (Test-Path $gozdExe)) { throw 'goz ARM64 binaries are missing after build' }
-            & $gozExe --help | Out-Host
-            if ($LASTEXITCODE -ne 0) { throw 'goz ARM64 CLI failed --help' }
+            # goz intentionally mirrors es.exe and does not implement --help. Probe a
+            # real supported command instead; exit 8 is expected before gozd is running.
+            & $gozExe --status | Out-Host
+            if ($LASTEXITCODE -notin @(0, 8)) { throw "goz ARM64 CLI execution probe failed with exit $LASTEXITCODE" }
             & $gozdExe --help | Out-Host
             if ($LASTEXITCODE -ne 0) { throw 'gozd ARM64 daemon failed --help' }
 
