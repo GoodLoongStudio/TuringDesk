@@ -3,7 +3,9 @@
 #include "turingdesk/ModelSettingsWindow.h"
 #include <dwmapi.h>
 #include <shellapi.h>
+#include <windowsx.h>
 #include <algorithm>
+#include <climits>
 #include <filesystem>
 #include <iterator>
 
@@ -15,9 +17,17 @@ namespace {
 constexpr int kHotkeyId = 1;
 constexpr int kSearchEditId = 100;
 constexpr int kSettingsButtonId = 101;
+constexpr int kWallpaperButtonId = 102;
 constexpr int kWindowWidth = 760;
-constexpr int kCollapsedHeight = 112;
+constexpr int kCollapsedHeight = 88;
 constexpr int kExpandedHeight = 420;
+constexpr int kControlTop = 14;
+constexpr int kControlHeight = 40;
+constexpr int kLeftMargin = 16;
+constexpr int kRightMargin = 16;
+constexpr int kButtonGap = 8;
+constexpr int kAiButtonWidth = 48;
+constexpr int kWallpaperButtonWidth = 56;
 constexpr UINT kTrayMessage = WM_APP + 91;
 constexpr UINT kTrayShow = 5101;
 constexpr UINT kTrayWallpaper = 5102;
@@ -78,6 +88,17 @@ void RoundControl(HWND control, int radius = 14) {
     if (!SetWindowRgn(control, region, TRUE)) DeleteObject(region);
 }
 
+fs::path SearchIniPath() {
+    wchar_t localAppData[32768]{};
+    const DWORD length = GetEnvironmentVariableW(L"LOCALAPPDATA", localAppData,
+                                                  static_cast<DWORD>(std::size(localAppData)));
+    if (length == 0 || length >= std::size(localAppData)) return {};
+    const fs::path directory = fs::path(localAppData) / L"TuringDesk";
+    std::error_code ec;
+    fs::create_directories(directory, ec);
+    return directory / L"search.ini";
+}
+
 } // namespace
 
 SearchWindow::SearchWindow(HINSTANCE instance) : instance_(instance) {}
@@ -116,11 +137,11 @@ bool SearchWindow::Create() {
     }
     writeFactory_->CreateTextFormat(L"Segoe UI Variable Text", nullptr, DWRITE_FONT_WEIGHT_NORMAL,
                                     DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
-                                    12.5f, L"zh-CN", subtitleFormat_.GetAddressOf());
+                                    12.0f, L"zh-CN", subtitleFormat_.GetAddressOf());
     if (!subtitleFormat_) {
         writeFactory_->CreateTextFormat(L"Segoe UI", nullptr, DWRITE_FONT_WEIGHT_NORMAL,
                                         DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
-                                        12.5f, L"zh-CN", subtitleFormat_.GetAddressOf());
+                                        12.0f, L"zh-CN", subtitleFormat_.GetAddressOf());
     }
     if (titleFormat_) titleFormat_->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
     if (subtitleFormat_) subtitleFormat_->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
@@ -130,19 +151,24 @@ bool SearchWindow::Create() {
                             nullptr, nullptr, instance_, this);
     if (!hwnd_) return false;
 
-    uiFont_ = CreateFontW(-19, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+    uiFont_ = CreateFontW(-18, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
                           OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
                           DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI Variable Text");
     if (!uiFont_) {
-        uiFont_ = CreateFontW(-19, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+        uiFont_ = CreateFontW(-18, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
                               OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
                               DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
     }
-    editBrush_ = CreateSolidBrush(RGB(28, 30, 37));
-    buttonBrush_ = CreateSolidBrush(RGB(42, 45, 54));
+    editBrush_ = CreateSolidBrush(RGB(25, 27, 33));
+    buttonBrush_ = CreateSolidBrush(RGB(37, 40, 48));
+
+    const int wallpaperX = kWindowWidth - kRightMargin - kWallpaperButtonWidth;
+    const int aiX = wallpaperX - kButtonGap - kAiButtonWidth;
+    const int editWidth = aiX - kButtonGap - kLeftMargin;
 
     edit_ = CreateWindowExW(0, L"EDIT", L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
-                            20, 16, kWindowWidth - 150, 42, hwnd_, reinterpret_cast<HMENU>(kSearchEditId), instance_, nullptr);
+                            kLeftMargin, kControlTop, editWidth, kControlHeight, hwnd_,
+                            reinterpret_cast<HMENU>(static_cast<INT_PTR>(kSearchEditId)), instance_, nullptr);
     if (!edit_) return false;
     SetWindowLongPtrW(edit_, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(this));
     oldEditProc_ = reinterpret_cast<WNDPROC>(SetWindowLongPtrW(edit_, GWLP_WNDPROC,
@@ -152,14 +178,20 @@ bool SearchWindow::Create() {
     SendMessageW(edit_, EM_SETCUEBANNER, TRUE,
                  reinterpret_cast<LPARAM>(L"搜索应用、文件或直接问 AI…"));
 
-    settingsButton_ = CreateWindowExW(0, L"BUTTON", L"AI 设置",
+    settingsButton_ = CreateWindowExW(0, L"BUTTON", L"AI",
                                       WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
-                                      kWindowWidth - 118, 16, 98, 42, hwnd_,
-                                      reinterpret_cast<HMENU>(kSettingsButtonId), instance_, nullptr);
-    if (!settingsButton_) return false;
+                                      aiX, kControlTop, kAiButtonWidth, kControlHeight, hwnd_,
+                                      reinterpret_cast<HMENU>(static_cast<INT_PTR>(kSettingsButtonId)), instance_, nullptr);
+    wallpaperButton_ = CreateWindowExW(0, L"BUTTON", L"壁纸",
+                                       WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
+                                       wallpaperX, kControlTop, kWallpaperButtonWidth, kControlHeight, hwnd_,
+                                       reinterpret_cast<HMENU>(static_cast<INT_PTR>(kWallpaperButtonId)), instance_, nullptr);
+    if (!settingsButton_ || !wallpaperButton_) return false;
     SendMessageW(settingsButton_, WM_SETFONT, reinterpret_cast<WPARAM>(uiFont_), TRUE);
+    SendMessageW(wallpaperButton_, WM_SETFONT, reinterpret_cast<WPARAM>(uiFont_), TRUE);
     RoundControl(edit_);
     RoundControl(settingsButton_);
+    RoundControl(wallpaperButton_);
 
     ApplyWindows11Style();
     ChangeWindowMessageFilterEx(hwnd_, WM_COPYDATA, MSGFLT_ALLOW, nullptr);
@@ -171,6 +203,7 @@ bool SearchWindow::Create() {
     apps_.BuildIndex();
     fileSearchAvailable_ = files_.Available();
     expanded_ = false;
+    LoadPosition();
     PositionWindow();
     ShowWindow(hwnd_, SW_SHOWNOACTIVATE);
     UpdateWindow(hwnd_);
@@ -192,7 +225,7 @@ void SearchWindow::ApplyWindows11Style() {
     DwmSetWindowAttribute(hwnd_, kDwmUseImmersiveDarkMode, &dark, sizeof(dark));
     const int corner = kDwmCornerRound;
     DwmSetWindowAttribute(hwnd_, kDwmWindowCornerPreference, &corner, sizeof(corner));
-    const COLORREF border = RGB(72, 76, 88);
+    const COLORREF border = RGB(66, 70, 82);
     DwmSetWindowAttribute(hwnd_, kDwmBorderColor, &border, sizeof(border));
     const int backdrop = kDwmBackdropTransient;
     DwmSetWindowAttribute(hwnd_, kDwmSystemBackdropType, &backdrop, sizeof(backdrop));
@@ -205,12 +238,11 @@ void SearchWindow::ApplyWindows11Style() {
         const auto setComposition = reinterpret_cast<SetWindowCompositionAttributeFn>(
             GetProcAddress(user32, "SetWindowCompositionAttribute"));
         if (setComposition) {
-            // WCA_ACCENT_POLICY=19, ACCENT_ENABLE_ACRYLICBLURBEHIND=4.
             TdAccentPolicy policy{};
-            policy.state = 4;
-            policy.gradientColor = 0xD425211F;
+            policy.state = 4; // ACCENT_ENABLE_ACRYLICBLURBEHIND
+            policy.gradientColor = 0xB823201E;
             TdCompositionData data{};
-            data.attribute = 19;
+            data.attribute = 19; // WCA_ACCENT_POLICY
             data.data = &policy;
             data.size = sizeof(policy);
             setComposition(hwnd_, &data);
@@ -219,7 +251,6 @@ void SearchWindow::ApplyWindows11Style() {
 }
 
 void SearchWindow::ShowAndFocus() {
-    PositionWindow();
     if (!currentQuery_.empty() || !results_.empty()) SetExpanded(true);
     ShowWindow(hwnd_, SW_SHOWNORMAL);
     SetWindowPos(hwnd_, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
@@ -249,14 +280,61 @@ void SearchWindow::SetExpanded(bool expanded) {
     InvalidateRect(hwnd_, nullptr, FALSE);
 }
 
+void SearchWindow::LoadPosition() {
+    const fs::path ini = SearchIniPath();
+    if (ini.empty()) return;
+    const int x = static_cast<int>(GetPrivateProfileIntW(L"Window", L"X", INT_MIN, ini.c_str()));
+    const int y = static_cast<int>(GetPrivateProfileIntW(L"Window", L"Y", INT_MIN, ini.c_str()));
+    if (x == INT_MIN || y == INT_MIN) return;
+    savedX_ = x;
+    savedY_ = y;
+    positionLoaded_ = true;
+}
+
+void SearchWindow::SavePosition() {
+    if (!hwnd_) return;
+    RECT rect{};
+    if (!GetWindowRect(hwnd_, &rect)) return;
+    savedX_ = rect.left;
+    savedY_ = rect.top;
+    positionLoaded_ = true;
+
+    const fs::path ini = SearchIniPath();
+    if (ini.empty()) return;
+    const std::wstring x = std::to_wstring(savedX_);
+    const std::wstring y = std::to_wstring(savedY_);
+    WritePrivateProfileStringW(L"Window", L"X", x.c_str(), ini.c_str());
+    WritePrivateProfileStringW(L"Window", L"Y", y.c_str(), ini.c_str());
+}
+
 void SearchWindow::PositionWindow() {
-    POINT point{};
-    GetCursorPos(&point);
-    HMONITOR monitor = MonitorFromPoint(point, MONITOR_DEFAULTTOPRIMARY);
+    int x = 0;
+    int y = 0;
+    HMONITOR monitor = nullptr;
+
+    if (positionLoaded_) {
+        const POINT center{savedX_ + kWindowWidth / 2, savedY_ + kCollapsedHeight / 2};
+        monitor = MonitorFromPoint(center, MONITOR_DEFAULTTONULL);
+    }
+
+    if (!monitor) {
+        monitor = MonitorFromPoint(POINT{0, 0}, MONITOR_DEFAULTTOPRIMARY);
+        positionLoaded_ = false;
+    }
+
     MONITORINFO info{sizeof(info)};
-    if (!GetMonitorInfoW(monitor, &info)) return;
-    const int x = info.rcWork.left + (info.rcWork.right - info.rcWork.left - kWindowWidth) / 2;
-    const int y = info.rcWork.top + 24;
+    if (!monitor || !GetMonitorInfoW(monitor, &info)) return;
+
+    if (positionLoaded_) {
+        x = std::clamp(savedX_, info.rcWork.left, std::max(info.rcWork.left, info.rcWork.right - kWindowWidth));
+        y = std::clamp(savedY_, info.rcWork.top, std::max(info.rcWork.top, info.rcWork.bottom - kCollapsedHeight));
+    } else {
+        x = info.rcWork.left + (info.rcWork.right - info.rcWork.left - kWindowWidth) / 2;
+        y = info.rcWork.top + 18;
+        savedX_ = x;
+        savedY_ = y;
+    }
+
     const int height = expanded_ ? kExpandedHeight : kCollapsedHeight;
     SetWindowPos(hwnd_, nullptr, x, y, kWindowWidth, height, SWP_NOZORDER | SWP_NOACTIVATE);
 }
@@ -383,25 +461,38 @@ LRESULT SearchWindow::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) 
     case WM_ACTIVATE:
         if (LOWORD(wParam) == WA_INACTIVE && expanded_) SetExpanded(false);
         return 0;
+    case WM_NCHITTEST: {
+        const LRESULT hit = DefWindowProcW(hwnd_, message, wParam, lParam);
+        if (hit != HTCLIENT) return hit;
+        POINT point{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
+        ScreenToClient(hwnd_, &point);
+        if (point.y >= 58 && point.y < kCollapsedHeight) return HTCAPTION;
+        return HTCLIENT;
+    }
+    case WM_EXITSIZEMOVE:
+        SavePosition();
+        return 0;
     case WM_COMMAND:
         if (LOWORD(wParam) == kSearchEditId && HIWORD(wParam) == EN_CHANGE) { OnQueryChanged(); return 0; }
         if (LOWORD(wParam) == kSettingsButtonId && HIWORD(wParam) == BN_CLICKED) { OpenModelSettings(); return 0; }
+        if (LOWORD(wParam) == kWallpaperButtonId && HIWORD(wParam) == BN_CLICKED) { OpenWallpaperSettings(); return 0; }
         break;
     case WM_DRAWITEM: {
         const auto* item = reinterpret_cast<DRAWITEMSTRUCT*>(lParam);
-        if (!item || item->CtlID != kSettingsButtonId) break;
+        if (!item || (item->CtlID != kSettingsButtonId && item->CtlID != kWallpaperButtonId)) break;
         HBRUSH selectedBrush = nullptr;
         HBRUSH fill = buttonBrush_;
         if ((item->itemState & ODS_SELECTED) != 0) {
-            selectedBrush = CreateSolidBrush(RGB(54, 58, 69));
+            selectedBrush = CreateSolidBrush(RGB(50, 54, 65));
             fill = selectedBrush;
         }
         FillRect(item->hDC, &item->rcItem, fill);
         SetBkMode(item->hDC, TRANSPARENT);
-        SetTextColor(item->hDC, RGB(242, 244, 248));
+        SetTextColor(item->hDC, RGB(238, 241, 247));
         const HFONT previous = reinterpret_cast<HFONT>(SelectObject(item->hDC, uiFont_));
         RECT textRect = item->rcItem;
-        DrawTextW(item->hDC, L"AI 设置", -1, &textRect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        const wchar_t* label = item->CtlID == kSettingsButtonId ? L"AI" : L"壁纸";
+        DrawTextW(item->hDC, label, -1, &textRect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
         SelectObject(item->hDC, previous);
         if (selectedBrush) DeleteObject(selectedBrush);
         return TRUE;
@@ -409,7 +500,7 @@ LRESULT SearchWindow::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) 
     case WM_CTLCOLOREDIT: {
         const HDC dc = reinterpret_cast<HDC>(wParam);
         SetTextColor(dc, RGB(244, 246, 250));
-        SetBkColor(dc, RGB(28, 30, 37));
+        SetBkColor(dc, RGB(25, 27, 33));
         return reinterpret_cast<LRESULT>(editBrush_);
     }
     case kTrayMessage:
@@ -428,17 +519,25 @@ LRESULT SearchWindow::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) 
     }
     case WM_DISPLAYCHANGE:
         PositionWindow();
+        SavePosition();
         return 0;
     case WM_SIZE: {
         const int width = static_cast<int>(LOWORD(lParam));
         ResizeRenderTarget(LOWORD(lParam), HIWORD(lParam));
+        const int wallpaperX = width - kRightMargin - kWallpaperButtonWidth;
+        const int aiX = wallpaperX - kButtonGap - kAiButtonWidth;
+        const int editWidth = std::max(100, aiX - kButtonGap - kLeftMargin);
         if (edit_) {
-            MoveWindow(edit_, 20, 16, std::max(100, width - 150), 42, TRUE);
+            MoveWindow(edit_, kLeftMargin, kControlTop, editWidth, kControlHeight, TRUE);
             RoundControl(edit_);
         }
         if (settingsButton_) {
-            MoveWindow(settingsButton_, std::max(120, width - 118), 16, 98, 42, TRUE);
+            MoveWindow(settingsButton_, aiX, kControlTop, kAiButtonWidth, kControlHeight, TRUE);
             RoundControl(settingsButton_);
+        }
+        if (wallpaperButton_) {
+            MoveWindow(wallpaperButton_, wallpaperX, kControlTop, kWallpaperButtonWidth, kControlHeight, TRUE);
+            RoundControl(wallpaperButton_);
         }
         return 0;
     }
@@ -602,31 +701,31 @@ void SearchWindow::Draw() {
         const auto hwndProps = D2D1::HwndRenderTargetProperties(hwnd_, D2D1::SizeU(rc.right - rc.left, rc.bottom - rc.top));
         if (FAILED(d2dFactory_->CreateHwndRenderTarget(props, hwndProps, renderTarget_.GetAddressOf()))) return;
         renderTarget_->CreateSolidColorBrush(D2D1::ColorF(0xf5f7fa), textBrush_.GetAddressOf());
-        renderTarget_->CreateSolidColorBrush(D2D1::ColorF(0xb2b7c2), secondaryBrush_.GetAddressOf());
-        renderTarget_->CreateSolidColorBrush(D2D1::ColorF(0x363b47, 0.88f), selectionBrush_.GetAddressOf());
+        renderTarget_->CreateSolidColorBrush(D2D1::ColorF(0xa6acb8), secondaryBrush_.GetAddressOf());
+        renderTarget_->CreateSolidColorBrush(D2D1::ColorF(0x353a45, 0.84f), selectionBrush_.GetAddressOf());
     }
 
     renderTarget_->BeginDraw();
-    renderTarget_->Clear(D2D1::ColorF(0x171a21, 0.82f));
+    renderTarget_->Clear(D2D1::ColorF(0x15181f, 0.62f));
 
-    float y = 72.0f;
+    float y = 60.0f;
     const float width = renderTarget_->GetSize().width;
 
-    std::wstring persistentStatus = L"L1 应用 · L2 ";
-    persistentStatus += fileSearchAvailable_ ? L"已连接" : L"启动中";
-    persistentStatus += L" · L3 ";
-    persistentStatus += l3_.HasApiKey() ? l3_.Config().model : L"未配置（AI 设置）";
+    std::wstring persistentStatus = L"应用  ·  文件 ";
+    persistentStatus += fileSearchAvailable_ ? L"已就绪" : L"启动中";
+    persistentStatus += L"  ·  AI ";
+    persistentStatus += l3_.HasApiKey() ? l3_.Config().model : L"未配置";
 
     if (!expanded_) {
         renderTarget_->DrawText(persistentStatus.c_str(), static_cast<UINT32>(persistentStatus.size()), subtitleFormat_.Get(),
-                                D2D1::RectF(24, y, width - 24, y + 28), secondaryBrush_.Get(),
+                                D2D1::RectF(20, y, width - 20, y + 22), secondaryBrush_.Get(),
                                 D2D1_DRAW_TEXT_OPTIONS_CLIP);
     } else if (results_.empty()) {
         const std::wstring hint = currentQuery_.empty()
             ? persistentStatus
-            : L"没有本地结果 · Enter 进入 L3 CLI，Ctrl+Enter 可随时强制 L3";
+            : L"没有本地结果 · Enter 进入 L3 CLI，Ctrl+Enter 强制 L3";
         renderTarget_->DrawText(hint.c_str(), static_cast<UINT32>(hint.size()), subtitleFormat_.Get(),
-                                D2D1::RectF(24, y, width - 24, y + 30), secondaryBrush_.Get(),
+                                D2D1::RectF(20, y, width - 20, y + 26), secondaryBrush_.Get(),
                                 D2D1_DRAW_TEXT_OPTIONS_CLIP);
     }
 
@@ -636,21 +735,21 @@ void SearchWindow::Draw() {
             const float rowHeight = (result.kind == ResultKind::Status) ? 64.0f : 50.0f;
             if (static_cast<int>(i) == selected_) {
                 renderTarget_->FillRoundedRectangle(
-                    D2D1::RoundedRect(D2D1::RectF(14, y - 4, width - 14, y + rowHeight - 4), 10, 10),
+                    D2D1::RoundedRect(D2D1::RectF(12, y - 3, width - 12, y + rowHeight - 3), 10, 10),
                     selectionBrush_.Get());
             }
 
             std::wstring title = result.title;
             if (title.size() > 100) title.resize(100);
             renderTarget_->DrawText(title.c_str(), static_cast<UINT32>(title.size()), titleFormat_.Get(),
-                                    D2D1::RectF(24, y, width - 64, y + 26), textBrush_.Get(),
+                                    D2D1::RectF(20, y, width - 52, y + 26), textBrush_.Get(),
                                     D2D1_DRAW_TEXT_OPTIONS_CLIP);
 
             std::wstring subtitle = std::wstring(KindLabel(result.kind));
             if (!result.subtitle.empty()) subtitle += L" · " + result.subtitle;
             if (subtitle.size() > 150) subtitle.resize(150);
             renderTarget_->DrawText(subtitle.c_str(), static_cast<UINT32>(subtitle.size()), subtitleFormat_.Get(),
-                                    D2D1::RectF(24, y + 30, width - 64, y + rowHeight), secondaryBrush_.Get(),
+                                    D2D1::RectF(20, y + 30, width - 52, y + rowHeight), secondaryBrush_.Get(),
                                     D2D1_DRAW_TEXT_OPTIONS_CLIP);
 
             y += rowHeight;
