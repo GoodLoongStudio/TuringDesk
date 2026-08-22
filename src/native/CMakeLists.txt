@@ -59,6 +59,7 @@ add_executable(TuringDeskWallpaper WIN32
     src/WallpaperAutomation.cpp
     src/WallpaperAutomationWindow.cpp
     src/WallpaperLibrary.cpp
+    src/WallpaperLibraryWeb.cpp
     src/WallpaperLibraryWindow.cpp
     src/VideoWallpaperPlayer.cpp
     src/VideoWallpaperSet.cpp
