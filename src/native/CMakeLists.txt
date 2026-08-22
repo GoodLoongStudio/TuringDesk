@@ -1,34 +1,18 @@
-include(FetchContent)
-
 set(TURINGDESK_WEBVIEW2_VERSION "1.0.4129.50")
 
-if (CMAKE_VS_PLATFORM_NAME STREQUAL "ARM64")
-    # ARM64 release builds are intentionally network-free. The pinned WebView2
-    # headers and static loader are materialized by vendor-arm64-runtime.yml.
-    set(WEBVIEW2_SDK_ROOT "${CMAKE_SOURCE_DIR}/runtime/arm64/webview2-sdk")
-    set(WEBVIEW2_NATIVE_ARCH "arm64")
-else()
-    # x64 validation/release builds use the same pinned SDK version. Keeping this
-    # path separate avoids weakening the repository-owned ARM64 offline bundle.
-    FetchContent_Declare(
-        webview2sdk
-        URL "https://www.nuget.org/api/v2/package/Microsoft.Web.WebView2/${TURINGDESK_WEBVIEW2_VERSION}"
-        DOWNLOAD_EXTRACT_TIMESTAMP TRUE
-    )
-    FetchContent_MakeAvailable(webview2sdk)
-    set(WEBVIEW2_SDK_ROOT "${webview2sdk_SOURCE_DIR}")
-    if (CMAKE_VS_PLATFORM_NAME STREQUAL "Win32")
-        set(WEBVIEW2_NATIVE_ARCH "x86")
-    else()
-        set(WEBVIEW2_NATIVE_ARCH "x64")
-    endif()
+if (NOT CMAKE_VS_PLATFORM_NAME STREQUAL "ARM64")
+    message(FATAL_ERROR "TuringDesk native mainline is Windows ARM64 only. Configure with: cmake -S . -B build -A ARM64")
 endif()
 
+# Normal builds are intentionally network-free. The pinned WebView2 headers and
+# ARM64 static loader live inside the repository RuntimeBundle.
+set(WEBVIEW2_SDK_ROOT "${CMAKE_SOURCE_DIR}/runtime/arm64/webview2-sdk")
 set(WEBVIEW2_INCLUDE_DIR "${WEBVIEW2_SDK_ROOT}/build/native/include")
-set(WEBVIEW2_LOADER_STATIC "${WEBVIEW2_SDK_ROOT}/build/native/${WEBVIEW2_NATIVE_ARCH}/WebView2LoaderStatic.lib")
+set(WEBVIEW2_LOADER_STATIC "${WEBVIEW2_SDK_ROOT}/build/native/arm64/WebView2LoaderStatic.lib")
 if (NOT EXISTS "${WEBVIEW2_INCLUDE_DIR}/WebView2.h" OR NOT EXISTS "${WEBVIEW2_LOADER_STATIC}")
     message(FATAL_ERROR
-        "WebView2 SDK ${TURINGDESK_WEBVIEW2_VERSION} is incomplete at ${WEBVIEW2_SDK_ROOT} for ${WEBVIEW2_NATIVE_ARCH}.")
+        "Repository ARM64 RuntimeBundle is incomplete: WebView2 SDK ${TURINGDESK_WEBVIEW2_VERSION} is missing at ${WEBVIEW2_SDK_ROOT}. "
+        "Pull the latest main after the ARM64 runtime vendoring workflow completes. CMake will not download it automatically.")
 endif()
 
 add_executable(TuringDesk WIN32
@@ -70,9 +54,6 @@ add_executable(TuringDeskWallpaper WIN32
     src/VideoWallpaperSet.cpp
 )
 
-# Keep WallpaperEngine.cpp focused on the historical native engine. WallpaperEntry.cpp
-# owns the real GUI entry point and dispatches --web-wallpaper-host before the main
-# singleton mutex is created.
 set_source_files_properties(src/WallpaperEngine.cpp PROPERTIES
     COMPILE_DEFINITIONS "wWinMain=TuringDeskWallpaperMain"
 )
