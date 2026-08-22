@@ -9,9 +9,20 @@ on:
       - scripts/deploy-native-arm64.ps1
       - .github/workflows/native-search-windows.yml
   workflow_dispatch:
+    inputs:
+      full_package:
+        description: Build bundled Everything + Node + DeepSeek Harness runtime and run the real Harness smoke test
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: write
+
+# New pushes supersede older validation runs, but do not cancel a manually requested full package.
+concurrency:
+  group: native-search-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: true
 
 env:
   EVERYTHING_VERSION: 1.5.0.1422b
@@ -42,7 +53,16 @@ jobs:
         run: |
           $process = Start-Process -FilePath ".\build\src\native\Release\TuringDeskHarness.exe" -ArgumentList "--self-test" -Wait -PassThru
           if ($process.ExitCode -ne 0) { throw "Native Harness host self-test failed: $($process.ExitCode)" }
-      - name: Package x64 runtime
+      - name: Prepare fast x64 deploy artifact
+        shell: pwsh
+        run: |
+          $package = "build/package"
+          New-Item -ItemType Directory -Force -Path $package | Out-Null
+          Copy-Item "build/src/native/Release/TuringDesk.exe" (Join-Path $package "TuringDesk.exe") -Force
+          Copy-Item "build/src/native/Release/TuringDeskWallpaper.exe" (Join-Path $package "TuringDeskWallpaper.exe") -Force
+          Copy-Item "build/src/native/Release/TuringDeskHarness.exe" (Join-Path $package "TuringDeskHarness.exe") -Force
+      - name: Package full x64 runtime
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.full_package }}
         shell: pwsh
         run: |
           $package = "build/package"
@@ -52,9 +72,6 @@ jobs:
           New-Item -ItemType Directory -Force -Path $everything | Out-Null
           New-Item -ItemType Directory -Force -Path $nodeTarget | Out-Null
           New-Item -ItemType Directory -Force -Path $dshTarget | Out-Null
-          Copy-Item "build/src/native/Release/TuringDesk.exe" (Join-Path $package "TuringDesk.exe") -Force
-          Copy-Item "build/src/native/Release/TuringDeskWallpaper.exe" (Join-Path $package "TuringDeskWallpaper.exe") -Force
-          Copy-Item "build/src/native/Release/TuringDeskHarness.exe" (Join-Path $package "TuringDeskHarness.exe") -Force
 
           $everythingZip = Join-Path $env:RUNNER_TEMP "Everything-x64.zip"
           Invoke-WebRequest "https://www.voidtools.com/Everything-$env:EVERYTHING_VERSION.x64.zip" -OutFile $everythingZip
@@ -86,7 +103,8 @@ jobs:
           }
           $dshBin = Join-Path $dshTarget "node_modules\@deepseek-ai\dsh\lib\bin.js"
           if (-not (Test-Path $dshBin -PathType Leaf)) { throw "Bundled Harness entrypoint missing: $dshBin" }
-      - name: Verify packaged x64 runtime and boot Harness
+      - name: Verify full packaged x64 runtime and boot Harness
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.full_package }}
         shell: pwsh
         run: |
           $package = "build/package"
@@ -112,12 +130,6 @@ jobs:
           if ($nodeVersion.Trim() -ne "v$env:NODE_VERSION") { throw "Unexpected bundled Node version: $nodeVersion" }
           $dshPackage = Get-Content (Join-Path $dsh "node_modules\@deepseek-ai\dsh\package.json") -Raw | ConvertFrom-Json
           if ($dshPackage.version -ne $env:DSH_VERSION) { throw "Unexpected bundled Harness version: $($dshPackage.version)" }
-          $search = Start-Process -FilePath (Join-Path $package "TuringDesk.exe") -ArgumentList "--self-test" -Wait -PassThru
-          if ($search.ExitCode -ne 0) { throw "Packaged TuringDesk self-test failed: $($search.ExitCode)" }
-          $wallpaper = Start-Process -FilePath (Join-Path $package "TuringDeskWallpaper.exe") -ArgumentList "--self-test" -Wait -PassThru
-          if ($wallpaper.ExitCode -ne 0) { throw "Packaged wallpaper self-test failed: $($wallpaper.ExitCode)" }
-          $harness = Start-Process -FilePath (Join-Path $package "TuringDeskHarness.exe") -ArgumentList "--self-test" -Wait -PassThru
-          if ($harness.ExitCode -ne 0) { throw "Packaged Harness host self-test failed: $($harness.ExitCode)" }
           $smoke = Start-Process -FilePath (Join-Path $package "TuringDeskHarness.exe") -ArgumentList "--harness-smoke-test" -Wait -PassThru
           if ($smoke.ExitCode -ne 0) {
             $log = Join-Path $env:LOCALAPPDATA "TuringDesk\Logs\harness.log"
@@ -128,6 +140,7 @@ jobs:
         with:
           name: TuringDesk-Native-Search-x64
           path: build/package/**
+          retention-days: 3
 
   build-arm64:
     runs-on: windows-11-arm
@@ -152,7 +165,16 @@ jobs:
         run: |
           $process = Start-Process -FilePath ".\build\src\native\Release\TuringDeskHarness.exe" -ArgumentList "--self-test" -Wait -PassThru
           if ($process.ExitCode -ne 0) { throw "Native Harness host self-test failed: $($process.ExitCode)" }
-      - name: Package ARM64 runtime
+      - name: Prepare fast ARM64 deploy artifact
+        shell: pwsh
+        run: |
+          $package = "build/package"
+          New-Item -ItemType Directory -Force -Path $package | Out-Null
+          Copy-Item "build/src/native/Release/TuringDesk.exe" (Join-Path $package "TuringDesk.exe") -Force
+          Copy-Item "build/src/native/Release/TuringDeskWallpaper.exe" (Join-Path $package "TuringDeskWallpaper.exe") -Force
+          Copy-Item "build/src/native/Release/TuringDeskHarness.exe" (Join-Path $package "TuringDeskHarness.exe") -Force
+      - name: Package full ARM64 runtime
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.full_package }}
         shell: pwsh
         run: |
           $package = "build/package"
@@ -162,9 +184,6 @@ jobs:
           New-Item -ItemType Directory -Force -Path $everything | Out-Null
           New-Item -ItemType Directory -Force -Path $nodeTarget | Out-Null
           New-Item -ItemType Directory -Force -Path $dshTarget | Out-Null
-          Copy-Item "build/src/native/Release/TuringDesk.exe" (Join-Path $package "TuringDesk.exe") -Force
-          Copy-Item "build/src/native/Release/TuringDeskWallpaper.exe" (Join-Path $package "TuringDeskWallpaper.exe") -Force
-          Copy-Item "build/src/native/Release/TuringDeskHarness.exe" (Join-Path $package "TuringDeskHarness.exe") -Force
 
           $everythingZip = Join-Path $env:RUNNER_TEMP "Everything-ARM64.zip"
           Invoke-WebRequest "https://www.voidtools.com/Everything-$env:EVERYTHING_VERSION.ARM64.zip" -OutFile $everythingZip
@@ -196,7 +215,8 @@ jobs:
           }
           $dshBin = Join-Path $dshTarget "node_modules\@deepseek-ai\dsh\lib\bin.js"
           if (-not (Test-Path $dshBin -PathType Leaf)) { throw "Bundled Harness entrypoint missing: $dshBin" }
-      - name: Verify packaged ARM64 runtime and boot Harness
+      - name: Verify full packaged ARM64 runtime and boot Harness
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.full_package }}
         shell: pwsh
         run: |
           $package = "build/package"
@@ -222,12 +242,6 @@ jobs:
           if ($nodeVersion.Trim() -ne "v$env:NODE_VERSION") { throw "Unexpected bundled Node version: $nodeVersion" }
           $dshPackage = Get-Content (Join-Path $dsh "node_modules\@deepseek-ai\dsh\package.json") -Raw | ConvertFrom-Json
           if ($dshPackage.version -ne $env:DSH_VERSION) { throw "Unexpected bundled Harness version: $($dshPackage.version)" }
-          $search = Start-Process -FilePath (Join-Path $package "TuringDesk.exe") -ArgumentList "--self-test" -Wait -PassThru
-          if ($search.ExitCode -ne 0) { throw "Packaged TuringDesk self-test failed: $($search.ExitCode)" }
-          $wallpaper = Start-Process -FilePath (Join-Path $package "TuringDeskWallpaper.exe") -ArgumentList "--self-test" -Wait -PassThru
-          if ($wallpaper.ExitCode -ne 0) { throw "Packaged wallpaper self-test failed: $($wallpaper.ExitCode)" }
-          $harness = Start-Process -FilePath (Join-Path $package "TuringDeskHarness.exe") -ArgumentList "--self-test" -Wait -PassThru
-          if ($harness.ExitCode -ne 0) { throw "Packaged Harness host self-test failed: $($harness.ExitCode)" }
           $smoke = Start-Process -FilePath (Join-Path $package "TuringDeskHarness.exe") -ArgumentList "--harness-smoke-test" -Wait -PassThru
           if ($smoke.ExitCode -ne 0) {
             $log = Join-Path $env:LOCALAPPDATA "TuringDesk\Logs\harness.log"
@@ -238,6 +252,7 @@ jobs:
         with:
           name: TuringDesk-Native-Search-ARM64
           path: build/package/**
+          retention-days: 3
 
   report:
     if: always()
@@ -252,11 +267,13 @@ jobs:
         env:
           X64_RESULT: ${{ needs.build-x64.result }}
           ARM64_RESULT: ${{ needs.build-arm64.result }}
+          BUILD_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.full_package && 'full' || 'quick' }}
         run: |
           mkdir -p ci
           cat > "ci/native-${GITHUB_SHA}.json" <<EOF
           {
             "sha": "${GITHUB_SHA}",
+            "mode": "${BUILD_MODE}",
             "x64": "${X64_RESULT}",
             "arm64": "${ARM64_RESULT}",
             "run_id": "${GITHUB_RUN_ID}"
