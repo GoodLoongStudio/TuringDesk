@@ -5,6 +5,7 @@
 #include "turingdesk/SearchTypes.h"
 #include <windows.h>
 #include <CommCtrl.h>
+#include <shellapi.h>
 #include <d2d1.h>
 #include <dwrite.h>
 #include <wrl/client.h>
@@ -32,16 +33,22 @@ private:
     void ExecuteSelected(bool forceL3);
     void StartL3(const std::wstring& prompt);
     void OpenModelSettings();
+    void OpenWallpaperSettings();
     void Draw();
     void ResizeRenderTarget(UINT width, UINT height);
     void PositionWindow();
     void SetStatus(std::wstring title, std::wstring subtitle = {});
+    void SetExpanded(bool expanded);
+    void ApplyWindows11Style();
+    void AddTray();
+    void RemoveTray();
+    void HandleTray(UINT mouseMessage);
+    void ExitApplication();
 
     HINSTANCE instance_{};
     HWND hwnd_{};
     HWND edit_{};
     HWND settingsButton_{};
-    HWND closeButton_{};
     WNDPROC oldEditProc_{};
     AppSearch apps_;
     EverythingSearch files_;
@@ -52,7 +59,16 @@ private:
     int selected_{-1};
     bool fileSearchAvailable_{false};
     bool fileSearchQueryFailed_{false};
+    bool expanded_{false};
+    bool exiting_{false};
     std::wstring currentQuery_;
+
+    NOTIFYICONDATAW tray_{};
+    bool trayAdded_{false};
+    UINT taskbarCreated_{0};
+    HBRUSH editBrush_{};
+    HBRUSH buttonBrush_{};
+    HFONT uiFont_{};
 
     Microsoft::WRL::ComPtr<ID2D1Factory> d2dFactory_;
     Microsoft::WRL::ComPtr<ID2D1HwndRenderTarget> renderTarget_;
