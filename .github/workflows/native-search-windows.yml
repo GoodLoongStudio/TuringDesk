@@ -6,6 +6,7 @@ on:
     paths:
       - CMakeLists.txt
       - src/native/**
+      - scripts/deploy-native-arm64.ps1
       - .github/workflows/native-search-windows.yml
   workflow_dispatch:
 
