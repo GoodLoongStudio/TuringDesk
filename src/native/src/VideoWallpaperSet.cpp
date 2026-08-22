@@ -39,9 +39,13 @@ bool VideoWallpaperSet::EnsureSurfaceClass() {
     return GetLastError() == ERROR_CLASS_ALREADY_EXISTS;
 }
 
-bool VideoWallpaperSet::Start(HWND parentWindow, const std::wstring& path, const std::vector<RECT>& requestedRegions) {
+bool VideoWallpaperSet::Start(HWND parentWindow, const std::wstring& path, const std::vector<RECT>& requestedRegions,
+                              wallpaper::ScaleMode scaleMode, float focalX, float focalY) {
     Stop();
     lastError_.clear();
+    scaleMode_ = scaleMode;
+    focalX_ = wallpaper::ClampFocal(focalX);
+    focalY_ = wallpaper::ClampFocal(focalY);
     if (!parentWindow || path.empty()) {
         lastError_ = L"视频 Surface 参数无效";
         return false;
@@ -98,6 +102,7 @@ bool VideoWallpaperSet::Start(HWND parentWindow, const std::wstring& path, const
         }
 
         slot.player = std::make_unique<VideoWallpaperPlayer>();
+        slot.player->SetScaling(scaleMode_, focalX_, focalY_);
         if (!slot.player->Start(slot.surface, path)) {
             lastError_ = slot.player->LastErrorText();
             if (lastError_.empty()) lastError_ = L"Media Foundation 无法启动多屏视频";
@@ -105,6 +110,7 @@ bool VideoWallpaperSet::Start(HWND parentWindow, const std::wstring& path, const
             Stop();
             return false;
         }
+        slot.player->SetScaling(scaleMode_, focalX_, focalY_);
         slots_.push_back(std::move(slot));
     }
 
@@ -138,6 +144,15 @@ void VideoWallpaperSet::Tick() {
 void VideoWallpaperSet::SetPaused(bool paused) {
     for (auto& slot : slots_) {
         if (slot.player) slot.player->SetPaused(paused);
+    }
+}
+
+void VideoWallpaperSet::SetScaling(wallpaper::ScaleMode scaleMode, float focalX, float focalY) {
+    scaleMode_ = scaleMode;
+    focalX_ = wallpaper::ClampFocal(focalX);
+    focalY_ = wallpaper::ClampFocal(focalY);
+    for (auto& slot : slots_) {
+        if (slot.player) slot.player->SetScaling(scaleMode_, focalX_, focalY_);
     }
 }
 
