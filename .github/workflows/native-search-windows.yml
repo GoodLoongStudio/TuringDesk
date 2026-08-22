@@ -45,23 +45,21 @@ jobs:
             $ready = ([int]$m.schema -ge 2) -and ($m.lockSha256 -eq $hash)
           }
           "ready=$($ready.ToString().ToLowerInvariant())" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-          if (-not $ready) { Write-Host 'RuntimeBundle is being re-vendored; this push run will defer the native build.' }
+          if (-not $ready) {
+            throw 'ARM64 RuntimeBundle is stale or incomplete. Vendor ARM64 Runtime Bundle must succeed before native validation can pass.'
+          }
 
       - name: Verify repository ARM64 RuntimeBundle
-        if: steps.bundle.outputs.ready == 'true'
         shell: pwsh
         run: .\scripts\verify-arm64-runtime-bundle.ps1
 
       - name: Configure ARM64 offline
-        if: steps.bundle.outputs.ready == 'true'
         run: cmake -S . -B build -A ARM64
 
       - name: Build ARM64
-        if: steps.bundle.outputs.ready == 'true'
         run: cmake --build build --config Release --parallel
 
       - name: Native self-tests
-        if: steps.bundle.outputs.ready == 'true'
         shell: pwsh
         run: |
           foreach ($test in @(
@@ -74,7 +72,6 @@ jobs:
           }
 
       - name: Prepare self-contained ARM64 smoke package
-        if: steps.bundle.outputs.ready == 'true'
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path build/package | Out-Null
@@ -84,7 +81,6 @@ jobs:
           .\scripts\prepare-third-party-runtime-arm64.ps1 -DeployDir (Resolve-Path build/package).Path -SkipGozServiceInstall
 
       - name: Validate full Codex CLI runtime
-        if: steps.bundle.outputs.ready == 'true'
         shell: pwsh
         run: |
           $codex = '.\build\package\Codex\codex.exe'
@@ -94,7 +90,6 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Bundled Codex CLI app-server command failed' }
 
       - name: Real goz MFT/USN integration test
-        if: steps.bundle.outputs.ready == 'true'
         shell: pwsh
         run: |
           $goz = (Resolve-Path '.\build\package\Goz\goz.exe').Path
@@ -120,7 +115,6 @@ jobs:
           }
 
       - name: Real bundled DeepSeek Harness smoke test
-        if: steps.bundle.outputs.ready == 'true'
         shell: pwsh
         run: |
           $p = Start-Process -FilePath '.\build\package\TuringDeskHarness.exe' -ArgumentList '--harness-smoke-test' -Wait -PassThru
@@ -131,7 +125,6 @@ jobs:
           }
 
       - name: Prepare compact ARM64 artifact
-        if: steps.bundle.outputs.ready == 'true'
         shell: pwsh
         run: |
           Remove-Item build/package/Runtime -Recurse -Force -ErrorAction SilentlyContinue
@@ -139,7 +132,6 @@ jobs:
           Remove-Item build/package/Codex -Recurse -Force -ErrorAction SilentlyContinue
 
       - uses: actions/upload-artifact@v4
-        if: steps.bundle.outputs.ready == 'true'
         with:
           name: TuringDesk-Native-Search-ARM64
           path: build/package/**
