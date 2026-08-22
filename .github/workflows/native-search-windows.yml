@@ -31,6 +31,7 @@ env:
   EVERYTHING_VERSION: 1.5.0.1422b
   NODE_VERSION: 24.19.0
   DSH_VERSION: 0.1.0-rc.7
+  NODE_OPTIONS: --max-old-space-size=4096
 
 jobs:
   build-x64:
@@ -100,7 +101,7 @@ jobs:
           $nodeSource = Join-Path $nodeExtract "node-v$env:NODE_VERSION-win-x64"
           Copy-Item (Join-Path $nodeSource "*") $nodeTarget -Recurse -Force
 
-          Write-Host "[runtime] Installing DeepSeek Harness x64 dependencies..."
+          Write-Host "[runtime] Installing DeepSeek Harness x64 dependencies with NODE_OPTIONS=$env:NODE_OPTIONS..."
           $npmCache = Join-Path $env:RUNNER_TEMP "npm-cache-x64"
           New-Item -ItemType Directory -Force -Path $npmCache | Out-Null
           $oldPath = $env:PATH
@@ -234,7 +235,7 @@ jobs:
           $npmCache = Join-Path $cache "NpmCache"
           New-Item -ItemType Directory -Force -Path $dshTarget | Out-Null
           New-Item -ItemType Directory -Force -Path $npmCache | Out-Null
-          Write-Host "[3/3] Installing @deepseek-ai/dsh@$env:DSH_VERSION production dependencies..."
+          Write-Host "[3/3] Installing @deepseek-ai/dsh@$env:DSH_VERSION production dependencies with NODE_OPTIONS=$env:NODE_OPTIONS..."
           $oldPath = $env:PATH
           try {
             $env:PATH = "$((Resolve-Path $nodeTarget).Path);$oldPath"
