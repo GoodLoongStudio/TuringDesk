@@ -26,10 +26,8 @@ git pull --ff-only
 if errorlevel 1 goto :fail
 
 echo.
-echo [2/3] Preparing official prerequisites, DeepSeek Harness, and persistent tools...
+echo [2/3] Preparing official prerequisites and persistent tools...
 powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\prepare-third-party-runtime-arm64.ps1"
-if errorlevel 1 goto :fail
-powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\ensure-official-dsh.ps1"
 if errorlevel 1 goto :fail
 
 echo.
@@ -38,7 +36,7 @@ powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\de
 if errorlevel 1 goto :fail
 
 echo.
-echo DeepSeek Harness: official @deepseek-ai/dsh installed once, hosted by TuringDesk WebView2.
+echo DeepSeek Harness: official npx @deepseek-ai/dsh, hosted by TuringDesk WebView2.
 echo ========================================
 echo   SUCCESS - TuringDesk is running
 echo ========================================
