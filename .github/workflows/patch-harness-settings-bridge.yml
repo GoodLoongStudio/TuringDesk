@@ -1,0 +1,162 @@
+name: Patch Harness Settings Bridge
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/patch-harness-settings-bridge.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Connect settings bridge
+        shell: python
+        run: |
+          from pathlib import Path
+
+          bridge = Path('src/native/src/HarnessSettingsBridge.cpp')
+          bs = bridge.read_text(encoding='utf-8')
+          if '#include <cwctype>' not in bs:
+              bs = bs.replace('#include <algorithm>\n', '#include <algorithm>\n#include <cwctype>\n')
+          bridge.write_text(bs, encoding='utf-8')
+
+          p = Path('src/native/src/HarnessProcessManager.cpp')
+          s = p.read_text(encoding='utf-8')
+          if '#include "turingdesk/HarnessSettingsBridge.h"' not in s:
+              s = s.replace('#include "turingdesk/HarnessProcessManager.h"\n', '#include "turingdesk/HarnessProcessManager.h"\n#include "turingdesk/HarnessSettingsBridge.h"\n')
+
+          helper_marker = '''std::wstring Quote(const std::wstring& value) {
+    return L"\\\"" + value + L"\\\"";
+}
+
+'''
+          helper = helper_marker + '''class ScopedEnvironmentOverride {
+public:
+    ScopedEnvironmentOverride(const wchar_t* name, const std::wstring& value) : name_(name ? name : L"") {
+        if (name_.empty() || value.empty()) return;
+        const DWORD needed = GetEnvironmentVariableW(name_.c_str(), nullptr, 0);
+        if (needed > 0) {
+            previous_.resize(needed);
+            const DWORD written = GetEnvironmentVariableW(name_.c_str(), previous_.data(), needed);
+            if (written > 0 && written < needed) {
+                previous_.resize(written);
+                hadPrevious_ = true;
+            } else {
+                previous_.clear();
+            }
+        }
+        active_ = SetEnvironmentVariableW(name_.c_str(), value.c_str()) != FALSE;
+    }
+
+    ~ScopedEnvironmentOverride() {
+        if (!active_) return;
+        SetEnvironmentVariableW(name_.c_str(), hadPrevious_ ? previous_.c_str() : nullptr);
+    }
+
+    ScopedEnvironmentOverride(const ScopedEnvironmentOverride&) = delete;
+    ScopedEnvironmentOverride& operator=(const ScopedEnvironmentOverride&) = delete;
+
+private:
+    std::wstring name_;
+    std::wstring previous_;
+    bool hadPrevious_{};
+    bool active_{};
+};
+
+'''
+          if 'class ScopedEnvironmentOverride' not in s:
+              if helper_marker not in s:
+                  raise SystemExit('Quote helper marker not found')
+              s = s.replace(helper_marker, helper)
+
+          start_old = '''bool HarnessProcessManager::Start() {
+    if (Running() || ServiceReady()) return true;
+    Stop();
+    impl_->lastError.clear();
+
+    const LaunchSpec launch = ResolveLaunchSpec();'''
+          start_new = '''bool HarnessProcessManager::Start() {
+    // Always synchronize the shared TuringDesk model configuration first. DSH
+    // watches settings.yaml, so an already-running service can pick up a changed
+    // Provider/Base URL/Model without requiring a second configuration surface.
+    const HarnessSettingsBridgeState bridge = PrepareHarnessSettingsBridge();
+    if (!bridge.error.empty()) {
+        impl_->lastError = L"无法同步 TuringDesk AI 设置到 DeepSeek Harness：" + bridge.error;
+        return false;
+    }
+    if (Running() || ServiceReady()) return true;
+    Stop();
+    impl_->lastError.clear();
+
+    const LaunchSpec launch = ResolveLaunchSpec();'''
+          if start_old in s:
+              s = s.replace(start_old, start_new)
+          elif 'PrepareHarnessSettingsBridge()' not in s:
+              raise SystemExit('Harness Start marker not found')
+
+          log_old = '''    WriteLogLine(logHandle, L"[TuringDesk] command: " + launch.commandLine);
+    WriteLogLine(logHandle, L"[TuringDesk] external browser: disabled; UI is hosted by TuringDesk WebView2");'''
+          log_new = '''    WriteLogLine(logHandle, L"[TuringDesk] command: " + launch.commandLine);
+    if (bridge.configured) {
+        WriteLogLine(logHandle, L"[TuringDesk] shared model: provider=" + bridge.providerId + L" model=" + bridge.model);
+        WriteLogLine(logHandle, L"[TuringDesk] shared base URL: " + bridge.baseUrl);
+        WriteLogLine(logHandle, bridge.hasApiKey
+            ? L"[TuringDesk] shared API key: injected from Windows Credential Manager"
+            : L"[TuringDesk] shared API key: none (local/keyless provider expected)");
+    } else {
+        WriteLogLine(logHandle, L"[TuringDesk] shared model: TuringDesk AI settings are not configured yet");
+    }
+    WriteLogLine(logHandle, L"[TuringDesk] external browser: disabled; UI is hosted by TuringDesk WebView2");'''
+          if log_old in s:
+              s = s.replace(log_old, log_new)
+
+          create_old = '''    const BOOL created = CreateProcessW(launch.application.c_str(), commandBuffer.data(), nullptr, nullptr, TRUE, flags,
+                                        nullptr, home.empty() ? nullptr : home.c_str(), &startup, &processInfo);
+    const DWORD createError = created ? ERROR_SUCCESS : GetLastError();
+    CloseHandle(inputHandle);'''
+          create_new = '''    BOOL created = FALSE;
+    DWORD createError = ERROR_SUCCESS;
+    {
+        // DSH_HOME is TuringDesk-owned. The secret stays in Windows Credential
+        // Manager and exists in the environment only long enough for CreateProcess
+        // to snapshot it into the official Harness child process.
+        ScopedEnvironmentOverride dshHome(L"DSH_HOME", bridge.dshHome);
+        ScopedEnvironmentOverride apiKey(L"TURINGDESK_API_KEY", bridge.apiKey);
+        created = CreateProcessW(launch.application.c_str(), commandBuffer.data(), nullptr, nullptr, TRUE, flags,
+                                 nullptr, home.empty() ? nullptr : home.c_str(), &startup, &processInfo);
+        createError = created ? ERROR_SUCCESS : GetLastError();
+    }
+    CloseHandle(inputHandle);'''
+          if create_old in s:
+              s = s.replace(create_old, create_new)
+          elif 'ScopedEnvironmentOverride dshHome' not in s:
+              raise SystemExit('CreateProcess marker not found')
+
+          self_old = '''    return DefaultUrl() == L"http://localhost:3080" &&
+           dshCommand.find(L"Runtime\\\\Node\\\\node.exe") != std::wstring::npos &&'''
+          self_new = '''    return HarnessSettingsBridgeSelfTest() &&
+           DefaultUrl() == L"http://localhost:3080" &&
+           dshCommand.find(L"Runtime\\\\Node\\\\node.exe") != std::wstring::npos &&'''
+          if self_old in s:
+              s = s.replace(self_old, self_new)
+          elif 'HarnessSettingsBridgeSelfTest()' not in s:
+              raise SystemExit('SelfTest marker not found')
+
+          p.write_text(s, encoding='utf-8')
+      - name: Commit patch
+        shell: bash
+        run: |
+          rm .github/workflows/patch-harness-settings-bridge.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/native/src/HarnessProcessManager.cpp src/native/src/HarnessSettingsBridge.cpp .github/workflows/patch-harness-settings-bridge.yml
+          git commit -m "fix: reuse TuringDesk API settings in DeepSeek Harness"
+          git push origin HEAD:main
