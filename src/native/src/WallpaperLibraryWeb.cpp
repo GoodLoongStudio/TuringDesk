@@ -23,6 +23,14 @@ std::wstring Lower(std::wstring value) {
     return value;
 }
 
+bool StartsWithInsensitive(std::wstring_view value, std::wstring_view prefix) {
+    if (value.size() < prefix.size()) return false;
+    for (std::size_t i = 0; i < prefix.size(); ++i) {
+        if (std::towlower(value[i]) != std::towlower(prefix[i])) return false;
+    }
+    return true;
+}
+
 std::wstring NewWebId() {
     GUID guid{};
     if (SUCCEEDED(CoCreateGuid(&guid))) {
@@ -55,21 +63,44 @@ std::wstring DefaultWebTitle(std::wstring_view url) {
 }
 
 bool SameUrl(std::wstring_view a, std::wstring_view b) {
-    return Lower(Trim(std::wstring(a))) == Lower(Trim(std::wstring(b)));
+    std::wstring left = Trim(std::wstring(a));
+    std::wstring right = Trim(std::wstring(b));
+    if (!StartsWithInsensitive(left, L"https://") || !StartsWithInsensitive(right, L"https://"))
+        return left == right;
+
+    constexpr std::size_t authorityStart = 8;
+    const std::size_t leftEnd = left.find_first_of(L"/?#", authorityStart);
+    const std::size_t rightEnd = right.find_first_of(L"/?#", authorityStart);
+    const std::size_t leftAuthorityEnd = leftEnd == std::wstring::npos ? left.size() : leftEnd;
+    const std::size_t rightAuthorityEnd = rightEnd == std::wstring::npos ? right.size() : rightEnd;
+
+    const std::wstring leftAuthority = Lower(left.substr(authorityStart, leftAuthorityEnd - authorityStart));
+    const std::wstring rightAuthority = Lower(right.substr(authorityStart, rightAuthorityEnd - authorityStart));
+    if (leftAuthority != rightAuthority) return false;
+
+    const std::wstring_view leftTail(left.data() + leftAuthorityEnd, left.size() - leftAuthorityEnd);
+    const std::wstring_view rightTail(right.data() + rightAuthorityEnd, right.size() - rightAuthorityEnd);
+    return leftTail == rightTail;
 }
 
 } // namespace
 
-bool WallpaperLibrary::IsTrustedWebUrl(std::wstring_view value) noexcept {
+bool WallpaperLibrary::IsTrustedWebUrl(std::wstring_view input) noexcept {
+    const std::wstring value = Trim(std::wstring(input));
     constexpr std::wstring_view prefix = L"https://";
-    if (value.size() <= prefix.size()) return false;
-    for (std::size_t i = 0; i < prefix.size(); ++i) {
-        if (std::towlower(value[i]) != prefix[i]) return false;
-    }
+    if (value.size() <= prefix.size() || !StartsWithInsensitive(value, prefix)) return false;
+
     const std::size_t hostStart = prefix.size();
     const std::size_t hostEnd = value.find_first_of(L"/?#", hostStart);
-    const std::size_t hostLength = (hostEnd == std::wstring_view::npos ? value.size() : hostEnd) - hostStart;
-    return hostLength > 0;
+    const std::size_t authorityEnd = hostEnd == std::wstring::npos ? value.size() : hostEnd;
+    if (authorityEnd <= hostStart) return false;
+
+    const std::wstring_view authority(value.data() + hostStart, authorityEnd - hostStart);
+    if (authority.find(L'@') != std::wstring_view::npos) return false;
+    for (const wchar_t ch : authority) {
+        if (std::iswspace(ch) || std::iswcntrl(ch)) return false;
+    }
+    return true;
 }
 
 std::optional<WallpaperLibraryItem> WallpaperLibrary::ImportWebUrl(
@@ -77,7 +108,7 @@ std::optional<WallpaperLibraryItem> WallpaperLibrary::ImportWebUrl(
     if (error) error->clear();
     url = Trim(std::move(url));
     if (!IsTrustedWebUrl(url)) {
-        if (error) *error = L"远程 Web 壁纸只允许 HTTPS URL";
+        if (error) *error = L"远程 Web 壁纸只允许不含凭据的 HTTPS URL";
         return std::nullopt;
     }
 
