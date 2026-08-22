@@ -261,7 +261,7 @@ bool VideoWallpaperPlayer::Start(HWND targetWindow, const std::wstring& path) {
     impl_->callback.Attach(callback);
 
     IMFPMediaPlayer* rawPlayer = nullptr;
-    impl_->lastError = MFPCreateMediaPlayer(path.c_str(), TRUE, MFP_OPTION_NONE,
+    impl_->lastError = MFPCreateMediaPlayer(path.c_str(), FALSE, MFP_OPTION_NONE,
                                             impl_->callback.Get(), targetWindow, &rawPlayer);
     if (FAILED(impl_->lastError) || !rawPlayer) {
         if (rawPlayer) rawPlayer->Release();
@@ -288,7 +288,8 @@ void VideoWallpaperPlayer::Tick() {
     const HRESULT asyncError = static_cast<HRESULT>(impl_->asyncError.exchange(S_OK, std::memory_order_acq_rel));
     if (FAILED(asyncError)) impl_->lastError = asyncError;
 
-    if (impl_->mediaReady.exchange(false, std::memory_order_acq_rel)) {
+    const bool becameReady = impl_->mediaReady.exchange(false, std::memory_order_acq_rel);
+    if (becameReady) {
         impl_->RefreshNativeSize();
         impl_->placementDirty = true;
         impl_->controlsDirty = true;
@@ -303,6 +304,11 @@ void VideoWallpaperPlayer::Tick() {
     }
 
     if (impl_->controlsDirty) impl_->ApplyControls();
+    if (becameReady && !impl_->paused) {
+        const HRESULT hr = impl_->player->Play();
+        if (FAILED(hr)) impl_->lastError = hr;
+        else UpdateVideo();
+    }
 
     if (!impl_->ended.exchange(false, std::memory_order_acq_rel)) return;
     if (!impl_->looping) {
