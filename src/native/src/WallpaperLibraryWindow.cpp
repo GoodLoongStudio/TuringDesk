@@ -28,6 +28,7 @@ constexpr int kRemoveId = 5109;
 constexpr int kApplyId = 5110;
 constexpr int kCloseId = 5111;
 constexpr int kStatusId = 5112;
+constexpr int kTargetComboId = 5113;
 
 enum class FilterMode {
     All,
@@ -67,6 +68,7 @@ struct WallpaperLibraryWindow::Impl {
     HWND window{};
     HWND search{};
     HWND list{};
+    HWND targetCombo{};
     HWND managedCopy{};
     HWND favoriteButton{};
     HWND status{};
@@ -74,6 +76,8 @@ struct WallpaperLibraryWindow::Impl {
     ApplyCallback applyCallback;
     FilterMode filter{FilterMode::All};
     std::vector<std::wstring> visibleIds;
+    std::vector<WallpaperLibraryTarget> targets;
+    std::vector<std::wstring> targetIds;
 
     ~Impl() {
         if (window && IsWindow(window)) DestroyWindow(window);
@@ -88,6 +92,40 @@ struct WallpaperLibraryWindow::Impl {
         const LRESULT selected = SendMessageW(list, LB_GETCURSEL, 0, 0);
         if (selected == LB_ERR || selected < 0 || static_cast<std::size_t>(selected) >= visibleIds.size()) return std::nullopt;
         return library->Find(visibleIds[static_cast<std::size_t>(selected)]);
+    }
+
+    std::wstring SelectedTargetId() const {
+        if (!targetCombo) return {};
+        const LRESULT selected = SendMessageW(targetCombo, CB_GETCURSEL, 0, 0);
+        if (selected == CB_ERR || selected < 0 || static_cast<std::size_t>(selected) >= targetIds.size()) return {};
+        return targetIds[static_cast<std::size_t>(selected)];
+    }
+
+    std::wstring TargetDisplayName(std::wstring_view id) const {
+        if (id.empty()) return L"全局壁纸";
+        for (const auto& target : targets) {
+            if (_wcsicmp(target.monitorId.c_str(), std::wstring(id).c_str()) == 0) return target.displayName;
+        }
+        return L"显示器";
+    }
+
+    void RebuildTargets() {
+        if (!targetCombo) return;
+        const std::wstring previous = SelectedTargetId();
+        SendMessageW(targetCombo, CB_RESETCONTENT, 0, 0);
+        targetIds.clear();
+        SendMessageW(targetCombo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"全局 / 当前布局"));
+        targetIds.emplace_back();
+        int selectedIndex = 0;
+        for (const auto& target : targets) {
+            std::wstring label = target.primary ? L"主屏 · " : L"显示器 · ";
+            label += target.displayName.empty() ? L"未命名显示器" : target.displayName;
+            SendMessageW(targetCombo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(label.c_str()));
+            targetIds.push_back(target.monitorId);
+            if (!previous.empty() && _wcsicmp(previous.c_str(), target.monitorId.c_str()) == 0)
+                selectedIndex = static_cast<int>(targetIds.size() - 1);
+        }
+        SendMessageW(targetCombo, CB_SETCURSEL, selectedIndex, 0);
     }
 
     void RebuildList() {
@@ -237,11 +275,14 @@ struct WallpaperLibraryWindow::Impl {
                 return;
             }
         }
-        applyCallback(*selected);
+        const std::wstring targetId = SelectedTargetId();
+        applyCallback(*selected, targetId);
         std::wstring error;
         library->MarkUsed(selected->id, &error);
         RebuildList();
-        SetStatus(error.empty() ? L"已应用：" + selected->title : L"壁纸已应用，但最近使用记录保存失败：" + error);
+        const std::wstring targetName = TargetDisplayName(targetId);
+        SetStatus(error.empty() ? L"已应用到 " + targetName + L"：" + selected->title
+                                : L"壁纸已应用，但最近使用记录保存失败：" + error);
     }
 
     static LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) {
@@ -278,6 +319,7 @@ struct WallpaperLibraryWindow::Impl {
             self->window = nullptr;
             self->search = nullptr;
             self->list = nullptr;
+            self->targetCombo = nullptr;
             self->managedCopy = nullptr;
             self->favoriteButton = nullptr;
             self->status = nullptr;
@@ -323,8 +365,14 @@ struct WallpaperLibraryWindow::Impl {
         button(L"最近", kRecentId, 554, 54, 72, 30);
         button(L"导入…", kImportId, 650, 54, 120, 30);
 
+        HWND targetLabel = CreateWindowExW(0, L"STATIC", L"目标", WS_CHILD | WS_VISIBLE,
+                                           20, 98, 48, 24, window, nullptr, instance, nullptr);
+        SendMessageW(targetLabel, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
+        targetCombo = CreateWindowExW(0, L"COMBOBOX", L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST,
+                                      72, 92, 390, 180, window, ControlId(kTargetComboId), instance, nullptr);
+        SendMessageW(targetCombo, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
         managedCopy = CreateWindowExW(0, L"BUTTON", L"导入时复制到托管库", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
-                                      20, 94, 220, 26, window, ControlId(kManagedCopyId), instance, nullptr);
+                                      480, 94, 220, 26, window, ControlId(kManagedCopyId), instance, nullptr);
         SendMessageW(managedCopy, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
 
         list = CreateWindowExW(WS_EX_CLIENTEDGE, L"LISTBOX", L"",
@@ -340,6 +388,7 @@ struct WallpaperLibraryWindow::Impl {
         status = CreateWindowExW(0, L"STATIC", L"", WS_CHILD | WS_VISIBLE,
                                  20, 542, 750, 46, window, ControlId(kStatusId), instance, nullptr);
         SendMessageW(status, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
+        RebuildTargets();
         return true;
     }
 };
@@ -347,18 +396,29 @@ struct WallpaperLibraryWindow::Impl {
 WallpaperLibraryWindow::WallpaperLibraryWindow() : impl_(std::make_unique<Impl>()) {}
 WallpaperLibraryWindow::~WallpaperLibraryWindow() = default;
 
-bool WallpaperLibraryWindow::Show(HINSTANCE instance, WallpaperLibrary* library, ApplyCallback applyCallback) {
+bool WallpaperLibraryWindow::Show(HINSTANCE instance, WallpaperLibrary* library,
+                                  const std::vector<WallpaperLibraryTarget>& targets,
+                                  ApplyCallback applyCallback) {
     if (!impl_ || !library) return false;
     impl_->instance = instance;
     impl_->library = library;
+    impl_->targets = targets;
     impl_->applyCallback = std::move(applyCallback);
     if (!impl_->window || !IsWindow(impl_->window)) {
         if (!impl_->CreateWindowUi()) return false;
+    } else {
+        impl_->RebuildTargets();
     }
     impl_->RebuildList();
     ShowWindow(impl_->window, SW_SHOWNORMAL);
     SetForegroundWindow(impl_->window);
     return true;
+}
+
+void WallpaperLibraryWindow::SetTargets(const std::vector<WallpaperLibraryTarget>& targets) {
+    if (!impl_) return;
+    impl_->targets = targets;
+    if (impl_->window && IsWindow(impl_->window)) impl_->RebuildTargets();
 }
 
 void WallpaperLibraryWindow::Close() {
