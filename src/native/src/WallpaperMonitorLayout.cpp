@@ -2,8 +2,11 @@
 
 #include <algorithm>
 #include <cwchar>
+#include <cwctype>
 #include <sstream>
+#include <unordered_map>
 #include <utility>
+#include <vector>
 
 namespace turingdesk::wallpaper {
 namespace {
@@ -12,8 +15,16 @@ using GetDpiForMonitorFn = HRESULT (WINAPI*)(HMONITOR, int, UINT*, UINT*);
 
 struct EnumContext {
     MonitorTopology* topology{};
+    const std::unordered_map<std::wstring, std::pair<std::wstring, std::wstring>>* identities{};
     bool first{true};
 };
+
+std::wstring Lower(std::wstring value) {
+    std::transform(value.begin(), value.end(), value.begin(), [](wchar_t ch) {
+        return static_cast<wchar_t>(std::towlower(ch));
+    });
+    return value;
+}
 
 void QueryMonitorDpi(HMONITOR monitor, UINT& dpiX, UINT& dpiY) {
     dpiX = 96;
@@ -32,6 +43,58 @@ void QueryMonitorDpi(HMONITOR monitor, UINT& dpiX, UINT& dpiY) {
         }
     }
     FreeLibrary(shcore);
+}
+
+using MonitorIdentityMap = std::unordered_map<std::wstring, std::pair<std::wstring, std::wstring>>;
+
+MonitorIdentityMap QueryMonitorIdentities() {
+    MonitorIdentityMap result;
+    UINT32 pathCount = 0;
+    UINT32 modeCount = 0;
+    LONG status = GetDisplayConfigBufferSizes(QDC_ONLY_ACTIVE_PATHS, &pathCount, &modeCount);
+    if (status != ERROR_SUCCESS || pathCount == 0) return result;
+
+    for (int attempt = 0; attempt < 3; ++attempt) {
+        std::vector<DISPLAYCONFIG_PATH_INFO> paths(pathCount);
+        std::vector<DISPLAYCONFIG_MODE_INFO> modes(modeCount);
+        UINT32 actualPaths = pathCount;
+        UINT32 actualModes = modeCount;
+        status = QueryDisplayConfig(QDC_ONLY_ACTIVE_PATHS, &actualPaths, paths.data(),
+                                    &actualModes, modes.data(), nullptr);
+        if (status == ERROR_INSUFFICIENT_BUFFER) {
+            if (GetDisplayConfigBufferSizes(QDC_ONLY_ACTIVE_PATHS, &pathCount, &modeCount) != ERROR_SUCCESS) return result;
+            continue;
+        }
+        if (status != ERROR_SUCCESS) return result;
+        paths.resize(actualPaths);
+
+        for (const auto& path : paths) {
+            DISPLAYCONFIG_SOURCE_DEVICE_NAME source{};
+            source.header.type = DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME;
+            source.header.size = sizeof(source);
+            source.header.adapterId = path.sourceInfo.adapterId;
+            source.header.id = path.sourceInfo.id;
+            if (DisplayConfigGetDeviceInfo(&source.header) != ERROR_SUCCESS || source.viewGdiDeviceName[0] == L'\0')
+                continue;
+
+            DISPLAYCONFIG_TARGET_DEVICE_NAME target{};
+            target.header.type = DISPLAYCONFIG_DEVICE_INFO_GET_TARGET_NAME;
+            target.header.size = sizeof(target);
+            target.header.adapterId = path.targetInfo.adapterId;
+            target.header.id = path.targetInfo.id;
+            const LONG targetStatus = DisplayConfigGetDeviceInfo(&target.header);
+
+            std::wstring stableId = source.viewGdiDeviceName;
+            std::wstring friendlyName;
+            if (targetStatus == ERROR_SUCCESS) {
+                if (target.monitorDevicePath[0] != L'\0') stableId = target.monitorDevicePath;
+                if (target.monitorFriendlyDeviceName[0] != L'\0') friendlyName = target.monitorFriendlyDeviceName;
+            }
+            result[Lower(source.viewGdiDeviceName)] = {std::move(stableId), std::move(friendlyName)};
+        }
+        break;
+    }
+    return result;
 }
 
 RECT NormalizeBounds(const RECT& rect) noexcept {
@@ -64,6 +127,8 @@ void AddSystemMetricFallback(MonitorTopology& topology) {
     fallback.desktopRect = RECT{x, y, x + width, y + height};
     fallback.primary = true;
     fallback.deviceName = L"SYSTEM_METRICS_FALLBACK";
+    fallback.stableId = L"fallback:virtual-desktop";
+    fallback.friendlyName = L"Virtual Desktop";
     topology.monitors.push_back(fallback);
     topology.virtualBounds = fallback.desktopRect;
     topology.primaryBounds = fallback.desktopRect;
@@ -81,7 +146,8 @@ bool MonitorTopology::Valid() const noexcept {
 
 MonitorTopology QueryMonitorTopology() {
     MonitorTopology topology;
-    EnumContext context{&topology, true};
+    const MonitorIdentityMap identities = QueryMonitorIdentities();
+    EnumContext context{&topology, &identities, true};
 
     EnumDisplayMonitors(nullptr, nullptr,
         [](HMONITOR monitor, HDC, LPRECT, LPARAM raw) -> BOOL {
@@ -97,6 +163,14 @@ MonitorTopology QueryMonitorTopology() {
             item.desktopRect = info.rcMonitor;
             item.primary = (info.dwFlags & MONITORINFOF_PRIMARY) != 0;
             item.deviceName = info.szDevice;
+            item.stableId = item.deviceName;
+            if (target->identities) {
+                const auto found = target->identities->find(Lower(item.deviceName));
+                if (found != target->identities->end()) {
+                    if (!found->second.first.empty()) item.stableId = found->second.first;
+                    item.friendlyName = found->second.second;
+                }
+            }
             QueryMonitorDpi(monitor, item.dpiX, item.dpiY);
 
             if (target->first) {
@@ -129,6 +203,24 @@ MonitorTopology QueryMonitorTopology() {
         return a.desktopRect.left < b.desktopRect.left;
     });
     return topology;
+}
+
+const MonitorInfo* FindMonitorByStableId(const MonitorTopology& topology, std::wstring_view stableId) noexcept {
+    if (stableId.empty()) return nullptr;
+    for (const auto& monitor : topology.monitors) {
+        const std::wstring key = StableMonitorKey(monitor);
+        if (_wcsicmp(key.c_str(), std::wstring(stableId).c_str()) == 0) return &monitor;
+    }
+    return nullptr;
+}
+
+std::wstring StableMonitorKey(const MonitorInfo& monitor) {
+    if (!monitor.stableId.empty()) return monitor.stableId;
+    if (!monitor.deviceName.empty()) return monitor.deviceName;
+    std::wostringstream fallback;
+    fallback << L"rect:" << monitor.desktopRect.left << L"," << monitor.desktopRect.top << L"," <<
+                monitor.desktopRect.right << L"," << monitor.desktopRect.bottom;
+    return fallback.str();
 }
 
 LayoutMode ParseLayoutMode(const std::wstring& value) noexcept {
@@ -206,11 +298,12 @@ std::wstring DescribeMonitorTopology(const MonitorTopology& topology) {
     for (std::size_t i = 0; i < topology.monitors.size(); ++i) {
         const auto& monitor = topology.monitors[i];
         text << L"\r\n#" << (i + 1) << (monitor.primary ? L" 主屏 " : L" ")
-             << (monitor.deviceName.empty() ? L"显示器" : monitor.deviceName) << L" · "
+             << (!monitor.friendlyName.empty() ? monitor.friendlyName :
+                 (monitor.deviceName.empty() ? L"显示器" : monitor.deviceName)) << L" · "
              << (monitor.desktopRect.right - monitor.desktopRect.left) << L"×"
              << (monitor.desktopRect.bottom - monitor.desktopRect.top) << L" @ ("
              << monitor.desktopRect.left << L"," << monitor.desktopRect.top << L") · "
-             << monitor.dpiX << L" DPI";
+             << monitor.dpiX << L" DPI · ID=" << StableMonitorKey(monitor);
     }
     return text.str();
 }
@@ -220,12 +313,14 @@ bool SelfTestMonitorLayoutGeometry() noexcept {
     topology.virtualBounds = {-1920, -240, 3840, 2160};
     topology.primaryBounds = {0, 0, 1920, 1080};
     topology.monitors = {
-        {nullptr, {0, 0, 1920, 1080}, true, 144, 144, L"PRIMARY"},
-        {nullptr, {-1920, -240, 0, 840}, false, 96, 96, L"LEFT"},
-        {nullptr, {1920, 0, 3840, 2160}, false, 120, 120, L"RIGHT"},
+        {nullptr, {0, 0, 1920, 1080}, true, 144, 144, L"PRIMARY", L"monitor-primary", L"Primary Panel"},
+        {nullptr, {-1920, -240, 0, 840}, false, 96, 96, L"LEFT", L"monitor-left", L"Left Panel"},
+        {nullptr, {1920, 0, 3840, 2160}, false, 120, 120, L"RIGHT", L"monitor-right", L"Right Panel"},
     };
 
     if (!topology.Valid()) return false;
+    if (!FindMonitorByStableId(topology, L"MONITOR-LEFT")) return false;
+    if (StableMonitorKey(topology.monitors.front()) != L"monitor-primary") return false;
     const RECT span = HostDesktopBounds(topology, LayoutMode::Span);
     if (span.left != -1920 || span.top != -240 || span.right != 3840 || span.bottom != 2160) return false;
     const RECT primary = HostDesktopBounds(topology, LayoutMode::PrimaryOnly);
