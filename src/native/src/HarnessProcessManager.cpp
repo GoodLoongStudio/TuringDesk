@@ -1,9 +1,12 @@
 #include "turingdesk/HarnessProcessManager.h"
 #include <winhttp.h>
 #include <algorithm>
+#include <filesystem>
 #include <iterator>
 #include <string_view>
 #include <vector>
+
+namespace fs = std::filesystem;
 
 namespace turingdesk {
 namespace {
@@ -15,6 +18,8 @@ namespace {
 constexpr wchar_t kHarnessHost[] = L"127.0.0.1";
 constexpr INTERNET_PORT kHarnessPort = 3080;
 constexpr wchar_t kHarnessPath[] = L"/";
+constexpr wchar_t kHarnessPackage[] = L"@deepseek-ai/dsh@0.1.0-rc.7";
+constexpr wchar_t kBundledNpxRelativePath[] = L"HarnessRuntime\\Node\\npx.cmd";
 
 std::wstring Win32ErrorText(DWORD error) {
     if (error == ERROR_SUCCESS) return {};
@@ -45,6 +50,13 @@ std::wstring ComSpecPath() {
     return L"cmd.exe";
 }
 
+fs::path ModuleDirectory() {
+    wchar_t value[32768]{};
+    const DWORD length = GetModuleFileNameW(nullptr, value, static_cast<DWORD>(std::size(value)));
+    if (length == 0 || length >= std::size(value)) return {};
+    return fs::path(std::wstring(value, length)).parent_path();
+}
+
 std::wstring UserHomeDirectory() {
     wchar_t value[32768]{};
     const DWORD length = GetEnvironmentVariableW(L"USERPROFILE", value, static_cast<DWORD>(std::size(value)));
@@ -52,11 +64,25 @@ std::wstring UserHomeDirectory() {
     return {};
 }
 
-bool NpxAvailable() {
+std::wstring ResolveNpxPath() {
+    const fs::path moduleDirectory = ModuleDirectory();
+    if (!moduleDirectory.empty()) {
+        const fs::path bundled = moduleDirectory / kBundledNpxRelativePath;
+        std::error_code ec;
+        if (fs::is_regular_file(bundled, ec)) return bundled.wstring();
+    }
+
     wchar_t path[32768]{};
     const DWORD length = SearchPathW(nullptr, L"npx.cmd", nullptr,
                                      static_cast<DWORD>(std::size(path)), path, nullptr);
-    return length > 0 && length < std::size(path);
+    if (length > 0 && length < std::size(path)) return std::wstring(path, length);
+    return {};
+}
+
+std::wstring BuildLaunchCommandFor(const std::wstring& npxPath) {
+    // cmd /s /c requires the doubled opening quote when the command itself starts
+    // with a quoted executable path. This keeps portable package paths with spaces safe.
+    return L"cmd.exe /d /s /c \"\"" + npxPath + L"\" --yes " + kHarnessPackage + L" web\"";
 }
 
 bool ProbeHarnessHttp() {
@@ -136,8 +162,9 @@ bool HarnessProcessManager::Start() {
     Stop();
     impl_->lastError.clear();
 
-    if (!NpxAvailable()) {
-        impl_->lastError = L"未找到 npx。DeepSeek Harness 当前需要 Node.js；请安装 Node.js 后重试。";
+    const std::wstring npxPath = ResolveNpxPath();
+    if (npxPath.empty()) {
+        impl_->lastError = L"未找到 Harness 运行时。请使用包含 HarnessRuntime\\Node 的完整 TuringDesk 安装包。";
         return false;
     }
 
@@ -156,7 +183,7 @@ bool HarnessProcessManager::Start() {
     }
 
     const std::wstring comspec = ComSpecPath();
-    std::wstring command = BuildLaunchCommand();
+    std::wstring command = BuildLaunchCommandFor(npxPath);
     std::vector<wchar_t> commandBuffer(command.begin(), command.end());
     commandBuffer.push_back(L'\0');
 
@@ -257,18 +284,17 @@ std::wstring HarnessProcessManager::DefaultUrl() {
 }
 
 std::wstring HarnessProcessManager::BuildLaunchCommand() {
-    // /d disables AutoRun hooks; /s gives predictable /c quote handling.
-    // --yes avoids an invisible first-run npx install prompt because Harness is
-    // intentionally launched without a console window.
-    return L"cmd.exe /d /s /c \"npx --yes @deepseek-ai/dsh web\"";
+    std::wstring npxPath = ResolveNpxPath();
+    if (npxPath.empty()) npxPath = L"npx.cmd";
+    return BuildLaunchCommandFor(npxPath);
 }
 
 bool HarnessProcessManager::SelfTest() {
     const auto command = BuildLaunchCommand();
     return DefaultUrl() == L"http://localhost:3080" &&
-           command.find(L"@deepseek-ai/dsh") != std::wstring::npos &&
+           command.find(kHarnessPackage) != std::wstring::npos &&
            command.find(L" web") != std::wstring::npos &&
-           command.find(L"CREATE") == std::wstring::npos;
+           command.find(L"/d /s /c") != std::wstring::npos;
 }
 
 } // namespace turingdesk
