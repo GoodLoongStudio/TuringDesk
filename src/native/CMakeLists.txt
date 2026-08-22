@@ -11,10 +11,7 @@ else()
         URL "https://www.nuget.org/api/v2/package/Microsoft.Web.WebView2/${TURINGDESK_WEBVIEW2_VERSION}"
         DOWNLOAD_EXTRACT_TIMESTAMP TRUE
     )
-    FetchContent_GetProperties(webview2sdk)
-    if (NOT webview2sdk_POPULATED)
-        FetchContent_Populate(webview2sdk)
-    endif()
+    FetchContent_MakeAvailable(webview2sdk)
     set(WEBVIEW2_SDK_ROOT "${webview2sdk_SOURCE_DIR}")
 endif()
 
