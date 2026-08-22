@@ -22,7 +22,7 @@ function Step([string]$Text) {
 
 function Download-File([string]$Url, [string]$Path, [string]$Name) {
     if ((Test-Path $Path -PathType Leaf) -and ((Get-Item $Path).Length -gt 0)) {
-        Write-Host "Using cached $Name: $Path" -ForegroundColor DarkGray
+        Write-Host "Using cached ${Name}: $Path" -ForegroundColor DarkGray
         return
     }
 
