@@ -1,0 +1,31 @@
+{
+  "schema": 1,
+  "architecture": "arm64",
+  "generatedUtc": "2026-08-22T15:51:52.0440501Z",
+  "lockSha256": "744754ebd2027972ecce6d6fde29ae954b70847e04fa993affb3ebb081ae048d",
+  "node": {
+    "version": "24.19.0",
+    "archive": "node/node-v24.19.0-win-arm64.zip",
+    "sha256": "8502f4a50b458d4cc38ed8f2001556c2cd239d464920f74017926ccb1e1c157f"
+  },
+  "deepseekHarness": {
+    "version": "0.1.0-rc.7",
+    "archive": "harness/deepseek-harness-0.1.0-rc.7-win-arm64.zip",
+    "sha256": "5d6b2ca8d07da51ae40023e7444751d543e5a479dfaf38f6969eba457781fa2b"
+  },
+  "everything": {
+    "version": "1.5.0.1422b",
+    "archive": "everything/Everything-1.5.0.1422b.ARM64.zip",
+    "sha256": "b612a98c7029d7e52045360ff1abd083dc8225273c75c2d469fc867fb9d81b58"
+  },
+  "codex": {
+    "release": "rust-v0.146.0",
+    "archive": "codex/codex-app-server-aarch64-pc-windows-msvc.exe.zip",
+    "sha256": "e3b828c851efc3a162c480c4d178fee903f544b1bf8d1827e33a7fc2253f2942"
+  },
+  "webview2Sdk": {
+    "version": "1.0.4129.50",
+    "loader": "webview2-sdk/build/native/arm64/WebView2LoaderStatic.lib",
+    "sha256": "a24d651e16a86695afc8d0514bf2280a48057f3e575d280f67d6e318f70345eb"
+  }
+}
