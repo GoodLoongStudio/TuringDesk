@@ -40,6 +40,8 @@ private:
     void Draw();
     void ResizeRenderTarget(UINT width, UINT height);
     void PositionWindow();
+    void LoadPosition();
+    void SavePosition();
     void SetStatus(std::wstring title, std::wstring subtitle = {});
     void SetExpanded(bool expanded);
     void ApplyWindows11Style();
@@ -52,6 +54,7 @@ private:
     HWND hwnd_{};
     HWND edit_{};
     HWND settingsButton_{};
+    HWND wallpaperButton_{};
     WNDPROC oldEditProc_{};
     AppSearch apps_;
     EverythingSearch files_;
@@ -64,6 +67,9 @@ private:
     bool fileSearchQueryFailed_{false};
     bool expanded_{false};
     bool exiting_{false};
+    bool positionLoaded_{false};
+    int savedX_{0};
+    int savedY_{0};
     std::wstring currentQuery_;
 
     NOTIFYICONDATAW tray_{};
