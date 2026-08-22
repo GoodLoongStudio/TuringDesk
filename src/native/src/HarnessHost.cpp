@@ -43,6 +43,14 @@ std::wstring HarnessLogHint() {
     return logPath.empty() ? std::wstring{} : L"\r\n日志：" + logPath;
 }
 
+int RunHarnessSmokeTest() {
+    turingdesk::HarnessProcessManager harness;
+    if (!harness.Start()) return 6;
+    const bool ready = harness.WaitUntilReady(static_cast<DWORD>(kReadyTimeoutMs));
+    harness.Stop();
+    return ready ? 0 : 7;
+}
+
 class HarnessHost {
 public:
     explicit HarnessHost(HINSTANCE instance) : instance_(instance) {}
@@ -268,6 +276,11 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR commandLine, int) {
     if (FAILED(com) && com != RPC_E_CHANGED_MODE) return 3;
 
     const std::wstring_view args = commandLine ? std::wstring_view(commandLine) : std::wstring_view{};
+    if (args.find(L"--harness-smoke-test") != std::wstring_view::npos) {
+        const int result = RunHarnessSmokeTest();
+        if (SUCCEEDED(com)) CoUninitialize();
+        return result;
+    }
     if (args.find(L"--self-test") != std::wstring_view::npos) {
         const int result = turingdesk::HarnessProcessManager::SelfTest() ? 0 : 5;
         if (SUCCEEDED(com)) CoUninitialize();
