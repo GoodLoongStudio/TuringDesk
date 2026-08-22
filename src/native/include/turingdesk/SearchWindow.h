@@ -36,7 +36,7 @@ private:
     void ExecuteSelected(bool forceL3);
     void StartL3(const std::wstring& prompt);
     void OpenModelSettings();
-    void OpenWallpaperSettings();
+    void OpenSettingsCenter();
     void Draw();
     void ResizeRenderTarget(UINT width, UINT height);
     void PositionWindow();
