@@ -21,10 +21,21 @@ public:
     void UpdateVideo();
     void SetPaused(bool paused);
     void SetScaling(wallpaper::ScaleMode mode, float focalX = 0.5f, float focalY = 0.5f);
+    void SetLooping(bool looping);
+    void SetMuted(bool muted);
+    void SetVolume(float volume);
+    void SetPlaybackRate(float rate);
+    bool Restart();
+
     SIZE NativeVideoSize() const;
     bool Active() const;
+    bool Looping() const;
+    bool Muted() const;
+    float Volume() const;
+    float PlaybackRate() const;
     HRESULT LastError() const;
     std::wstring LastErrorText() const;
+    std::wstring DiagnosticsText() const;
 
     static bool MediaFoundationAvailable();
 
