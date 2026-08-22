@@ -5,10 +5,9 @@
 #include "turingdesk/WebWallpaperHost.h"
 
 // WallpaperEngine.cpp is compiled with its historical WinMain symbol renamed to
-// TuringDeskWallpaperMain. This small entry layer must remain the only exported
-// GUI entry point so isolated WebView2 wallpaper children can bypass the main
-// wallpaper singleton before the legacy engine creates its mutex.
-int WINAPI TuringDeskWallpaperMain(HINSTANCE instance, HINSTANCE previous, PWSTR commandLine, int showCommand);
+// TuringDeskWallpaperMain. The Windows headers declare wWinMain with C linkage,
+// so the macro-renamed legacy entry keeps that linkage as well.
+extern "C" int WINAPI TuringDeskWallpaperMain(HINSTANCE instance, HINSTANCE previous, PWSTR commandLine, int showCommand);
 
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR commandLine, int showCommand) {
     const int webResult = turingdesk::wallpaper::TryRunWebWallpaperChild(instance);
