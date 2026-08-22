@@ -16,39 +16,9 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  announce:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          ref: ci-status
-      - name: Publish vendoring run id
-        shell: bash
-        run: |
-          mkdir -p ci
-          cat > "ci/runtime-vendor-${GITHUB_SHA}.json" <<EOF
-          {
-            "sha": "${GITHUB_SHA}",
-            "mode": "runtime-vendor-arm64",
-            "result": "running",
-            "run_id": "${GITHUB_RUN_ID}"
-          }
-          EOF
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add "ci/runtime-vendor-${GITHUB_SHA}.json"
-          git commit -m "ci: start ARM64 runtime vendoring ${GITHUB_SHA}" || exit 0
-          for i in 1 2 3; do
-            git pull --rebase origin ci-status || true
-            if git push origin HEAD:ci-status; then exit 0; fi
-            sleep 2
-          done
-          exit 1
-
   vendor:
-    needs: [announce]
     runs-on: windows-11-arm
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v5
         with:
@@ -83,7 +53,9 @@ jobs:
           try {
             $lockHash = Sha256 $lockPath
 
+            # Node.js portable ARM64
             $nodeDir = Join-Path $runtime 'node'
+            if (Test-Path $nodeDir) { Remove-Item $nodeDir -Recurse -Force }
             New-Item -ItemType Directory -Force -Path $nodeDir | Out-Null
             $nodeArchiveName = [string]$lock.node.archive
             $nodeArchive = Join-Path $nodeDir $nodeArchiveName
@@ -104,19 +76,18 @@ jobs:
             $nodeExe = Join-Path $nodeHome.FullName 'node.exe'
             $npmCmd = Join-Path $nodeHome.FullName 'npm.cmd'
             if (-not (Test-Path $nodeExe) -or -not (Test-Path $npmCmd)) { throw 'Portable Node/npm is incomplete' }
-            & $nodeExe --version
+            & $nodeExe --version | Out-Host
             if ($LASTEXITCODE -ne 0) { throw 'Portable ARM64 Node failed to execute' }
 
+            # DeepSeek Harness production tree
             $harnessDir = Join-Path $runtime 'harness'
+            if (Test-Path $harnessDir) { Remove-Item $harnessDir -Recurse -Force }
             New-Item -ItemType Directory -Force -Path $harnessDir | Out-Null
             $harnessVersion = [string]$lock.deepseekHarness.version
             $harnessStage = Join-Path $stage 'harness'
             New-Item -ItemType Directory -Force -Path $harnessStage | Out-Null
-            @{
-              name = 'turingdesk-deepseek-harness-runtime'
-              private = $true
-              version = '1.0.0'
-            } | ConvertTo-Json | Set-Content (Join-Path $harnessStage 'package.json') -Encoding UTF8
+            @{ name = 'turingdesk-deepseek-harness-runtime'; private = $true; version = '1.0.0' } |
+              ConvertTo-Json | Set-Content (Join-Path $harnessStage 'package.json') -Encoding UTF8
             $env:npm_config_cache = Join-Path $stage 'npm-cache'
             & $npmCmd install --prefix $harnessStage ("@deepseek-ai/dsh@" + $harnessVersion) --omit=dev --no-audit --no-fund --save-exact
             if ($LASTEXITCODE -ne 0) { throw 'DeepSeek Harness production install failed' }
@@ -125,25 +96,76 @@ jobs:
             & $nodeExe $dshBin --help | Out-Host
             if ($LASTEXITCODE -ne 0) { throw 'Vendored DeepSeek Harness CLI failed --help' }
             $harnessZip = Join-Path $harnessDir ("deepseek-harness-$harnessVersion-win-arm64.zip")
-            if (Test-Path $harnessZip) { Remove-Item $harnessZip -Force }
             & tar.exe -a -c -f $harnessZip -C $harnessStage .
             if ($LASTEXITCODE -ne 0 -or -not (Test-Path $harnessZip)) { throw 'Unable to package Harness runtime tree' }
 
-            $everythingDir = Join-Path $runtime 'everything'
-            New-Item -ItemType Directory -Force -Path $everythingDir | Out-Null
-            $everythingArchiveName = [string]$lock.everything.archive
-            $everythingArchive = Join-Path $everythingDir $everythingArchiveName
-            Download (([string]$lock.everything.source) + $everythingArchiveName) $everythingArchive
-            $everythingLicense = Join-Path $everythingDir 'LICENSE.txt'
-            Download (([string]$lock.everything.source) + 'License.txt') $everythingLicense
+            # goz: build the pinned MIT source for native Windows ARM64.
+            # We deliberately build from source because upstream release assets are not
+            # treated as an ARM64 contract. The resulting binaries are committed to the
+            # RuntimeBundle so normal builds remain network-free.
+            $gozDir = Join-Path $runtime 'goz'
+            if (Test-Path $gozDir) { Remove-Item $gozDir -Recurse -Force }
+            New-Item -ItemType Directory -Force -Path $gozDir | Out-Null
+            $gozTag = [string]$lock.goz.tag
+            $gozVersion = [string]$lock.goz.version
+            $gozRust = [string]$lock.goz.rustToolchain
+            $gozSourceZip = Join-Path $stage 'goz-source.zip'
+            $gozBase = [string]$lock.goz.source
+            if (-not $gozBase.EndsWith('/')) { $gozBase += '/' }
+            Download ($gozBase + $gozTag + '.zip') $gozSourceZip
+            $gozExpanded = Join-Path $stage 'goz-source'
+            Expand-Archive $gozSourceZip -DestinationPath $gozExpanded -Force
+            $gozRoot = Get-ChildItem $gozExpanded -Directory | Select-Object -First 1
+            if (-not $gozRoot -or -not (Test-Path (Join-Path $gozRoot.FullName 'Cargo.toml'))) { throw 'goz source archive layout is invalid' }
 
+            if (-not (Get-Command rustup -ErrorAction SilentlyContinue)) {
+              $rustupInit = Join-Path $stage 'rustup-init.exe'
+              Download 'https://static.rust-lang.org/rustup/dist/aarch64-pc-windows-msvc/rustup-init.exe' $rustupInit
+              & $rustupInit -y --profile minimal --default-toolchain none
+              if ($LASTEXITCODE -ne 0) { throw 'Unable to install rustup for ARM64 goz build' }
+              $env:Path = (Join-Path $env:USERPROFILE '.cargo\bin') + ';' + $env:Path
+            }
+            & rustup toolchain install $gozRust --profile minimal --target aarch64-pc-windows-msvc
+            if ($LASTEXITCODE -ne 0) { throw "Unable to install Rust $gozRust ARM64 toolchain" }
+            Push-Location $gozRoot.FullName
+            try {
+              & rustup run $gozRust cargo build --release --locked --target aarch64-pc-windows-msvc -p goz-cli -p goz-daemon
+              if ($LASTEXITCODE -ne 0) { throw 'goz ARM64 source build failed' }
+            }
+            finally { Pop-Location }
+
+            $gozBuild = Join-Path $gozRoot.FullName 'target\aarch64-pc-windows-msvc\release'
+            $gozExe = Join-Path $gozBuild 'goz.exe'
+            $gozdExe = Join-Path $gozBuild 'gozd.exe'
+            if (-not (Test-Path $gozExe) -or -not (Test-Path $gozdExe)) { throw 'goz ARM64 binaries are missing after build' }
+            & $gozExe --help | Out-Host
+            if ($LASTEXITCODE -ne 0) { throw 'goz ARM64 CLI failed --help' }
+            & $gozdExe --help | Out-Host
+            if ($LASTEXITCODE -ne 0) { throw 'gozd ARM64 daemon failed --help' }
+
+            $gozPackage = Join-Path $stage 'goz-package'
+            New-Item -ItemType Directory -Force -Path $gozPackage | Out-Null
+            Copy-Item $gozExe (Join-Path $gozPackage 'goz.exe') -Force
+            Copy-Item $gozdExe (Join-Path $gozPackage 'gozd.exe') -Force
+            $gozLicense = Join-Path $gozRoot.FullName 'LICENSE'
+            if (-not (Test-Path $gozLicense -PathType Leaf)) { throw 'goz MIT LICENSE is missing' }
+            Copy-Item $gozLicense (Join-Path $gozPackage 'LICENSE.txt') -Force
+            $gozArchiveName = [string]$lock.goz.archive
+            $gozArchive = Join-Path $gozDir $gozArchiveName
+            & tar.exe -a -c -f $gozArchive -C $gozPackage .
+            if ($LASTEXITCODE -ne 0 -or -not (Test-Path $gozArchive)) { throw 'Unable to package goz ARM64 runtime' }
+            Copy-Item $gozLicense (Join-Path $gozDir 'LICENSE.txt') -Force
+
+            # Full OpenAI Codex CLI. TuringDesk invokes `codex app-server --stdio`.
             $codexDir = Join-Path $runtime 'codex'
+            if (Test-Path $codexDir) { Remove-Item $codexDir -Recurse -Force }
             New-Item -ItemType Directory -Force -Path $codexDir | Out-Null
             $codexArchiveName = [string]$lock.codex.archive
             $codexArchive = Join-Path $codexDir $codexArchiveName
             $codexUrl = "https://github.com/openai/codex/releases/download/$($lock.codex.release)/$codexArchiveName"
             Download $codexUrl $codexArchive
 
+            # WebView2 build SDK / static loader
             $webSdkDir = Join-Path $runtime 'webview2-sdk'
             if (Test-Path $webSdkDir) { Remove-Item $webSdkDir -Recurse -Force }
             New-Item -ItemType Directory -Force -Path $webSdkDir | Out-Null
@@ -162,19 +184,22 @@ jobs:
               Copy-Item $license.FullName (Join-Path $webSdkDir $license.Name) -Force
             }
 
+            # Everything is intentionally gone from the product/runtime bundle.
+            Remove-Item (Join-Path $runtime 'everything') -Recurse -Force -ErrorAction SilentlyContinue
+
             $manifest = [ordered]@{
-              schema = 1
+              schema = 2
               architecture = 'arm64'
               generatedUtc = [DateTime]::UtcNow.ToString('o')
               lockSha256 = $lockHash
               node = [ordered]@{ version = [string]$lock.node.version; archive = "node/$nodeArchiveName"; sha256 = Sha256 $nodeArchive }
               deepseekHarness = [ordered]@{ version = $harnessVersion; archive = "harness/$(Split-Path $harnessZip -Leaf)"; sha256 = Sha256 $harnessZip }
-              everything = [ordered]@{ version = [string]$lock.everything.version; archive = "everything/$everythingArchiveName"; sha256 = Sha256 $everythingArchive }
-              codex = [ordered]@{ release = [string]$lock.codex.release; archive = "codex/$codexArchiveName"; sha256 = Sha256 $codexArchive }
+              goz = [ordered]@{ version = $gozVersion; tag = $gozTag; archive = "goz/$gozArchiveName"; sha256 = Sha256 $gozArchive }
+              codex = [ordered]@{ release = [string]$lock.codex.release; archive = "codex/$codexArchiveName"; sha256 = Sha256 $codexArchive; mode = 'cli-app-server' }
               webview2Sdk = [ordered]@{ version = $webVersion; loader = 'webview2-sdk/build/native/arm64/WebView2LoaderStatic.lib'; sha256 = Sha256 (Join-Path $webSdkDir 'build\native\arm64\WebView2LoaderStatic.lib') }
             }
             $manifest | ConvertTo-Json -Depth 6 | Set-Content (Join-Path $runtime 'runtime-manifest.json') -Encoding UTF8
-            Set-Content (Join-Path $runtime '.complete') -Value "TuringDesk ARM64 RuntimeBundle v1`n" -Encoding ASCII
+            Set-Content (Join-Path $runtime '.complete') -Value "TuringDesk ARM64 RuntimeBundle v2`n" -Encoding ASCII
           }
           finally {
             Remove-Item $stage -Recurse -Force -ErrorAction SilentlyContinue
@@ -185,12 +210,12 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -f runtime/arm64
+          git add -A -f runtime/arm64
           if ((git status --porcelain).Length -eq 0) {
             Write-Host 'Runtime bundle already matches the lock.'
             exit 0
           }
-          git commit -m "runtime: vendor pinned ARM64 bundle"
+          git commit -m "runtime: vendor goz and full Codex CLI for ARM64"
           for ($i = 1; $i -le 5; $i++) {
             git pull --rebase origin main
             if ($LASTEXITCODE -ne 0) { Start-Sleep -Seconds 2; continue }
@@ -199,36 +224,3 @@ jobs:
             Start-Sleep -Seconds 2
           }
           throw 'Unable to push vendored ARM64 runtime to main'
-
-  report:
-    if: always()
-    needs: [announce, vendor]
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          ref: ci-status
-      - name: Write RuntimeBundle vendoring status
-        shell: bash
-        env:
-          VENDOR_RESULT: ${{ needs.vendor.result }}
-        run: |
-          mkdir -p ci
-          cat > "ci/runtime-vendor-${GITHUB_SHA}.json" <<EOF
-          {
-            "sha": "${GITHUB_SHA}",
-            "mode": "runtime-vendor-arm64",
-            "result": "${VENDOR_RESULT}",
-            "run_id": "${GITHUB_RUN_ID}"
-          }
-          EOF
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add "ci/runtime-vendor-${GITHUB_SHA}.json"
-          git commit -m "ci: report ARM64 runtime vendoring ${GITHUB_SHA}" || exit 0
-          for i in 1 2 3; do
-            git pull --rebase origin ci-status || true
-            if git push origin HEAD:ci-status; then exit 0; fi
-            sleep 2
-          done
-          exit 1

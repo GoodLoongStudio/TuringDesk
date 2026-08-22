@@ -1,19 +1,17 @@
 # TuringDesk ARM64 RuntimeBundle
 
-This directory is the single source of third-party runtime/build dependencies for the Windows ARM64 product.
+This directory is the repository-vendored, network-free runtime used by formal Windows ARM64 builds and local deployment.
 
-Normal user deployment and normal native CI must not download Node.js, DeepSeek Harness, Everything, Codex, or the WebView2 SDK from third-party sites. The pinned versions live in `runtime-lock.json`; the one-time `vendor-arm64-runtime.yml` workflow materializes the official payloads into this directory and writes `runtime-manifest.json` with SHA-256 hashes.
+The bundle is generated from `runtime-lock.json` by `.github/workflows/vendor-arm64-runtime.yml`. Normal CMake builds must not download third-party dependencies.
 
-Expected vendored payloads:
+Runtime components:
 
 - `node/` — official portable Node.js ARM64 archive.
-- `harness/` — official `@deepseek-ai/dsh` production package plus its complete dependency tree, packaged as one ARM64 runtime zip.
-- `everything/` — official Everything ARM64 portable archive and license.
-- `codex/` — official Codex ARM64 app-server release archive.
-- `webview2-sdk/` — pinned WebView2 headers and ARM64 static loader used by CMake.
-- `runtime-manifest.json` — hashes and exact versions consumed by offline deployment.
-- `.complete` — marker written only after the vendoring workflow has validated all payloads.
+- `harness/` — pinned production tree of `@deepseek-ai/dsh`.
+- `goz/` — TuringDesk-built Windows ARM64 `goz.exe` + `gozd.exe` from pinned MIT source. `gozd` is the L2 MFT/USN index service.
+- `codex/` — official full OpenAI Codex CLI ARM64 release. L3 launches `codex app-server --stdio`.
+- `webview2-sdk/` — pinned WebView2 headers and ARM64 static loader used at build time.
 
-At execution time, Microsoft Edge WebView2 Runtime is treated as a Windows 11 operating-system component. TuringDesk vendors the WebView2 SDK/loader used to compile the three native executables but does not redistribute the full Edge browser runtime in this repository.
+Everything is intentionally not part of RuntimeBundle v2.
 
-`DEPLOY-NATIVE-ARM64.cmd` extracts the vendored Node/Harness/Everything/Codex payloads into `%LOCALAPPDATA%\TuringDesk\NativeTest` without installing system Node or running `npm install` on the user machine.
+`runtime-manifest.json` contains SHA-256 hashes for every vendored artifact. `scripts/verify-arm64-runtime-bundle.ps1` rejects stale, missing, corrupted, or legacy bundles before native compilation.

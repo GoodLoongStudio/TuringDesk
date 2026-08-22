@@ -1,5 +1,5 @@
 {
-  "schema": 1,
+  "schema": 2,
   "architecture": "arm64",
   "node": {
     "version": "24.19.0",
@@ -11,14 +11,16 @@
     "version": "0.1.0-rc.7",
     "source": "https://registry.npmjs.org/"
   },
-  "everything": {
-    "version": "1.5.0.1422b",
-    "archive": "Everything-1.5.0.1422b.ARM64.zip",
-    "source": "https://www.voidtools.com/"
+  "goz": {
+    "version": "0.1.1",
+    "tag": "v0.1.1",
+    "archive": "goz-v0.1.1-win-arm64.zip",
+    "source": "https://github.com/mustafaahci/goz/archive/refs/tags/",
+    "rustToolchain": "1.94.0"
   },
   "codex": {
     "release": "rust-v0.146.0",
-    "archive": "codex-app-server-aarch64-pc-windows-msvc.exe.zip",
+    "archive": "codex-aarch64-pc-windows-msvc.exe.zip",
     "source": "https://github.com/openai/codex/releases/"
   },
   "webview2Sdk": {
@@ -27,8 +29,10 @@
     "source": "https://www.nuget.org/"
   },
   "notes": [
-    "This lock drives the one-time repository vendoring workflow.",
-    "Normal ARM64 builds and deployments must consume runtime/arm64 only and must not fetch these components from the network.",
-    "Microsoft Edge WebView2 Runtime itself is an operating-system prerequisite on supported Windows 11 installations; the SDK and loader used to build TuringDesk are vendored here."
+    "This lock drives one-time repository vendoring on Windows ARM64.",
+    "Normal ARM64 builds and deployments consume runtime/arm64 only and do not download third-party runtimes.",
+    "goz replaces the previous Everything runtime. gozd is the elevated MFT/USN index service and goz.exe is the unprivileged query client.",
+    "The complete Codex CLI is vendored; TuringDesk launches it as codex app-server --stdio for the L3 agent runtime.",
+    "Microsoft Edge WebView2 Runtime is an operating-system prerequisite; only the build SDK/loader is vendored."
   ]
 }

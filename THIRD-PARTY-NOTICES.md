@@ -21,25 +21,26 @@ TuringDesk's ARM64 RuntimeBundle contains a pinned production install of the off
 
 Node is private to the TuringDesk RuntimeBundle. TuringDesk does not install or modify system Node.js.
 
-## Everything
+## goz
 
-- Project: Everything by voidtools / David Carpenter
-- Pinned TuringDesk ARM64 version: `1.5.0.1422b`
-- Official site: https://www.voidtools.com/
+- Project: goz
+- Source: https://github.com/mustafaahci/goz
+- Pinned TuringDesk version: `v0.1.1`
 - License: MIT
+- TuringDesk usage: L2 instant filename-search backend. `gozd.exe` runs as the LocalSystem Windows service and maintains the NTFS MFT + USN Journal index; the unprivileged `goz.exe` client queries it over its authenticated named pipe. TuringDesk owns the user-facing search UI and ranking.
 
-The official Everything license and copyright notice are vendored alongside the pinned ARM64 portable archive and copied into the deployed Everything directory.
+TuringDesk builds the pinned goz source on a Windows ARM64 GitHub runner, vendors only the resulting `goz.exe`, `gozd.exe` and MIT notice, and performs a real MFT/USN query smoke test in CI. The previous Everything runtime is no longer part of the TuringDesk RuntimeBundle.
 
 ## OpenAI Codex
 
-- Project: OpenAI Codex
+- Project: OpenAI Codex CLI
 - Source: https://github.com/openai/codex
 - Pinned TuringDesk Agent Runtime: `rust-v0.146.0`
-- Component: `codex-app-server`
+- Component: full Windows ARM64 `codex.exe`
 - License: Apache License 2.0
-- TuringDesk usage: optional, on-demand L3 Agent Runtime sidecar. TuringDesk keeps its own native Search UI, Provider configuration, Credential Manager storage, and runtime routing. The sidecar is not part of the resident Search path.
+- TuringDesk usage: default L3 agent runtime when the configured provider supports the Responses wire protocol. TuringDesk launches `codex app-server --stdio`, supplies its own provider/model settings and native dynamic tools, and presents the product identity as Turing Intelligent Desktop / TuringDesk.
 
-The official ARM64 release archive is vendored in the TuringDesk RuntimeBundle rather than downloaded on the user machine. Formal distributable packages must retain the applicable upstream Apache-2.0 license and notices.
+The official ARM64 Codex CLI release archive is vendored in the TuringDesk RuntimeBundle rather than downloaded on the user machine. Formal distributable packages must retain applicable Apache-2.0 license and notices.
 
 ## Microsoft WebView2 SDK
 

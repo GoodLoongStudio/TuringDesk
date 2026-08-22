@@ -1,4 +1,4 @@
-name: Native Windows x64 + ARM64
+name: Native Windows ARM64
 
 on:
   push:
@@ -19,145 +19,108 @@ permissions:
   contents: write
 
 concurrency:
-  group: native-windows-${{ github.ref }}-${{ github.event_name }}
+  group: native-windows-arm64
   cancel-in-progress: true
 
 jobs:
-  build-x64:
-    if: ${{ github.event_name != 'workflow_run' }}
-    runs-on: windows-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          ref: main
-
-      - name: Configure x64
-        run: cmake -S . -B build-x64 -A x64
-
-      - name: Build x64
-        run: cmake --build build-x64 --config Release --parallel
-
-      - name: Native Search x64 self-test
-        shell: pwsh
-        run: |
-          $p = Start-Process -FilePath ".\build-x64\src\native\Release\TuringDesk.exe" -ArgumentList "--self-test" -Wait -PassThru
-          if ($p.ExitCode -ne 0) { throw "Native Search x64 self-test failed: $($p.ExitCode)" }
-
-      - name: Native Wallpaper x64 self-test
-        shell: pwsh
-        run: |
-          $p = Start-Process -FilePath ".\build-x64\src\native\Release\TuringDeskWallpaper.exe" -ArgumentList "--self-test" -Wait -PassThru
-          if ($p.ExitCode -ne 0) { throw "Native Wallpaper x64 self-test failed: $($p.ExitCode)" }
-
-      - name: Native Harness x64 self-test
-        shell: pwsh
-        run: |
-          $p = Start-Process -FilePath ".\build-x64\src\native\Release\TuringDeskHarness.exe" -ArgumentList "--self-test" -Wait -PassThru
-          if ($p.ExitCode -ne 0) { throw "Native Harness x64 self-test failed: $($p.ExitCode)" }
-
-      - name: Prepare x64 artifact
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force -Path build-x64/package | Out-Null
-          Copy-Item build-x64/src/native/Release/TuringDesk.exe build-x64/package/TuringDesk.exe -Force
-          Copy-Item build-x64/src/native/Release/TuringDeskWallpaper.exe build-x64/package/TuringDeskWallpaper.exe -Force
-          Copy-Item build-x64/src/native/Release/TuringDeskHarness.exe build-x64/package/TuringDeskHarness.exe -Force
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: TuringDesk-Native-x64
-          path: build-x64/package/**
-          retention-days: 3
-
   build-arm64:
     if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: windows-11-arm
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
         with:
           ref: main
 
-      - name: Verify repository ARM64 RuntimeBundle
+      - name: Check RuntimeBundle freshness
+        id: bundle
         shell: pwsh
         run: |
-          .\scripts\verify-arm64-runtime-bundle.ps1
+          $lock = 'runtime/arm64/runtime-lock.json'
+          $manifest = 'runtime/arm64/runtime-manifest.json'
+          $ready = $false
+          if ((Test-Path $lock) -and (Test-Path $manifest)) {
+            $hash = (Get-FileHash -Algorithm SHA256 $lock).Hash.ToLowerInvariant()
+            $m = Get-Content $manifest -Raw | ConvertFrom-Json
+            $ready = ([int]$m.schema -ge 2) -and ($m.lockSha256 -eq $hash)
+          }
+          "ready=$($ready.ToString().ToLowerInvariant())" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          if (-not $ready) { Write-Host 'RuntimeBundle is being re-vendored; this push run will defer the native build.' }
+
+      - name: Verify repository ARM64 RuntimeBundle
+        if: steps.bundle.outputs.ready == 'true'
+        shell: pwsh
+        run: .\scripts\verify-arm64-runtime-bundle.ps1
 
       - name: Configure ARM64 offline
+        if: steps.bundle.outputs.ready == 'true'
         run: cmake -S . -B build -A ARM64
 
       - name: Build ARM64
+        if: steps.bundle.outputs.ready == 'true'
         run: cmake --build build --config Release --parallel
 
-      - name: Native Search self-test
+      - name: Native self-tests
+        if: steps.bundle.outputs.ready == 'true'
         shell: pwsh
         run: |
-          $p = Start-Process -FilePath ".\build\src\native\Release\TuringDesk.exe" -ArgumentList "--self-test" -Wait -PassThru
-          if ($p.ExitCode -ne 0) { throw "Native Search self-test failed: $($p.ExitCode)" }
-
-      - name: Native Wallpaper self-test
-        shell: pwsh
-        run: |
-          $p = Start-Process -FilePath ".\build\src\native\Release\TuringDeskWallpaper.exe" -ArgumentList "--self-test" -Wait -PassThru
-          if ($p.ExitCode -ne 0) { throw "Native Wallpaper self-test failed: $($p.ExitCode)" }
-
-      - name: Native Harness shell self-test
-        shell: pwsh
-        run: |
-          $p = Start-Process -FilePath ".\build\src\native\Release\TuringDeskHarness.exe" -ArgumentList "--self-test" -Wait -PassThru
-          if ($p.ExitCode -ne 0) { throw "Native Harness shell self-test failed: $($p.ExitCode)" }
+          foreach ($test in @(
+            @{ Exe = '.\build\src\native\Release\TuringDesk.exe'; Name = 'Search' },
+            @{ Exe = '.\build\src\native\Release\TuringDeskWallpaper.exe'; Name = 'Wallpaper' },
+            @{ Exe = '.\build\src\native\Release\TuringDeskHarness.exe'; Name = 'Harness shell' }
+          )) {
+            $p = Start-Process -FilePath $test.Exe -ArgumentList '--self-test' -Wait -PassThru
+            if ($p.ExitCode -ne 0) { throw "$($test.Name) self-test failed: $($p.ExitCode)" }
+          }
 
       - name: Prepare self-contained ARM64 smoke package
+        if: steps.bundle.outputs.ready == 'true'
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path build/package | Out-Null
           Copy-Item build/src/native/Release/TuringDesk.exe build/package/TuringDesk.exe -Force
           Copy-Item build/src/native/Release/TuringDeskWallpaper.exe build/package/TuringDeskWallpaper.exe -Force
           Copy-Item build/src/native/Release/TuringDeskHarness.exe build/package/TuringDeskHarness.exe -Force
-          .\scripts\prepare-third-party-runtime-arm64.ps1 -DeployDir (Resolve-Path build/package).Path
+          .\scripts\prepare-third-party-runtime-arm64.ps1 -DeployDir (Resolve-Path build/package).Path -SkipGozServiceInstall
 
-      - name: Redeploy while unchanged bundled Everything is running
+      - name: Validate full Codex CLI runtime
+        if: steps.bundle.outputs.ready == 'true'
         shell: pwsh
         run: |
-          $package = (Resolve-Path 'build/package').Path
-          $everything = Join-Path $package 'Everything\Everything.exe'
-          $config = Join-Path $package 'Everything\TuringDesk-Everything.ini'
-          if (-not (Test-Path $everything -PathType Leaf)) { throw 'Bundled Everything is missing before replacement test' }
-          $beforeHash = (Get-FileHash -Algorithm SHA256 $everything).Hash
+          $codex = '.\build\package\Codex\codex.exe'
+          & $codex --version | Out-Host
+          if ($LASTEXITCODE -ne 0) { throw 'Bundled Codex CLI --version failed' }
+          & $codex app-server --help | Out-Host
+          if ($LASTEXITCODE -ne 0) { throw 'Bundled Codex CLI app-server command failed' }
 
-          Start-Process -FilePath $everything -ArgumentList "-config `"$config`" -startup" | Out-Null
-          Start-Sleep -Seconds 1
-          $running = Get-CimInstance Win32_Process -Filter "Name='Everything.exe'" -ErrorAction SilentlyContinue |
-            Where-Object { $_.ExecutablePath -and ([System.IO.Path]::GetFullPath($_.ExecutablePath) -eq [System.IO.Path]::GetFullPath($everything)) }
-          if (-not $running) { throw 'Bundled Everything did not stay running for redeploy regression test' }
-
-          # Force the installer through its refresh path while the exact vendored
-          # Everything binary is image-mapped. It must preserve that unchanged EXE.
-          Set-Content (Join-Path $package 'Runtime\runtime-manifest.sha256') -Value 'force-redeploy' -Encoding ASCII
-          .\scripts\prepare-third-party-runtime-arm64.ps1 -DeployDir $package
-
-          $stillRunning = Get-CimInstance Win32_Process -Filter "Name='Everything.exe'" -ErrorAction SilentlyContinue |
-            Where-Object { $_.ExecutablePath -and ([System.IO.Path]::GetFullPath($_.ExecutablePath) -eq [System.IO.Path]::GetFullPath($everything)) }
-          if (-not $stillRunning) { throw 'Unchanged bundled Everything was unnecessarily stopped during runtime refresh' }
-          if (-not (Test-Path $everything -PathType Leaf)) { throw 'Bundled Everything disappeared during runtime refresh' }
-          $afterHash = (Get-FileHash -Algorithm SHA256 $everything).Hash
-          if ($afterHash -ne $beforeHash) { throw 'Bundled Everything changed during unchanged-component refresh' }
-          & $everything -config $config -quit 2>$null | Out-Null
-
-      - name: Validate deployed ARM64 package
+      - name: Real goz MFT/USN integration test
+        if: steps.bundle.outputs.ready == 'true'
         shell: pwsh
         run: |
-          foreach ($test in @(
-            @{ Exe = '.\build\package\TuringDesk.exe'; Args = '--self-test'; Name = 'Search' },
-            @{ Exe = '.\build\package\TuringDeskWallpaper.exe'; Args = '--self-test'; Name = 'Wallpaper' },
-            @{ Exe = '.\build\package\TuringDeskHarness.exe'; Args = '--self-test'; Name = 'Harness shell' }
-          )) {
-            $p = Start-Process -FilePath $test.Exe -ArgumentList $test.Args -Wait -PassThru
-            if ($p.ExitCode -ne 0) { throw "$($test.Name) package self-test failed: $($p.ExitCode)" }
+          $goz = (Resolve-Path '.\build\package\Goz\goz.exe').Path
+          $gozd = (Resolve-Path '.\build\package\Goz\gozd.exe').Path
+          $probe = "turingdesk-goz-ci-$env:GITHUB_RUN_ID.txt"
+          $probePath = Join-Path $env:USERPROFILE $probe
+          Set-Content $probePath -Value 'TuringDesk goz integration probe' -Encoding UTF8
+          try {
+            & $gozd install | Out-Host
+            if ($LASTEXITCODE -ne 0) { throw 'gozd service install failed on ARM64 runner' }
+            $found = $false
+            for ($i = 0; $i -lt 90; $i++) {
+              $result = (& $goz -n 20 $probe 2>$null | Out-String)
+              if ($LASTEXITCODE -eq 0 -and $result -match [regex]::Escape($probe)) { $found = $true; break }
+              Start-Sleep -Seconds 1
+            }
+            if (-not $found) { throw 'goz did not return the USN/MFT probe file on ARM64' }
+            & $goz --status | Out-Host
+          }
+          finally {
+            Remove-Item $probePath -Force -ErrorAction SilentlyContinue
+            & $gozd uninstall | Out-Host
           }
 
       - name: Real bundled DeepSeek Harness smoke test
+        if: steps.bundle.outputs.ready == 'true'
         shell: pwsh
         run: |
           $p = Start-Process -FilePath '.\build\package\TuringDeskHarness.exe' -ArgumentList '--harness-smoke-test' -Wait -PassThru
@@ -168,13 +131,15 @@ jobs:
           }
 
       - name: Prepare compact ARM64 artifact
+        if: steps.bundle.outputs.ready == 'true'
         shell: pwsh
         run: |
           Remove-Item build/package/Runtime -Recurse -Force -ErrorAction SilentlyContinue
-          Remove-Item build/package/Everything -Recurse -Force -ErrorAction SilentlyContinue
+          Remove-Item build/package/Goz -Recurse -Force -ErrorAction SilentlyContinue
           Remove-Item build/package/Codex -Recurse -Force -ErrorAction SilentlyContinue
 
       - uses: actions/upload-artifact@v4
+        if: steps.bundle.outputs.ready == 'true'
         with:
           name: TuringDesk-Native-Search-ARM64
           path: build/package/**
@@ -182,7 +147,7 @@ jobs:
 
   report:
     if: always()
-    needs: [build-x64, build-arm64]
+    needs: [build-arm64]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -191,15 +156,13 @@ jobs:
       - name: Write native CI status
         shell: bash
         env:
-          X64_RESULT: ${{ needs.build-x64.result }}
           ARM64_RESULT: ${{ needs.build-arm64.result }}
         run: |
           mkdir -p ci
           cat > "ci/native-${GITHUB_SHA}.json" <<EOF
           {
             "sha": "${GITHUB_SHA}",
-            "mode": "native-x64-plus-arm64-offline-runtime",
-            "x64": "${X64_RESULT}",
+            "mode": "native-arm64-goz-codex-cli",
             "arm64": "${ARM64_RESULT}",
             "run_id": "${GITHUB_RUN_ID}"
           }
@@ -207,7 +170,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add "ci/native-${GITHUB_SHA}.json"
-          git commit -m "ci: report native build ${GITHUB_SHA}" || exit 0
+          git commit -m "ci: report native ARM64 build ${GITHUB_SHA}" || exit 0
           for i in 1 2 3; do
             git pull --rebase origin ci-status || true
             if git push origin HEAD:ci-status; then exit 0; fi

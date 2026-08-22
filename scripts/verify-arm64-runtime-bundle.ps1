@@ -1,58 +1,54 @@
-param(
-    [string]$RepoRoot = (Split-Path $PSScriptRoot -Parent)
-)
+$ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
 
-$ErrorActionPreference = "Stop"
-$RuntimeRoot = Join-Path $RepoRoot "runtime\arm64"
-$LockPath = Join-Path $RuntimeRoot "runtime-lock.json"
-$ManifestPath = Join-Path $RuntimeRoot "runtime-manifest.json"
-$CompletePath = Join-Path $RuntimeRoot ".complete"
+$RepoRoot = Split-Path $PSScriptRoot -Parent
+$BundleRoot = Join-Path $RepoRoot 'runtime\arm64'
+$LockPath = Join-Path $BundleRoot 'runtime-lock.json'
+$ManifestPath = Join-Path $BundleRoot 'runtime-manifest.json'
+$CompleteMarker = Join-Path $BundleRoot '.complete'
 
 function Sha256([string]$Path) {
     return (Get-FileHash -Algorithm SHA256 -Path $Path).Hash.ToLowerInvariant()
 }
 
-function Resolve-RequiredFile([string]$RelativePath) {
-    if ([string]::IsNullOrWhiteSpace($RelativePath)) { throw "Runtime manifest contains an empty path" }
-    $path = Join-Path $RuntimeRoot ($RelativePath -replace '/', '\')
-    if (-not (Test-Path $path -PathType Leaf)) { throw "RuntimeBundle file missing: $path" }
+function Resolve-BundleFile([string]$RelativePath) {
+    if ([string]::IsNullOrWhiteSpace($RelativePath)) { throw 'Runtime manifest contains an empty path' }
+    $path = Join-Path $BundleRoot ($RelativePath -replace '/', '\')
+    if (-not (Test-Path $path -PathType Leaf)) { throw "Vendored runtime file is missing: $path" }
     return $path
 }
 
-function Verify-Hash([string]$RelativePath, [string]$Expected) {
-    $path = Resolve-RequiredFile $RelativePath
-    $actual = Sha256 $path
-    if ($actual -ne $Expected.ToLowerInvariant()) {
-        throw "RuntimeBundle hash mismatch: $RelativePath`nExpected: $Expected`nActual:   $actual"
+function Assert-Hash([string]$Path, [string]$Expected) {
+    $actual = Sha256 $Path
+    if ([string]::IsNullOrWhiteSpace($Expected) -or $actual -ne $Expected.ToLowerInvariant()) {
+        throw "Runtime hash mismatch: $Path`nExpected: $Expected`nActual:   $actual"
     }
-    Write-Host "OK  $RelativePath" -ForegroundColor DarkGray
 }
 
-foreach ($required in @($LockPath, $ManifestPath, $CompletePath)) {
-    if (-not (Test-Path $required -PathType Leaf)) { throw "RuntimeBundle is incomplete: $required" }
+foreach ($required in @($LockPath, $ManifestPath, $CompleteMarker)) {
+    if (-not (Test-Path $required -PathType Leaf)) { throw "ARM64 RuntimeBundle is incomplete: $required" }
 }
 
 $lock = Get-Content $LockPath -Raw | ConvertFrom-Json
 $manifest = Get-Content $ManifestPath -Raw | ConvertFrom-Json
-if ($lock.architecture -ne "arm64" -or $manifest.architecture -ne "arm64") {
-    throw "RuntimeBundle must be ARM64"
-}
-if ([int]$manifest.schema -ne 1) { throw "Unsupported RuntimeBundle manifest schema: $($manifest.schema)" }
+if ($lock.architecture -ne 'arm64' -or $manifest.architecture -ne 'arm64') { throw 'RuntimeBundle architecture is not ARM64' }
+if ([int]$manifest.schema -lt 2) { throw 'RuntimeBundle manifest predates the goz/Codex CLI migration' }
 
 $lockHash = Sha256 $LockPath
-if ([string]::IsNullOrWhiteSpace([string]$manifest.lockSha256) -or
-    $lockHash -ne ([string]$manifest.lockSha256).ToLowerInvariant()) {
-    throw "RuntimeBundle was generated from a different runtime-lock.json. Re-run the vendoring workflow."
+if ($manifest.lockSha256.ToLowerInvariant() -ne $lockHash) {
+    throw 'RuntimeBundle is stale relative to runtime-lock.json. Wait for Vendor ARM64 Runtime Bundle to finish.'
 }
 
-Verify-Hash ([string]$manifest.node.archive) ([string]$manifest.node.sha256)
-Verify-Hash ([string]$manifest.deepseekHarness.archive) ([string]$manifest.deepseekHarness.sha256)
-Verify-Hash ([string]$manifest.everything.archive) ([string]$manifest.everything.sha256)
-Verify-Hash ([string]$manifest.codex.archive) ([string]$manifest.codex.sha256)
-Verify-Hash ([string]$manifest.webview2Sdk.loader) ([string]$manifest.webview2Sdk.sha256)
+Assert-Hash (Resolve-BundleFile ([string]$manifest.node.archive)) ([string]$manifest.node.sha256)
+Assert-Hash (Resolve-BundleFile ([string]$manifest.deepseekHarness.archive)) ([string]$manifest.deepseekHarness.sha256)
+Assert-Hash (Resolve-BundleFile ([string]$manifest.goz.archive)) ([string]$manifest.goz.sha256)
+Assert-Hash (Resolve-BundleFile ([string]$manifest.codex.archive)) ([string]$manifest.codex.sha256)
+Assert-Hash (Resolve-BundleFile ([string]$manifest.webview2Sdk.loader)) ([string]$manifest.webview2Sdk.sha256)
 
-$webHeader = Join-Path $RuntimeRoot "webview2-sdk\build\native\include\WebView2.h"
-if (-not (Test-Path $webHeader -PathType Leaf)) { throw "Vendored WebView2.h is missing" }
+if (Test-Path (Join-Path $BundleRoot 'everything')) {
+    throw 'Legacy Everything payload is still present in the ARM64 RuntimeBundle'
+}
 
-Write-Host "TuringDesk ARM64 RuntimeBundle integrity: PASS" -ForegroundColor Green
-Write-Host "Node $($manifest.node.version) / DeepSeek Harness $($manifest.deepseekHarness.version) / Everything $($manifest.everything.version) / Codex $($manifest.codex.release) / WebView2 SDK $($manifest.webview2Sdk.version)" -ForegroundColor DarkGray
+Write-Host 'TuringDesk ARM64 RuntimeBundle verified.' -ForegroundColor Green
+Write-Host "goz:   $($manifest.goz.version) ($($manifest.goz.tag))" -ForegroundColor DarkGray
+Write-Host "Codex: $($manifest.codex.release) / full CLI" -ForegroundColor DarkGray
