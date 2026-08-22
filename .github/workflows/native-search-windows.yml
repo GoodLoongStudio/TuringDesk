@@ -25,7 +25,10 @@ jobs:
       - name: Build x64
         run: cmake --build build --config Release --parallel
       - name: Native Search self-test
-        run: .\build\src\native\Release\TuringDesk.exe --self-test
+        shell: pwsh
+        run: |
+          $process = Start-Process -FilePath ".\build\src\native\Release\TuringDesk.exe" -ArgumentList "--self-test" -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "Native Search self-test failed: $($process.ExitCode)" }
       - name: Package x64 with Everything and Wallpaper
         shell: pwsh
         run: |
@@ -51,8 +54,8 @@ jobs:
           foreach ($path in $required) {
             if (-not (Test-Path $path -PathType Leaf)) { throw "Missing packaged file: $path" }
           }
-          & (Join-Path $package "TuringDesk.exe") --self-test
-          if ($LASTEXITCODE -ne 0) { throw "Packaged TuringDesk self-test failed: $LASTEXITCODE" }
+          $process = Start-Process -FilePath (Join-Path $package "TuringDesk.exe") -ArgumentList "--self-test" -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "Packaged TuringDesk self-test failed: $($process.ExitCode)" }
       - uses: actions/upload-artifact@v4
         with:
           name: TuringDesk-Native-Search-x64
@@ -67,7 +70,10 @@ jobs:
       - name: Build ARM64
         run: cmake --build build --config Release --parallel
       - name: Native Search self-test
-        run: .\build\src\native\Release\TuringDesk.exe --self-test
+        shell: pwsh
+        run: |
+          $process = Start-Process -FilePath ".\build\src\native\Release\TuringDesk.exe" -ArgumentList "--self-test" -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "Native Search self-test failed: $($process.ExitCode)" }
       - name: Package ARM64 with Everything and Wallpaper
         shell: pwsh
         run: |
@@ -93,8 +99,8 @@ jobs:
           foreach ($path in $required) {
             if (-not (Test-Path $path -PathType Leaf)) { throw "Missing packaged file: $path" }
           }
-          & (Join-Path $package "TuringDesk.exe") --self-test
-          if ($LASTEXITCODE -ne 0) { throw "Packaged TuringDesk self-test failed: $LASTEXITCODE" }
+          $process = Start-Process -FilePath (Join-Path $package "TuringDesk.exe") -ArgumentList "--self-test" -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "Packaged TuringDesk self-test failed: $($process.ExitCode)" }
       - uses: actions/upload-artifact@v4
         with:
           name: TuringDesk-Native-Search-ARM64
