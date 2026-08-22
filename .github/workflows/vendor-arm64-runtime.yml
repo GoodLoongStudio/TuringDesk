@@ -1,0 +1,176 @@
+name: Vendor ARM64 Runtime Bundle
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - runtime/arm64/runtime-lock.json
+      - .github/workflows/vendor-arm64-runtime.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: vendor-arm64-runtime
+  cancel-in-progress: false
+
+jobs:
+  vendor:
+    runs-on: windows-11-arm
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Build pinned repository runtime bundle
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $ProgressPreference = 'SilentlyContinue'
+          git config core.longpaths true
+
+          $lock = Get-Content 'runtime/arm64/runtime-lock.json' -Raw | ConvertFrom-Json
+          if ($lock.architecture -ne 'arm64') { throw 'runtime lock is not ARM64' }
+
+          $root = (Resolve-Path '.').Path
+          $runtime = Join-Path $root 'runtime\arm64'
+          $stage = Join-Path $env:RUNNER_TEMP ('TuringDesk-Runtime-' + [guid]::NewGuid().ToString('N'))
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+
+          function Download([string]$Url, [string]$Path) {
+            Write-Host "Downloading $Url"
+            Invoke-WebRequest -Uri $Url -OutFile $Path -UseBasicParsing
+            if (-not (Test-Path $Path -PathType Leaf)) { throw "Download missing: $Path" }
+          }
+
+          function Sha256([string]$Path) {
+            return (Get-FileHash -Algorithm SHA256 -Path $Path).Hash.ToLowerInvariant()
+          }
+
+          try {
+            # Portable official Node.js ARM64. Keep the original archive in the repo;
+            # deployment extracts it locally and never installs system Node.
+            $nodeDir = Join-Path $runtime 'node'
+            New-Item -ItemType Directory -Force -Path $nodeDir | Out-Null
+            $nodeArchiveName = [string]$lock.node.archive
+            $nodeArchive = Join-Path $nodeDir $nodeArchiveName
+            $nodeBase = [string]$lock.node.source
+            if (-not $nodeBase.EndsWith('/')) { $nodeBase += '/' }
+            $nodeSums = Join-Path $stage 'SHASUMS256.txt'
+            Download ($nodeBase + 'SHASUMS256.txt') $nodeSums
+            Download ($nodeBase + $nodeArchiveName) $nodeArchive
+            $sumLine = Get-Content $nodeSums | Where-Object { $_ -match ('\s+' + [regex]::Escape($nodeArchiveName) + '$') } | Select-Object -First 1
+            if (-not $sumLine) { throw "Node checksum missing for $nodeArchiveName" }
+            $expectedNode = (($sumLine -split '\s+')[0]).ToLowerInvariant()
+            if ((Sha256 $nodeArchive) -ne $expectedNode) { throw 'Node ARM64 checksum mismatch' }
+
+            $nodeExpanded = Join-Path $stage 'node'
+            Expand-Archive $nodeArchive -DestinationPath $nodeExpanded -Force
+            $nodeHome = Get-ChildItem $nodeExpanded -Directory | Select-Object -First 1
+            if (-not $nodeHome) { throw 'Node archive did not contain a directory' }
+            $nodeExe = Join-Path $nodeHome.FullName 'node.exe'
+            $npmCmd = Join-Path $nodeHome.FullName 'npm.cmd'
+            if (-not (Test-Path $nodeExe) -or -not (Test-Path $npmCmd)) { throw 'Portable Node/npm is incomplete' }
+            & $nodeExe --version
+            if ($LASTEXITCODE -ne 0) { throw 'Portable ARM64 Node failed to execute' }
+
+            # Install the exact official DeepSeek Harness release plus its complete
+            # production dependency tree, then store the ready-to-run tree as one zip.
+            $harnessDir = Join-Path $runtime 'harness'
+            New-Item -ItemType Directory -Force -Path $harnessDir | Out-Null
+            $harnessVersion = [string]$lock.deepseekHarness.version
+            $harnessStage = Join-Path $stage 'harness'
+            New-Item -ItemType Directory -Force -Path $harnessStage | Out-Null
+            @{
+              name = 'turingdesk-deepseek-harness-runtime'
+              private = $true
+              version = '1.0.0'
+            } | ConvertTo-Json | Set-Content (Join-Path $harnessStage 'package.json') -Encoding UTF8
+            $env:npm_config_cache = Join-Path $stage 'npm-cache'
+            & $npmCmd install --prefix $harnessStage ("@deepseek-ai/dsh@" + $harnessVersion) --omit=dev --no-audit --no-fund --save-exact
+            if ($LASTEXITCODE -ne 0) { throw 'DeepSeek Harness production install failed' }
+            $dshBin = Join-Path $harnessStage 'node_modules\@deepseek-ai\dsh\lib\bin.js'
+            if (-not (Test-Path $dshBin -PathType Leaf)) { throw "DeepSeek Harness bin missing: $dshBin" }
+            & $nodeExe $dshBin --help | Out-Host
+            if ($LASTEXITCODE -ne 0) { throw 'Vendored DeepSeek Harness CLI failed --help' }
+            $harnessZip = Join-Path $harnessDir ("deepseek-harness-$harnessVersion-win-arm64.zip")
+            if (Test-Path $harnessZip) { Remove-Item $harnessZip -Force }
+            & tar.exe -a -c -f $harnessZip -C $harnessStage .
+            if ($LASTEXITCODE -ne 0 -or -not (Test-Path $harnessZip)) { throw 'Unable to package Harness runtime tree' }
+
+            # Everything ARM64 stays as the official portable archive.
+            $everythingDir = Join-Path $runtime 'everything'
+            New-Item -ItemType Directory -Force -Path $everythingDir | Out-Null
+            $everythingArchiveName = [string]$lock.everything.archive
+            $everythingArchive = Join-Path $everythingDir $everythingArchiveName
+            Download (([string]$lock.everything.source) + $everythingArchiveName) $everythingArchive
+            $everythingLicense = Join-Path $everythingDir 'LICENSE.txt'
+            Download (([string]$lock.everything.source) + 'License.txt') $everythingLicense
+
+            # Codex ARM64 app-server stays as the official release archive.
+            $codexDir = Join-Path $runtime 'codex'
+            New-Item -ItemType Directory -Force -Path $codexDir | Out-Null
+            $codexArchiveName = [string]$lock.codex.archive
+            $codexArchive = Join-Path $codexDir $codexArchiveName
+            $codexUrl = "https://github.com/openai/codex/releases/download/$($lock.codex.release)/$codexArchiveName"
+            Download $codexUrl $codexArchive
+
+            # Vendor only the WebView2 SDK/ARM64 static loader needed at build time.
+            # Windows 11's WebView2 Runtime remains an OS component at execution time.
+            $webSdkDir = Join-Path $runtime 'webview2-sdk'
+            if (Test-Path $webSdkDir) { Remove-Item $webSdkDir -Recurse -Force }
+            New-Item -ItemType Directory -Force -Path $webSdkDir | Out-Null
+            $webVersion = [string]$lock.webview2Sdk.version
+            $nupkg = Join-Path $stage 'webview2.nupkg'
+            Download "https://www.nuget.org/api/v2/package/Microsoft.Web.WebView2/$webVersion" $nupkg
+            $nugetZip = Join-Path $stage 'webview2.zip'
+            Copy-Item $nupkg $nugetZip -Force
+            $nugetExpanded = Join-Path $stage 'webview2'
+            Expand-Archive $nugetZip -DestinationPath $nugetExpanded -Force
+            New-Item -ItemType Directory -Force -Path (Join-Path $webSdkDir 'build\native') | Out-Null
+            Copy-Item (Join-Path $nugetExpanded 'build\native\include') (Join-Path $webSdkDir 'build\native\include') -Recurse -Force
+            New-Item -ItemType Directory -Force -Path (Join-Path $webSdkDir 'build\native\arm64') | Out-Null
+            Copy-Item (Join-Path $nugetExpanded 'build\native\arm64\WebView2LoaderStatic.lib') (Join-Path $webSdkDir 'build\native\arm64\WebView2LoaderStatic.lib') -Force
+            foreach ($license in @(Get-ChildItem $nugetExpanded -File | Where-Object { $_.Name -match 'license|notice' })) {
+              Copy-Item $license.FullName (Join-Path $webSdkDir $license.Name) -Force
+            }
+
+            # Machine-readable integrity record for normal offline builds/deployments.
+            $manifest = [ordered]@{
+              schema = 1
+              architecture = 'arm64'
+              generatedUtc = [DateTime]::UtcNow.ToString('o')
+              node = [ordered]@{ version = [string]$lock.node.version; archive = "node/$nodeArchiveName"; sha256 = Sha256 $nodeArchive }
+              deepseekHarness = [ordered]@{ version = $harnessVersion; archive = "harness/$(Split-Path $harnessZip -Leaf)"; sha256 = Sha256 $harnessZip }
+              everything = [ordered]@{ version = [string]$lock.everything.version; archive = "everything/$everythingArchiveName"; sha256 = Sha256 $everythingArchive }
+              codex = [ordered]@{ release = [string]$lock.codex.release; archive = "codex/$codexArchiveName"; sha256 = Sha256 $codexArchive }
+              webview2Sdk = [ordered]@{ version = $webVersion; loader = 'webview2-sdk/build/native/arm64/WebView2LoaderStatic.lib'; sha256 = Sha256 (Join-Path $webSdkDir 'build\native\arm64\WebView2LoaderStatic.lib') }
+            }
+            $manifest | ConvertTo-Json -Depth 6 | Set-Content (Join-Path $runtime 'runtime-manifest.json') -Encoding UTF8
+            Set-Content (Join-Path $runtime '.complete') -Value "TuringDesk ARM64 RuntimeBundle v1`n" -Encoding ASCII
+          }
+          finally {
+            Remove-Item $stage -Recurse -Force -ErrorAction SilentlyContinue
+          }
+
+      - name: Commit vendored ARM64 runtime to main
+        shell: pwsh
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -f runtime/arm64
+          if ((git status --porcelain).Length -eq 0) {
+            Write-Host 'Runtime bundle already matches the lock.'
+            exit 0
+          }
+          git commit -m "runtime: vendor pinned ARM64 bundle"
+          for ($i = 1; $i -le 5; $i++) {
+            git pull --rebase origin main
+            if ($LASTEXITCODE -ne 0) { Start-Sleep -Seconds 2; continue }
+            git push origin HEAD:main
+            if ($LASTEXITCODE -eq 0) { exit 0 }
+            Start-Sleep -Seconds 2
+          }
+          throw 'Unable to push vendored ARM64 runtime to main'
