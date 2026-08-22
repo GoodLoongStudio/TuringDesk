@@ -10,6 +10,9 @@ on:
       - scripts/prepare-third-party-runtime-arm64.ps1
       - scripts/verify-arm64-runtime-bundle.ps1
       - .github/workflows/native-search-windows.yml
+  workflow_run:
+    workflows: ["Vendor ARM64 Runtime Bundle"]
+    types: [completed]
   workflow_dispatch:
 
 permissions:
@@ -21,10 +24,13 @@ concurrency:
 
 jobs:
   build-arm64:
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: windows-11-arm
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: main
 
       - name: Verify repository ARM64 RuntimeBundle
         shell: pwsh
