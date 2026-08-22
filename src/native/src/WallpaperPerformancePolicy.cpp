@@ -1,6 +1,7 @@
 #include "turingdesk/WallpaperPerformancePolicy.h"
 
 #include <algorithm>
+#include <cstdlib>
 #include <cwchar>
 
 namespace turingdesk::wallpaper {
@@ -41,7 +42,7 @@ bool UserIdleFor(DWORD thresholdSeconds) {
     input.cbSize = sizeof(input);
     if (!GetLastInputInfo(&input)) return false;
     const DWORD idleMs = GetTickCount() - input.dwTime;
-    return idleMs >= thresholdSeconds * 1000ULL;
+    return static_cast<ULONGLONG>(idleMs) >= static_cast<ULONGLONG>(thresholdSeconds) * 1000ULL;
 }
 
 void ApplyRule(PerformanceSnapshot& snapshot, bool active, PerformanceAction action, const wchar_t* reason) {
