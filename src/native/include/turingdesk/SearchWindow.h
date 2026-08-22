@@ -6,6 +6,7 @@
 #include <windows.h>
 #include <CommCtrl.h>
 #include <shellapi.h>
+#include <dwmapi.h>
 #include <d2d1.h>
 #include <dwrite.h>
 #include <wrl/client.h>
@@ -13,6 +14,8 @@
 #include <vector>
 
 namespace turingdesk {
+
+using DWM_WINDOW_ATTRIBUTE = DWMWINDOWATTRIBUTE;
 
 class SearchWindow {
 public:
