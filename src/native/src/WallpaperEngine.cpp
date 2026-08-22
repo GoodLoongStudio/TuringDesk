@@ -8,6 +8,8 @@
 #include "turingdesk/IndependentWallpaperHost.h"
 #include "turingdesk/VideoWallpaperPlayer.h"
 #include "turingdesk/VideoWallpaperSet.h"
+#include "turingdesk/WallpaperAutomation.h"
+#include "turingdesk/WallpaperAutomationWindow.h"
 #include "turingdesk/WallpaperIndependentLayout.h"
 #include "turingdesk/WallpaperLibrary.h"
 #include "turingdesk/WallpaperLibraryWindow.h"
@@ -18,10 +20,12 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cwchar>
 #include <filesystem>
 #include <iterator>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -61,17 +65,26 @@ constexpr int kVideoRateComboId = 4117;
 constexpr int kVideoRestartButtonId = 4118;
 constexpr int kVideoBackButtonId = 4119;
 constexpr int kVideoForwardButtonId = 4120;
+constexpr int kAutomationButtonId = 4121;
 constexpr int kTraySettings = 4201;
 constexpr int kTrayToggle = 4202;
 constexpr int kTrayExit = 4203;
+constexpr int kTrayAutomation = 4204;
 constexpr int kConfigVersion = 9;
 constexpr LONG_PTR kRaisedDesktopFlag = WS_EX_NOREDIRECTIONBITMAP;
 constexpr ULONGLONG kMediaRecoveryCooldownMs = 3000;
 constexpr ULONGLONG kMediaRecoveryStableResetMs = 30000;
+constexpr ULONGLONG kAutomationEvaluationIntervalMs = 1000;
 constexpr unsigned kMaxMediaRecoveryAttempts = 3;
 
 HMENU ControlId(int id) {
     return reinterpret_cast<HMENU>(static_cast<INT_PTR>(id));
+}
+
+unsigned long long NowUnixSeconds() {
+    return static_cast<unsigned long long>(
+        std::chrono::duration_cast<std::chrono::seconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count());
 }
 
 struct Config {
@@ -344,6 +357,7 @@ public:
 
     ~WallpaperApp() {
         if (control_) WTSUnRegisterSessionNotification(control_);
+        automationWindow_.Close();
         independentHost_.Stop();
         videoSet_.Stop();
         libraryWindow_.Close();
@@ -358,7 +372,7 @@ public:
         if (FAILED(CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER,
                                     IID_PPV_ARGS(wicFactory_.GetAddressOf())))) return false;
 
-        InitializeLibraryAndAssignments();
+        InitializeLibraryAssignmentsAndAutomation();
         taskbarCreated_ = RegisterWindowMessageW(L"TaskbarCreated");
         topology_ = turingdesk::wallpaper::QueryMonitorTopology();
         TouchAssignments();
@@ -447,8 +461,10 @@ public:
         SendMessageW(sceneCombo_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Quiet Grid · 静谧网格"));
         SendMessageW(sceneCombo_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"图片壁纸"));
         SendMessageW(sceneCombo_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"视频壁纸 · Media Foundation"));
-        libraryButton_ = CreateWindowExW(0, L"BUTTON", L"打开壁纸库…", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
-                                         486, 58, 230, 30, settings_, ControlId(kLibraryButtonId), instance_, nullptr);
+        libraryButton_ = CreateWindowExW(0, L"BUTTON", L"壁纸库…", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+                                         486, 58, 110, 30, settings_, ControlId(kLibraryButtonId), instance_, nullptr);
+        automationButton_ = CreateWindowExW(0, L"BUTTON", L"自动化…", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+                                             606, 58, 110, 30, settings_, ControlId(kAutomationButtonId), instance_, nullptr);
 
         label(L"多屏布局", 20, 106, 88, 24);
         layoutCombo_ = CreateWindowExW(0, L"COMBOBOX", L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST,
@@ -515,7 +531,7 @@ public:
         videoForwardButton_ = CreateWindowExW(0, L"BUTTON", L"前进 10 秒", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
                                                340, 414, 104, 30, settings_, ControlId(kVideoForwardButtonId), instance_, nullptr);
 
-        status_ = label(L"", 20, 462, 716, 170);
+        status_ = label(L"", 20, 462, 716, 190);
         applyButton_ = CreateWindowExW(0, L"BUTTON", L"应用到桌面", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON,
                                        436, 696, 112, 36, settings_, ControlId(kApplyButtonId), instance_, nullptr);
         toggleButton_ = CreateWindowExW(0, L"BUTTON", L"停止", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
@@ -523,7 +539,7 @@ public:
         closeButton_ = CreateWindowExW(0, L"BUTTON", L"关闭", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
                                        652, 696, 84, 36, settings_, ControlId(kCloseButtonId), instance_, nullptr);
 
-        for (HWND control : {sceneCombo_, libraryButton_, layoutCombo_, scaleCombo_, horizontalCombo_, verticalCombo_,
+        for (HWND control : {sceneCombo_, libraryButton_, automationButton_, layoutCombo_, scaleCombo_, horizontalCombo_, verticalCombo_,
                              fpsCombo_, fullscreenActionCombo_, maximizedActionCombo_, videoLoopCheck_, videoMuteCheck_,
                              videoVolumeCombo_, videoRateCombo_, videoBackButton_, videoRestartButton_, videoForwardButton_,
                              applyButton_, toggleButton_, closeButton_}) {
@@ -560,11 +576,15 @@ private:
         return turingdesk::wallpaper::ParseLayoutMode(config_.layout) == turingdesk::wallpaper::LayoutMode::Independent;
     }
 
-    void InitializeLibraryAndAssignments() {
+    void InitializeLibraryAssignmentsAndAutomation() {
         libraryError_.clear();
+        automationError_.clear();
         std::wstring error;
         if (!library_.Load(&error)) libraryError_ = error;
+        error.clear();
         if (!assignments_.Load(&error) && libraryError_.empty()) libraryError_ = error;
+        error.clear();
+        if (!automation_.Load(&error)) automationError_ = error;
 
         for (const auto& scene : std::array<std::pair<const wchar_t*, const wchar_t*>, 3>{
                  std::pair{L"scene-aurora", L"Aurora Flow"},
@@ -614,6 +634,36 @@ private:
             });
     }
 
+    void ShowAutomation() {
+        automationWindow_.Show(
+            instance_, &automation_, &library_,
+            [this](const std::wstring& name) { return CaptureCurrentProfile(name); },
+            [this](const turingdesk::wallpaper::AutomationDecision& decision) { ApplyAutomationDecision(decision); });
+    }
+
+    static bool ApplyWallpaperItemToConfig(Config& next, const turingdesk::wallpaper::WallpaperLibraryItem& item) {
+        using Kind = turingdesk::wallpaper::LibraryWallpaperKind;
+        next.image.clear();
+        next.video.clear();
+        if (item.kind == Kind::Scene) {
+            if (_wcsicmp(item.id.c_str(), L"scene-neon") == 0) next.scene = L"neon";
+            else if (_wcsicmp(item.id.c_str(), L"scene-grid") == 0) next.scene = L"grid";
+            else next.scene = L"aurora";
+            return true;
+        }
+        if (item.kind == Kind::Image) {
+            next.scene = L"image";
+            next.image = item.source.wstring();
+            return true;
+        }
+        if (item.kind == Kind::Video) {
+            next.scene = L"video";
+            next.video = item.source.wstring();
+            return true;
+        }
+        return false;
+    }
+
     void ApplyLibraryItem(const turingdesk::wallpaper::WallpaperLibraryItem& item, const std::wstring& targetMonitorId) {
         using Kind = turingdesk::wallpaper::LibraryWallpaperKind;
         if (item.kind == Kind::Web) {
@@ -639,19 +689,7 @@ private:
         } else {
             Config next = config_;
             next.enabled = true;
-            next.image.clear();
-            next.video.clear();
-            if (item.kind == Kind::Scene) {
-                if (_wcsicmp(item.id.c_str(), L"scene-neon") == 0) next.scene = L"neon";
-                else if (_wcsicmp(item.id.c_str(), L"scene-grid") == 0) next.scene = L"grid";
-                else next.scene = L"aurora";
-            } else if (item.kind == Kind::Image) {
-                next.scene = L"image";
-                next.image = item.source.wstring();
-            } else if (item.kind == Kind::Video) {
-                next.scene = L"video";
-                next.video = item.source.wstring();
-            }
+            if (!ApplyWallpaperItemToConfig(next, item)) return;
             ApplyConfig(next);
         }
 
@@ -659,6 +697,129 @@ private:
         library_.MarkUsed(item.id, &error);
         if (!error.empty()) libraryError_ = error;
         libraryWindow_.Refresh();
+        automationWindow_.Refresh();
+    }
+
+    std::optional<std::wstring> CurrentWallpaperId() const {
+        if (config_.scene == L"aurora") return std::wstring(L"scene-aurora");
+        if (config_.scene == L"neon") return std::wstring(L"scene-neon");
+        if (config_.scene == L"grid") return std::wstring(L"scene-grid");
+        const std::wstring source = config_.scene == L"image" ? config_.image :
+                                    config_.scene == L"video" ? config_.video : L"";
+        if (source.empty()) return std::nullopt;
+        for (const auto& item : library_.Items()) {
+            if (item.source.empty()) continue;
+            const bool kindMatches = (config_.scene == L"image" && item.kind == turingdesk::wallpaper::LibraryWallpaperKind::Image) ||
+                                     (config_.scene == L"video" && item.kind == turingdesk::wallpaper::LibraryWallpaperKind::Video);
+            if (!kindMatches) continue;
+            const std::wstring itemPath = item.source.wstring();
+            if (_wcsicmp(itemPath.c_str(), source.c_str()) == 0) return item.id;
+        }
+        return std::nullopt;
+    }
+
+    std::optional<turingdesk::wallpaper::WallpaperProfile> CaptureCurrentProfile(const std::wstring& name) const {
+        const auto wallpaperId = CurrentWallpaperId();
+        if (!wallpaperId) return std::nullopt;
+        turingdesk::wallpaper::WallpaperProfile profile;
+        profile.name = name;
+        profile.wallpaperId = *wallpaperId;
+        profile.layout = config_.layout;
+        profile.scale = config_.scale;
+        profile.focalX = config_.focalX;
+        profile.focalY = config_.focalY;
+        profile.fpsCap = config_.fpsCap;
+        profile.throttleFps = config_.throttleFps;
+        profile.fullscreenAction = config_.fullscreenAction;
+        profile.maximizedAction = config_.maximizedAction;
+        profile.remoteSessionAction = config_.remoteSessionAction;
+        profile.batterySaverAction = config_.batterySaverAction;
+        profile.lockedSessionAction = config_.lockedSessionAction;
+        profile.idleAction = config_.idleAction;
+        profile.idleThresholdSeconds = config_.idleThresholdSeconds;
+        profile.videoLoop = config_.videoLoop;
+        profile.videoMuted = config_.videoMuted;
+        profile.videoVolume = config_.videoVolume;
+        profile.videoRate = config_.videoRate;
+        return profile;
+    }
+
+    void ApplyAutomationDecision(const turingdesk::wallpaper::AutomationDecision& decision) {
+        using DecisionKind = turingdesk::wallpaper::AutomationDecisionKind;
+        if (decision.kind == DecisionKind::None) return;
+
+        if (decision.kind == DecisionKind::ApplyWallpaper) {
+            const auto item = library_.Find(decision.targetId);
+            if (!item || !ApplyWallpaperItemToConfig(config_, *item)) {
+                automationError_ = L"自动化引用的壁纸不可用：" + decision.targetId;
+                RefreshSettings();
+                return;
+            }
+            config_.enabled = true;
+            lastAutomationNote_ = decision.reason + L" · " + (item->title.empty() ? item->id : item->title);
+            ApplyConfig(config_);
+            std::wstring markError;
+            library_.MarkUsed(item->id, &markError);
+            if (!markError.empty()) libraryError_ = markError;
+        } else if (decision.kind == DecisionKind::ApplyProfile) {
+            const auto profile = automation_.FindProfile(decision.targetId);
+            if (!profile) {
+                automationError_ = L"自动化引用的 Profile 不存在：" + decision.targetId;
+                RefreshSettings();
+                return;
+            }
+            const auto item = library_.Find(profile->wallpaperId);
+            if (!item) {
+                automationError_ = L"Profile 引用的壁纸不存在：" + profile->wallpaperId;
+                RefreshSettings();
+                return;
+            }
+            Config next = config_;
+            next.enabled = true;
+            next.layout = profile->layout;
+            next.scale = profile->scale;
+            next.focalX = profile->focalX;
+            next.focalY = profile->focalY;
+            next.fpsCap = profile->fpsCap;
+            next.throttleFps = profile->throttleFps;
+            next.fullscreenAction = profile->fullscreenAction;
+            next.maximizedAction = profile->maximizedAction;
+            next.remoteSessionAction = profile->remoteSessionAction;
+            next.batterySaverAction = profile->batterySaverAction;
+            next.lockedSessionAction = profile->lockedSessionAction;
+            next.idleAction = profile->idleAction;
+            next.idleThresholdSeconds = profile->idleThresholdSeconds;
+            next.videoLoop = profile->videoLoop;
+            next.videoMuted = profile->videoMuted;
+            next.videoVolume = profile->videoVolume;
+            next.videoRate = profile->videoRate;
+            next.pauseFullscreen = next.fullscreenAction == turingdesk::wallpaper::PerformanceAction::Pause;
+            if (!ApplyWallpaperItemToConfig(next, *item)) {
+                automationError_ = L"Profile 当前引用的壁纸类型尚不可运行。";
+                RefreshSettings();
+                return;
+            }
+            lastAutomationNote_ = decision.reason + L" · Profile " + profile->name;
+            ApplyConfig(next);
+            std::wstring markError;
+            library_.MarkUsed(item->id, &markError);
+            if (!markError.empty()) libraryError_ = markError;
+        }
+        automationError_.clear();
+        automationWindow_.Refresh();
+        libraryWindow_.Refresh();
+        RefreshSettings();
+    }
+
+    void EvaluateAutomationIfDue() {
+        if (!config_.enabled || !automation_.Enabled()) return;
+        const ULONGLONG nowTick = GetTickCount64();
+        if (lastAutomationEvaluationMs_ != 0 && nowTick - lastAutomationEvaluationMs_ < kAutomationEvaluationIntervalMs) return;
+        lastAutomationEvaluationMs_ = nowTick;
+        SYSTEMTIME local{};
+        GetLocalTime(&local);
+        const auto decision = automation_.Evaluate(local, NowUnixSeconds());
+        if (decision.kind != turingdesk::wallpaper::AutomationDecisionKind::None) ApplyAutomationDecision(decision);
     }
 
     HWND CreateActionCombo(int x, int y, int id) {
@@ -921,6 +1082,9 @@ private:
             case kLibraryButtonId:
                 if (HIWORD(wParam) == BN_CLICKED) self->ShowLibrary();
                 return 0;
+            case kAutomationButtonId:
+                if (HIWORD(wParam) == BN_CLICKED) self->ShowAutomation();
+                return 0;
             case kVideoBackButtonId:
                 if (HIWORD(wParam) == BN_CLICKED) {
                     const bool ok = self->IsIndependent()
@@ -967,6 +1131,7 @@ private:
             self->settings_ = nullptr;
             self->sceneCombo_ = nullptr;
             self->libraryButton_ = nullptr;
+            self->automationButton_ = nullptr;
             self->layoutCombo_ = nullptr;
             self->scaleCombo_ = nullptr;
             self->horizontalCombo_ = nullptr;
@@ -1025,6 +1190,7 @@ private:
                     }
                 }
                 if (config_.enabled) {
+                    EvaluateAutomationIfDue();
                     const auto snapshot = performancePolicy_.Evaluate(host_, settings_, CurrentPerformanceConfig());
                     ApplyPerformanceSnapshot(snapshot);
                     if (snapshot.action != turingdesk::wallpaper::PerformanceAction::Pause &&
@@ -1038,6 +1204,7 @@ private:
             HandleTopologyChanged();
             return 0;
         case WM_CLOSE:
+            automationWindow_.Close();
             libraryWindow_.Close();
             RemoveTray();
             StopRuntime();
@@ -1234,6 +1401,7 @@ private:
         HMENU menu = CreatePopupMenu();
         if (!menu) return;
         AppendMenuW(menu, MF_STRING, kTraySettings, L"壁纸设置");
+        AppendMenuW(menu, MF_STRING, kTrayAutomation, L"壁纸自动化");
         AppendMenuW(menu, MF_STRING, kTrayToggle, config_.enabled ? L"停止壁纸" : L"恢复壁纸");
         AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
         AppendMenuW(menu, MF_STRING, kTrayExit, L"退出壁纸引擎");
@@ -1244,6 +1412,7 @@ private:
                                            point.x, point.y, 0, control_, nullptr);
         DestroyMenu(menu);
         if (command == kTraySettings) ShowSettings();
+        else if (command == kTrayAutomation) ShowAutomation();
         else if (command == kTrayToggle) SetEnabled(!config_.enabled);
         else if (command == kTrayExit) PostMessageW(control_, WM_CLOSE, 0, 0);
     }
@@ -1416,6 +1585,7 @@ private:
         }
         SetRenderTimerFps(config_.fpsCap);
         libraryWindow_.SetTargets(LibraryTargets());
+        automationWindow_.Refresh();
         RefreshSettings();
         return mounted;
     }
@@ -1477,6 +1647,7 @@ private:
             next.image.clear();
             next.video.clear();
         }
+        lastAutomationNote_.clear();
         ApplyConfig(next);
     }
 
@@ -1550,6 +1721,17 @@ private:
             }
             if (!lastMediaError_.empty()) status += L"\r\n媒体诊断：" + lastMediaError_;
             if (!recoveryNote_.empty()) status += L"\r\n恢复：" + recoveryNote_;
+
+            status += L"\r\n自动化：";
+            status += automation_.Enabled() ? L"启用" : L"暂停";
+            status += L" · Profile " + std::to_wstring(automation_.Profiles().size()) +
+                      L" · Playlist " + std::to_wstring(automation_.Playlists().size()) +
+                      L" · Schedule " + std::to_wstring(automation_.Schedules().size());
+            if (!automation_.ActivePlaylistId().empty()) status += L" · 默认 Playlist 已设置";
+            if (!automation_.LastMatchedScheduleId().empty()) status += L" · Schedule 生效中";
+            if (!lastAutomationNote_.empty()) status += L"\r\n最近自动切换：" + lastAutomationNote_;
+            if (!automationError_.empty()) status += L"\r\n自动化诊断：" + automationError_;
+
             status += L"\r\n库：" + std::to_wstring(library_.Items().size()) + L" 项";
             if (!libraryError_.empty()) status += L" · 库诊断：" + libraryError_;
             status += L"\r\n" + turingdesk::wallpaper::DescribeMonitorTopology(topology_);
@@ -1564,6 +1746,7 @@ private:
     HWND settings_{};
     HWND sceneCombo_{};
     HWND libraryButton_{};
+    HWND automationButton_{};
     HWND layoutCombo_{};
     HWND scaleCombo_{};
     HWND horizontalCombo_{};
@@ -1592,11 +1775,14 @@ private:
     unsigned recoveryAttempts_{};
     ULONGLONG lastRecoveryAttemptMs_{};
     ULONGLONG healthySinceMs_{};
+    ULONGLONG lastAutomationEvaluationMs_{};
     MountMode mountMode_{MountMode::None};
     std::wstring lastMountError_;
     std::wstring lastMediaError_;
     std::wstring recoveryNote_;
     std::wstring libraryError_;
+    std::wstring automationError_;
+    std::wstring lastAutomationNote_;
     Config config_;
     turingdesk::wallpaper::MonitorTopology topology_;
     turingdesk::wallpaper::WallpaperPerformancePolicy performancePolicy_;
@@ -1604,6 +1790,8 @@ private:
     turingdesk::wallpaper::WallpaperLibrary library_;
     turingdesk::wallpaper::WallpaperLibraryWindow libraryWindow_;
     turingdesk::wallpaper::WallpaperMonitorAssignments assignments_;
+    turingdesk::wallpaper::WallpaperAutomationStore automation_;
+    turingdesk::wallpaper::WallpaperAutomationWindow automationWindow_;
     turingdesk::VideoWallpaperSet videoSet_;
     turingdesk::IndependentWallpaperHost independentHost_;
     float time_{};
@@ -1662,6 +1850,7 @@ int RunSelfTest(HINSTANCE instance) {
     const bool libraryOk = turingdesk::wallpaper::WallpaperLibrary::SelfTest();
     const bool assignmentsOk = turingdesk::wallpaper::WallpaperMonitorAssignments::SelfTest();
     const bool independentResolutionOk = turingdesk::wallpaper::SelfTestIndependentWallpaperResolution();
+    const bool automationOk = turingdesk::wallpaper::WallpaperAutomationStore::SelfTest();
     const auto topology = turingdesk::wallpaper::QueryMonitorTopology();
     const bool topologyOk = topology.Valid();
     const bool mediaFoundationOk = turingdesk::VideoWallpaperPlayer::MediaFoundationAvailable();
@@ -1678,6 +1867,7 @@ int RunSelfTest(HINSTANCE instance) {
     if (!libraryOk) return 33;
     if (!assignmentsOk) return 34;
     if (!independentResolutionOk) return 35;
+    if (!automationOk) return 36;
     return mediaFoundationOk ? 0 : 28;
 }
 
