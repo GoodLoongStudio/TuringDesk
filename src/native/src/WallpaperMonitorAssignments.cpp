@@ -69,7 +69,8 @@ bool WallpaperMonitorAssignments::Load(std::wstring* error) {
     std::error_code ec;
     if (!fs::exists(storagePath_, ec)) return true;
 
-    const int count = std::clamp(GetPrivateProfileIntW(L"Assignments", L"Count", 0, storagePath_.c_str()), 0, 1024);
+    const UINT rawCount = GetPrivateProfileIntW(L"Assignments", L"Count", 0, storagePath_.c_str());
+    const int count = static_cast<int>(std::clamp<UINT>(rawCount, 0U, 1024U));
     for (int i = 0; i < count; ++i) {
         const std::wstring section = SectionName(static_cast<std::size_t>(i));
         MonitorWallpaperAssignment item;
