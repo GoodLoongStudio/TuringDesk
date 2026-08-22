@@ -1,5 +1,5 @@
 name: Apply tdwall Library Migration
-# trigger-revision: 3
+# trigger-revision: 4
 
 on:
   push:
@@ -130,6 +130,39 @@ jobs:
           for i in 1 2 3 4 5; do
             git pull --rebase origin main || true
             if git push origin HEAD:main; then exit 0; fi
+            sleep 2
+          done
+          exit 1
+
+  report:
+    if: always()
+    needs: [patch]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ci-status
+      - name: Write tdwall migration status
+        shell: bash
+        env:
+          PATCH_RESULT: ${{ needs.patch.result }}
+        run: |
+          mkdir -p ci
+          cat > "ci/tdwall-library-${GITHUB_SHA}.json" <<EOF
+          {
+            "sha": "${GITHUB_SHA}",
+            "mode": "tdwall-library-migration",
+            "result": "${PATCH_RESULT}",
+            "run_id": "${GITHUB_RUN_ID}"
+          }
+          EOF
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "ci/tdwall-library-${GITHUB_SHA}.json"
+          git commit -m "ci: report tdwall library migration ${GITHUB_SHA}" || exit 0
+          for i in 1 2 3; do
+            git pull --rebase origin ci-status || true
+            if git push origin HEAD:ci-status; then exit 0; fi
             sleep 2
           done
           exit 1
