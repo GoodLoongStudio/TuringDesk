@@ -21,6 +21,7 @@ constexpr wchar_t kHarnessHost[] = L"127.0.0.1";
 constexpr INTERNET_PORT kHarnessPort = 3080;
 constexpr wchar_t kHarnessPath[] = L"/";
 constexpr wchar_t kHarnessPackage[] = L"@deepseek-ai/dsh@0.1.0-rc.7";
+constexpr wchar_t kHarnessBindArgs[] = L" --host 127.0.0.1 --port 3080";
 constexpr wchar_t kBundledNodeRelativePath[] = L"HarnessRuntime\\Node\\node.exe";
 constexpr wchar_t kBundledNpxRelativePath[] = L"HarnessRuntime\\Node\\npx.cmd";
 constexpr wchar_t kBundledDshBinRelativePath[] = L"HarnessRuntime\\Dsh\\node_modules\\@deepseek-ai\\dsh\\lib\\bin.js";
@@ -128,7 +129,7 @@ std::wstring ResolveNpxPath() {
 std::wstring BuildNpxLaunchCommandFor(const std::wstring& npxPath) {
     // cmd /s /c requires the doubled opening quote when the command itself starts
     // with a quoted executable path. This keeps portable package paths with spaces safe.
-    return L"cmd.exe /d /s /c \"\"" + npxPath + L"\" --yes " + kHarnessPackage + L" web\"";
+    return L"cmd.exe /d /s /c \"\"" + npxPath + L"\" --yes " + kHarnessPackage + L" web" + kHarnessBindArgs + L"\"";
 }
 
 LaunchSpec ResolveLaunchSpec() {
@@ -139,7 +140,7 @@ LaunchSpec ResolveLaunchSpec() {
         if (IsRegularFile(node) && IsRegularFile(dshBin)) {
             LaunchSpec spec;
             spec.application = node.wstring();
-            spec.commandLine = L"\"" + node.wstring() + L"\" \"" + dshBin.wstring() + L"\" web";
+            spec.commandLine = L"\"" + node.wstring() + L"\" \"" + dshBin.wstring() + L"\" web" + kHarnessBindArgs;
             spec.bundledNodeDirectory = node.parent_path();
             return spec;
         }
@@ -483,15 +484,23 @@ std::wstring HarnessProcessManager::BuildLaunchCommand() {
 bool HarnessProcessManager::SelfTest() {
     const std::wstring directNode = L"C:\\Program Files\\TuringDesk\\HarnessRuntime\\Node\\node.exe";
     const std::wstring directBin = L"C:\\Program Files\\TuringDesk\\HarnessRuntime\\Dsh\\node_modules\\@deepseek-ai\\dsh\\lib\\bin.js";
-    const std::wstring directCommand = L"\"" + directNode + L"\" \"" + directBin + L"\" web";
+    const std::wstring directCommand = L"\"" + directNode + L"\" \"" + directBin + L"\" web" + kHarnessBindArgs;
     const std::wstring npxCommand = BuildNpxLaunchCommandFor(L"C:\\Program Files\\TuringDesk\\HarnessRuntime\\Node\\npx.cmd");
+
+    const auto bindsOnlyLoopback = [](const std::wstring& command) {
+        return command.find(L"--host 127.0.0.1") != std::wstring::npos &&
+               command.find(L"--port 3080") != std::wstring::npos &&
+               command.find(L"--host 0.0.0.0") == std::wstring::npos &&
+               command.find(L"--host ::") == std::wstring::npos;
+    };
 
     return DefaultUrl() == L"http://localhost:3080" &&
            directCommand.find(L"node.exe\"") != std::wstring::npos &&
            directCommand.find(L"@deepseek-ai\\dsh\\lib\\bin.js") != std::wstring::npos &&
-           directCommand.ends_with(L" web") &&
+           bindsOnlyLoopback(directCommand) &&
            npxCommand.find(kHarnessPackage) != std::wstring::npos &&
            npxCommand.find(L"/d /s /c") != std::wstring::npos &&
+           bindsOnlyLoopback(npxCommand) &&
            std::string_view(kHarnessBootMarker) == "window.__DSH_BOOT__" &&
            !LogPath().empty();
 }
