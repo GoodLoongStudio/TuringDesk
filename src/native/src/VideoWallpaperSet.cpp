@@ -40,14 +40,27 @@ bool VideoWallpaperSet::EnsureSurfaceClass() {
     return GetLastError() == ERROR_CLASS_ALREADY_EXISTS;
 }
 
-bool VideoWallpaperSet::Start(HWND parentWindow, const std::wstring& path, const std::vector<RECT>& requestedRegions,
+bool VideoWallpaperSet::Start(HWND parentWindow, const std::wstring& path, const std::vector<RECT>& regions,
                               wallpaper::ScaleMode scaleMode, float focalX, float focalY) {
+    std::vector<VideoWallpaperRequest> requests;
+    requests.reserve(regions.empty() ? 1 : regions.size());
+    if (regions.empty()) {
+        RECT parentRect{};
+        if (parentWindow && GetClientRect(parentWindow, &parentRect)) requests.push_back({parentRect, path});
+    } else {
+        for (const RECT& region : regions) requests.push_back({region, path});
+    }
+    return StartMixed(parentWindow, requests, scaleMode, focalX, focalY);
+}
+
+bool VideoWallpaperSet::StartMixed(HWND parentWindow, const std::vector<VideoWallpaperRequest>& requested,
+                                   wallpaper::ScaleMode scaleMode, float focalX, float focalY) {
     Stop();
     lastError_.clear();
     scaleMode_ = scaleMode;
     focalX_ = wallpaper::ClampFocal(focalX);
     focalY_ = wallpaper::ClampFocal(focalY);
-    if (!parentWindow || path.empty()) {
+    if (!parentWindow || requested.empty()) {
         lastError_ = L"视频 Surface 参数无效";
         return false;
     }
@@ -58,25 +71,31 @@ bool VideoWallpaperSet::Start(HWND parentWindow, const std::wstring& path, const
         return false;
     }
 
-    std::vector<RECT> regions;
-    regions.reserve(requestedRegions.size());
-    for (const auto& region : requestedRegions) {
+    std::vector<VideoWallpaperRequest> requests;
+    requests.reserve(requested.size());
+    for (const auto& request : requested) {
+        if (request.path.empty()) continue;
         RECT clipped{};
-        if (!IntersectRect(&clipped, &region, &parentRect)) continue;
-        if (clipped.right > clipped.left && clipped.bottom > clipped.top) regions.push_back(clipped);
+        if (!IntersectRect(&clipped, &request.region, &parentRect)) continue;
+        if (clipped.right <= clipped.left || clipped.bottom <= clipped.top) continue;
+        requests.push_back({clipped, request.path});
     }
-    if (regions.empty()) regions.push_back(parentRect);
+    if (requests.empty()) {
+        lastError_ = L"没有有效的视频显示区域";
+        return false;
+    }
 
     parent_ = parentWindow;
-    const bool directParent = regions.size() == 1 && SameRect(regions.front(), parentRect);
+    const bool directParent = requests.size() == 1 && SameRect(requests.front().region, parentRect);
     if (!directParent && !EnsureSurfaceClass()) {
         lastError_ = L"无法注册多显示器视频 Surface";
         parent_ = nullptr;
         return false;
     }
 
-    for (const auto& region : regions) {
+    for (const auto& request : requests) {
         Slot slot;
+        slot.path = request.path;
         if (directParent) {
             slot.surface = parentWindow;
             slot.ownsSurface = false;
@@ -86,10 +105,10 @@ bool VideoWallpaperSet::Start(HWND parentWindow, const std::wstring& path, const
                 kSurfaceClass,
                 L"",
                 WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS,
-                region.left,
-                region.top,
-                region.right - region.left,
-                region.bottom - region.top,
+                request.region.left,
+                request.region.top,
+                request.region.right - request.region.left,
+                request.region.bottom - request.region.top,
                 parentWindow,
                 nullptr,
                 GetModuleHandleW(nullptr),
@@ -108,9 +127,9 @@ bool VideoWallpaperSet::Start(HWND parentWindow, const std::wstring& path, const
         slot.player->SetMuted(muted_);
         slot.player->SetVolume(volume_);
         slot.player->SetPlaybackRate(playbackRate_);
-        if (!slot.player->Start(slot.surface, path)) {
+        if (!slot.player->Start(slot.surface, slot.path)) {
             lastError_ = slot.player->LastErrorText();
-            if (lastError_.empty()) lastError_ = L"Media Foundation 无法启动多屏视频";
+            if (lastError_.empty()) lastError_ = L"Media Foundation 无法启动显示器视频";
             if (slot.ownsSurface && IsWindow(slot.surface)) DestroyWindow(slot.surface);
             Stop();
             return false;
@@ -130,9 +149,7 @@ bool VideoWallpaperSet::Start(HWND parentWindow, const std::wstring& path, const
 }
 
 void VideoWallpaperSet::Stop() {
-    for (auto& slot : slots_) {
-        if (slot.player) slot.player->Stop();
-    }
+    for (auto& slot : slots_) if (slot.player) slot.player->Stop();
     for (auto& slot : slots_) {
         if (slot.ownsSurface && slot.surface && IsWindow(slot.surface)) DestroyWindow(slot.surface);
     }
@@ -141,24 +158,18 @@ void VideoWallpaperSet::Stop() {
 }
 
 void VideoWallpaperSet::Tick() {
-    for (auto& slot : slots_) {
-        if (slot.player) slot.player->Tick();
-    }
+    for (auto& slot : slots_) if (slot.player) slot.player->Tick();
 }
 
 void VideoWallpaperSet::SetPaused(bool paused) {
-    for (auto& slot : slots_) {
-        if (slot.player) slot.player->SetPaused(paused);
-    }
+    for (auto& slot : slots_) if (slot.player) slot.player->SetPaused(paused);
 }
 
 void VideoWallpaperSet::SetScaling(wallpaper::ScaleMode scaleMode, float focalX, float focalY) {
     scaleMode_ = scaleMode;
     focalX_ = wallpaper::ClampFocal(focalX);
     focalY_ = wallpaper::ClampFocal(focalY);
-    for (auto& slot : slots_) {
-        if (slot.player) slot.player->SetScaling(scaleMode_, focalX_, focalY_);
-    }
+    for (auto& slot : slots_) if (slot.player) slot.player->SetScaling(scaleMode_, focalX_, focalY_);
 }
 
 void VideoWallpaperSet::SetLooping(bool looping) {
@@ -183,17 +194,13 @@ void VideoWallpaperSet::SetPlaybackRate(float rate) {
 
 bool VideoWallpaperSet::Restart() {
     bool ok = !slots_.empty();
-    for (auto& slot : slots_) {
-        if (!slot.player || !slot.player->Restart()) ok = false;
-    }
+    for (auto& slot : slots_) if (!slot.player || !slot.player->Restart()) ok = false;
     return ok;
 }
 
 bool VideoWallpaperSet::SeekRelativeSeconds(double seconds) {
     bool ok = !slots_.empty();
-    for (auto& slot : slots_) {
-        if (!slot.player || !slot.player->SeekRelativeSeconds(seconds)) ok = false;
-    }
+    for (auto& slot : slots_) if (!slot.player || !slot.player->SeekRelativeSeconds(seconds)) ok = false;
     return ok;
 }
 
@@ -227,8 +234,18 @@ std::wstring VideoWallpaperSet::LastErrorText() const {
 std::wstring VideoWallpaperSet::DiagnosticsText() const {
     std::wostringstream text;
     text << slots_.size() << L" 个视频 Surface";
-    if (!slots_.empty() && slots_.front().player)
-        text << L" · " << slots_.front().player->DiagnosticsText();
+    if (slots_.size() > 1) {
+        std::size_t distinct = 0;
+        std::vector<std::wstring> paths;
+        for (const auto& slot : slots_) {
+            if (std::find(paths.begin(), paths.end(), slot.path) == paths.end()) {
+                paths.push_back(slot.path);
+                ++distinct;
+            }
+        }
+        text << L" · " << distinct << L" 个独立视频源";
+    }
+    if (!slots_.empty() && slots_.front().player) text << L" · " << slots_.front().player->DiagnosticsText();
     if (!lastError_.empty()) text << L" · " << lastError_;
     return text.str();
 }
