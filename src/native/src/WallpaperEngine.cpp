@@ -4,10 +4,12 @@
 #include <d2d1.h>
 #include <wincodec.h>
 #include <wrl/client.h>
+#include <wtsapi32.h>
 #include "turingdesk/VideoWallpaperPlayer.h"
 #include "turingdesk/VideoWallpaperSet.h"
 #include "turingdesk/WallpaperMonitorLayout.h"
 #include "turingdesk/WallpaperScaling.h"
+#include "turingdesk/WallpaperPerformancePolicy.h"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -43,10 +45,13 @@ constexpr int kLayoutComboId = 4107;
 constexpr int kScaleComboId = 4108;
 constexpr int kHorizontalComboId = 4109;
 constexpr int kVerticalComboId = 4110;
+constexpr int kFpsComboId = 4111;
+constexpr int kFullscreenActionComboId = 4112;
+constexpr int kMaximizedActionComboId = 4113;
 constexpr int kTraySettings = 4201;
 constexpr int kTrayToggle = 4202;
 constexpr int kTrayExit = 4203;
-constexpr int kConfigVersion = 6;
+constexpr int kConfigVersion = 7;
 constexpr LONG_PTR kRaisedDesktopFlag = WS_EX_NOREDIRECTIONBITMAP;
 
 HMENU ControlId(int id) {
@@ -55,7 +60,7 @@ HMENU ControlId(int id) {
 
 struct Config {
     bool enabled{true};
-    bool pauseFullscreen{true};
+    bool pauseFullscreen{true}; // V6 compatibility; V7 uses fullscreenAction.
     std::wstring scene{L"aurora"};
     std::wstring image;
     std::wstring video;
@@ -63,6 +68,15 @@ struct Config {
     std::wstring scale{L"cover"};
     float focalX{0.5f};
     float focalY{0.5f};
+    int fpsCap{30};
+    int throttleFps{15};
+    turingdesk::wallpaper::PerformanceAction fullscreenAction{turingdesk::wallpaper::PerformanceAction::Pause};
+    turingdesk::wallpaper::PerformanceAction maximizedAction{turingdesk::wallpaper::PerformanceAction::Throttle};
+    turingdesk::wallpaper::PerformanceAction remoteSessionAction{turingdesk::wallpaper::PerformanceAction::Throttle};
+    turingdesk::wallpaper::PerformanceAction batterySaverAction{turingdesk::wallpaper::PerformanceAction::Throttle};
+    turingdesk::wallpaper::PerformanceAction lockedSessionAction{turingdesk::wallpaper::PerformanceAction::Stop};
+    turingdesk::wallpaper::PerformanceAction idleAction{turingdesk::wallpaper::PerformanceAction::Throttle};
+    DWORD idleThresholdSeconds{120};
 };
 
 enum class MountMode {
@@ -112,12 +126,19 @@ float ReadProfileFloat(const std::wstring& path, const wchar_t* key, float fallb
     return turingdesk::wallpaper::ClampFocal(value);
 }
 
+std::wstring ReadProfileText(const std::wstring& path, const wchar_t* key, const wchar_t* fallback) {
+    wchar_t text[256]{};
+    GetPrivateProfileStringW(L"Wallpaper", key, fallback, text, static_cast<DWORD>(std::size(text)), path.c_str());
+    return text;
+}
+
 void SaveConfig(const Config& config) {
     const auto path = ConfigPath().wstring();
     const auto version = std::to_wstring(kConfigVersion);
     WritePrivateProfileStringW(L"Wallpaper", L"Version", version.c_str(), path.c_str());
     WritePrivateProfileStringW(L"Wallpaper", L"Enabled", config.enabled ? L"1" : L"0", path.c_str());
-    WritePrivateProfileStringW(L"Wallpaper", L"PauseFullscreen", config.pauseFullscreen ? L"1" : L"0", path.c_str());
+    WritePrivateProfileStringW(L"Wallpaper", L"PauseFullscreen",
+                               config.fullscreenAction == turingdesk::wallpaper::PerformanceAction::Pause ? L"1" : L"0", path.c_str());
     WritePrivateProfileStringW(L"Wallpaper", L"Scene", config.scene.c_str(), path.c_str());
     WritePrivateProfileStringW(L"Wallpaper", L"Image", config.image.c_str(), path.c_str());
     WritePrivateProfileStringW(L"Wallpaper", L"Video", config.video.c_str(), path.c_str());
@@ -127,6 +148,19 @@ void SaveConfig(const Config& config) {
     const auto focalY = FloatText(config.focalY);
     WritePrivateProfileStringW(L"Wallpaper", L"FocalX", focalX.c_str(), path.c_str());
     WritePrivateProfileStringW(L"Wallpaper", L"FocalY", focalY.c_str(), path.c_str());
+
+    const auto fps = std::to_wstring(turingdesk::wallpaper::NormalizeFpsCap(config.fpsCap));
+    const auto throttleFps = std::to_wstring(turingdesk::wallpaper::NormalizeFpsCap(config.throttleFps));
+    const auto idleSeconds = std::to_wstring(config.idleThresholdSeconds);
+    WritePrivateProfileStringW(L"Wallpaper", L"FpsCap", fps.c_str(), path.c_str());
+    WritePrivateProfileStringW(L"Wallpaper", L"ThrottleFps", throttleFps.c_str(), path.c_str());
+    WritePrivateProfileStringW(L"Wallpaper", L"FullscreenAction", turingdesk::wallpaper::PerformanceActionKey(config.fullscreenAction), path.c_str());
+    WritePrivateProfileStringW(L"Wallpaper", L"MaximizedAction", turingdesk::wallpaper::PerformanceActionKey(config.maximizedAction), path.c_str());
+    WritePrivateProfileStringW(L"Wallpaper", L"RemoteSessionAction", turingdesk::wallpaper::PerformanceActionKey(config.remoteSessionAction), path.c_str());
+    WritePrivateProfileStringW(L"Wallpaper", L"BatterySaverAction", turingdesk::wallpaper::PerformanceActionKey(config.batterySaverAction), path.c_str());
+    WritePrivateProfileStringW(L"Wallpaper", L"LockedSessionAction", turingdesk::wallpaper::PerformanceActionKey(config.lockedSessionAction), path.c_str());
+    WritePrivateProfileStringW(L"Wallpaper", L"IdleAction", turingdesk::wallpaper::PerformanceActionKey(config.idleAction), path.c_str());
+    WritePrivateProfileStringW(L"Wallpaper", L"IdleThresholdSeconds", idleSeconds.c_str(), path.c_str());
 }
 
 Config LoadConfig() {
@@ -136,19 +170,31 @@ Config LoadConfig() {
     config.enabled = GetPrivateProfileIntW(L"Wallpaper", L"Enabled", 1, path.c_str()) != 0;
     config.pauseFullscreen = GetPrivateProfileIntW(L"Wallpaper", L"PauseFullscreen", 1, path.c_str()) != 0;
 
-    wchar_t text[32768]{};
-    GetPrivateProfileStringW(L"Wallpaper", L"Scene", L"aurora", text, static_cast<DWORD>(std::size(text)), path.c_str());
-    config.scene = text;
-    GetPrivateProfileStringW(L"Wallpaper", L"Image", L"", text, static_cast<DWORD>(std::size(text)), path.c_str());
-    config.image = text;
-    GetPrivateProfileStringW(L"Wallpaper", L"Video", L"", text, static_cast<DWORD>(std::size(text)), path.c_str());
-    config.video = text;
-    GetPrivateProfileStringW(L"Wallpaper", L"Layout", L"span", text, static_cast<DWORD>(std::size(text)), path.c_str());
-    config.layout = turingdesk::wallpaper::LayoutModeKey(turingdesk::wallpaper::ParseLayoutMode(text));
-    GetPrivateProfileStringW(L"Wallpaper", L"Scale", L"cover", text, static_cast<DWORD>(std::size(text)), path.c_str());
-    config.scale = turingdesk::wallpaper::ScaleModeKey(turingdesk::wallpaper::ParseScaleMode(text));
+    config.scene = ReadProfileText(path, L"Scene", L"aurora");
+    config.image = ReadProfileText(path, L"Image", L"");
+    config.video = ReadProfileText(path, L"Video", L"");
+    config.layout = turingdesk::wallpaper::LayoutModeKey(
+        turingdesk::wallpaper::ParseLayoutMode(ReadProfileText(path, L"Layout", L"span")));
+    config.scale = turingdesk::wallpaper::ScaleModeKey(
+        turingdesk::wallpaper::ParseScaleMode(ReadProfileText(path, L"Scale", L"cover")));
     config.focalX = ReadProfileFloat(path, L"FocalX", 0.5f);
     config.focalY = ReadProfileFloat(path, L"FocalY", 0.5f);
+    config.fpsCap = turingdesk::wallpaper::NormalizeFpsCap(GetPrivateProfileIntW(L"Wallpaper", L"FpsCap", 30, path.c_str()));
+    config.throttleFps = turingdesk::wallpaper::NormalizeFpsCap(GetPrivateProfileIntW(L"Wallpaper", L"ThrottleFps", 15, path.c_str()));
+    config.idleThresholdSeconds = static_cast<DWORD>(std::clamp(GetPrivateProfileIntW(L"Wallpaper", L"IdleThresholdSeconds", 120, path.c_str()), 30, 3600));
+
+    if (version >= 7) {
+        config.fullscreenAction = turingdesk::wallpaper::ParsePerformanceAction(ReadProfileText(path, L"FullscreenAction", L"pause"));
+        config.maximizedAction = turingdesk::wallpaper::ParsePerformanceAction(ReadProfileText(path, L"MaximizedAction", L"throttle"));
+        config.remoteSessionAction = turingdesk::wallpaper::ParsePerformanceAction(ReadProfileText(path, L"RemoteSessionAction", L"throttle"));
+        config.batterySaverAction = turingdesk::wallpaper::ParsePerformanceAction(ReadProfileText(path, L"BatterySaverAction", L"throttle"));
+        config.lockedSessionAction = turingdesk::wallpaper::ParsePerformanceAction(ReadProfileText(path, L"LockedSessionAction", L"stop"));
+        config.idleAction = turingdesk::wallpaper::ParsePerformanceAction(ReadProfileText(path, L"IdleAction", L"throttle"));
+    } else {
+        config.fullscreenAction = config.pauseFullscreen
+            ? turingdesk::wallpaper::PerformanceAction::Pause
+            : turingdesk::wallpaper::PerformanceAction::Normal;
+    }
 
     if (!ValidScene(config.scene)) config.scene = L"aurora";
     if (config.scene == L"image" && config.image.empty()) config.scene = L"aurora";
@@ -261,32 +307,12 @@ void SaveMountDiagnostics(MountMode mode, const std::wstring& error,
     }
 }
 
-bool ForegroundIsFullscreen(HWND wallpaper, HWND settings) {
-    const HWND foreground = GetForegroundWindow();
-    if (!foreground || foreground == wallpaper || foreground == settings || IsIconic(foreground)) return false;
-
-    wchar_t className[128]{};
-    GetClassNameW(foreground, className, static_cast<int>(std::size(className)));
-    if (_wcsicmp(className, L"Progman") == 0 || _wcsicmp(className, L"WorkerW") == 0 ||
-        _wcsicmp(className, L"Shell_TrayWnd") == 0) return false;
-
-    RECT windowRect{};
-    if (!GetWindowRect(foreground, &windowRect)) return false;
-    const HMONITOR monitor = MonitorFromWindow(foreground, MONITOR_DEFAULTTONEAREST);
-    MONITORINFO info{sizeof(info)};
-    if (!GetMonitorInfoW(monitor, &info)) return false;
-    constexpr LONG tolerance = 4;
-    return windowRect.left <= info.rcMonitor.left + tolerance &&
-           windowRect.top <= info.rcMonitor.top + tolerance &&
-           windowRect.right >= info.rcMonitor.right - tolerance &&
-           windowRect.bottom >= info.rcMonitor.bottom - tolerance;
-}
-
 class WallpaperApp {
 public:
     explicit WallpaperApp(HINSTANCE instance) : instance_(instance), config_(LoadConfig()) {}
 
     ~WallpaperApp() {
+        if (control_) WTSUnRegisterSessionNotification(control_);
         videoSet_.Stop();
         RemoveTray();
         if (settings_ && IsWindow(settings_)) DestroyWindow(settings_);
@@ -322,6 +348,7 @@ public:
                                    L"TuringDesk Wallpaper Control", WS_POPUP,
                                    0, 0, 1, 1, nullptr, nullptr, instance_, this);
         if (!control_) return false;
+        WTSRegisterSessionNotification(control_, NOTIFY_FOR_THIS_SESSION);
 
         host_ = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_LAYERED | WS_EX_TRANSPARENT,
                                 kHostClass, L"TuringDesk Wallpaper Host", WS_POPUP,
@@ -332,7 +359,7 @@ public:
         AttachToDesktop();
         AddTray();
         ApplyConfig(config_, false);
-        SetTimer(control_, kRenderTimer, 33, nullptr);
+        SetRenderTimerFps(config_.fpsCap);
         return true;
     }
 
@@ -364,7 +391,7 @@ public:
 
         settings_ = CreateWindowExW(WS_EX_TOOLWINDOW, kSettingsClass, L"TuringDesk 壁纸",
                                     WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU,
-                                    CW_USEDEFAULT, CW_USEDEFAULT, 700, 560,
+                                    CW_USEDEFAULT, CW_USEDEFAULT, 760, 700,
                                     nullptr, nullptr, instance_, this);
         if (!settings_) return;
 
@@ -377,69 +404,69 @@ public:
         };
 
         label(L"TuringDesk 壁纸", 20, 18, 240, 26);
-        label(L"场景", 20, 62, 56, 24);
-        sceneCombo_ = CreateWindowExW(0, L"COMBOBOX", L"",
-                                      WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST,
-                                      104, 58, 330, 180, settings_, ControlId(kSceneComboId), instance_, nullptr);
+        label(L"场景", 20, 62, 72, 24);
+        sceneCombo_ = CreateWindowExW(0, L"COMBOBOX", L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST,
+                                      116, 58, 350, 180, settings_, ControlId(kSceneComboId), instance_, nullptr);
         SendMessageW(sceneCombo_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Aurora Flow · 极光流动"));
         SendMessageW(sceneCombo_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Neon Flow · 霓虹网格"));
         SendMessageW(sceneCombo_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Quiet Grid · 静谧网格"));
         SendMessageW(sceneCombo_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"图片壁纸"));
         SendMessageW(sceneCombo_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"视频壁纸 · Media Foundation"));
+        imageButton_ = CreateWindowExW(0, L"BUTTON", L"选择图片 / 视频…", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+                                       486, 58, 210, 30, settings_, ControlId(kImageButtonId), instance_, nullptr);
 
-        imageButton_ = CreateWindowExW(0, L"BUTTON", L"选择图片 / 视频…",
-                                       WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
-                                       452, 58, 180, 30, settings_, ControlId(kImageButtonId), instance_, nullptr);
-
-        label(L"多屏布局", 20, 106, 76, 24);
-        layoutCombo_ = CreateWindowExW(0, L"COMBOBOX", L"",
-                                       WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST,
-                                       104, 102, 330, 150, settings_, ControlId(kLayoutComboId), instance_, nullptr);
+        label(L"多屏布局", 20, 106, 88, 24);
+        layoutCombo_ = CreateWindowExW(0, L"COMBOBOX", L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST,
+                                       116, 102, 350, 150, settings_, ControlId(kLayoutComboId), instance_, nullptr);
         SendMessageW(layoutCombo_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"跨屏延展 · Span"));
         SendMessageW(layoutCombo_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"每屏独立填充 · Clone"));
         SendMessageW(layoutCombo_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"仅主显示器 · Primary"));
 
-        label(L"缩放", 20, 150, 76, 24);
-        scaleCombo_ = CreateWindowExW(0, L"COMBOBOX", L"",
-                                      WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST,
-                                      104, 146, 330, 180, settings_, ControlId(kScaleComboId), instance_, nullptr);
+        label(L"缩放", 20, 150, 72, 24);
+        scaleCombo_ = CreateWindowExW(0, L"COMBOBOX", L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST,
+                                      116, 146, 350, 180, settings_, ControlId(kScaleComboId), instance_, nullptr);
         SendMessageW(scaleCombo_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"填充裁切 · Cover"));
         SendMessageW(scaleCombo_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"适应 · Contain"));
         SendMessageW(scaleCombo_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"拉伸 · Stretch"));
         SendMessageW(scaleCombo_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"居中原尺寸 · Center"));
         SendMessageW(scaleCombo_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"平铺 · Tile"));
 
-        label(L"焦点", 20, 194, 76, 24);
-        horizontalCombo_ = CreateWindowExW(0, L"COMBOBOX", L"",
-                                           WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST,
-                                           104, 190, 158, 120, settings_, ControlId(kHorizontalComboId), instance_, nullptr);
+        label(L"焦点", 20, 194, 72, 24);
+        horizontalCombo_ = CreateWindowExW(0, L"COMBOBOX", L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST,
+                                           116, 190, 168, 120, settings_, ControlId(kHorizontalComboId), instance_, nullptr);
         SendMessageW(horizontalCombo_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"左"));
         SendMessageW(horizontalCombo_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"水平居中"));
         SendMessageW(horizontalCombo_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"右"));
-        verticalCombo_ = CreateWindowExW(0, L"COMBOBOX", L"",
-                                         WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST,
-                                         276, 190, 158, 120, settings_, ControlId(kVerticalComboId), instance_, nullptr);
+        verticalCombo_ = CreateWindowExW(0, L"COMBOBOX", L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST,
+                                         298, 190, 168, 120, settings_, ControlId(kVerticalComboId), instance_, nullptr);
         SendMessageW(verticalCombo_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"上"));
         SendMessageW(verticalCombo_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"垂直居中"));
         SendMessageW(verticalCombo_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"下"));
 
-        pauseCheck_ = CreateWindowExW(0, L"BUTTON", L"全屏应用时暂停动态壁纸",
-                                      WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
-                                      104, 234, 330, 26, settings_, ControlId(kPauseCheckId), instance_, nullptr);
-        status_ = label(L"", 20, 276, 632, 136);
+        label(L"帧率上限", 20, 238, 88, 24);
+        fpsCombo_ = CreateWindowExW(0, L"COMBOBOX", L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST,
+                                    116, 234, 168, 160, settings_, ControlId(kFpsComboId), instance_, nullptr);
+        for (const wchar_t* fps : {L"15 FPS", L"30 FPS", L"45 FPS", L"60 FPS", L"120 FPS"})
+            SendMessageW(fpsCombo_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(fps));
 
-        applyButton_ = CreateWindowExW(0, L"BUTTON", L"应用到桌面",
-                                       WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON,
-                                       348, 448, 112, 36, settings_, ControlId(kApplyButtonId), instance_, nullptr);
-        toggleButton_ = CreateWindowExW(0, L"BUTTON", L"停止",
-                                        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
-                                        470, 448, 84, 36, settings_, ControlId(kToggleButtonId), instance_, nullptr);
-        closeButton_ = CreateWindowExW(0, L"BUTTON", L"关闭",
-                                       WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
-                                       564, 448, 84, 36, settings_, ControlId(kCloseButtonId), instance_, nullptr);
+        label(L"全屏应用", 20, 282, 88, 24);
+        fullscreenActionCombo_ = CreateActionCombo(116, 278, kFullscreenActionComboId);
+        label(L"最大化应用", 330, 282, 96, 24);
+        maximizedActionCombo_ = CreateActionCombo(438, 278, kMaximizedActionComboId);
+
+        label(L"系统策略", 20, 326, 88, 24);
+        label(L"远程桌面/节能/Idle 默认降频；锁屏默认停止。降频目标 15 FPS。", 116, 326, 580, 42);
+        status_ = label(L"", 20, 382, 688, 150);
+
+        applyButton_ = CreateWindowExW(0, L"BUTTON", L"应用到桌面", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON,
+                                       408, 574, 112, 36, settings_, ControlId(kApplyButtonId), instance_, nullptr);
+        toggleButton_ = CreateWindowExW(0, L"BUTTON", L"停止", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+                                        530, 574, 84, 36, settings_, ControlId(kToggleButtonId), instance_, nullptr);
+        closeButton_ = CreateWindowExW(0, L"BUTTON", L"关闭", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+                                       624, 574, 84, 36, settings_, ControlId(kCloseButtonId), instance_, nullptr);
 
         for (HWND control : {sceneCombo_, imageButton_, layoutCombo_, scaleCombo_, horizontalCombo_, verticalCombo_,
-                             pauseCheck_, applyButton_, toggleButton_, closeButton_}) {
+                             fpsCombo_, fullscreenActionCombo_, maximizedActionCombo_, applyButton_, toggleButton_, closeButton_}) {
             SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
         }
         SendMessageW(status_, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
@@ -455,6 +482,7 @@ public:
         if (enabled) {
             AttachToDesktop();
             ShowWindow(host_, SW_SHOWNOACTIVATE);
+            performanceStopped_ = false;
             if (config_.scene == L"video") {
                 if (!videoSet_.Active()) StartVideo();
                 videoSet_.SetPaused(false);
@@ -470,6 +498,82 @@ public:
     }
 
 private:
+    HWND CreateActionCombo(int x, int y, int id) {
+        HWND combo = CreateWindowExW(0, L"COMBOBOX", L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST,
+                                     x, y, 176, 150, settings_, ControlId(id), instance_, nullptr);
+        SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"继续运行"));
+        SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"降频"));
+        SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"暂停"));
+        SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"停止/隐藏"));
+        return combo;
+    }
+
+    static int ActionIndex(turingdesk::wallpaper::PerformanceAction action) {
+        return static_cast<int>(action);
+    }
+
+    static turingdesk::wallpaper::PerformanceAction ActionFromCombo(HWND combo) {
+        const int selected = combo ? static_cast<int>(SendMessageW(combo, CB_GETCURSEL, 0, 0)) : 0;
+        if (selected == 3) return turingdesk::wallpaper::PerformanceAction::Stop;
+        if (selected == 2) return turingdesk::wallpaper::PerformanceAction::Pause;
+        if (selected == 1) return turingdesk::wallpaper::PerformanceAction::Throttle;
+        return turingdesk::wallpaper::PerformanceAction::Normal;
+    }
+
+    turingdesk::wallpaper::PerformanceConfig CurrentPerformanceConfig() const {
+        turingdesk::wallpaper::PerformanceConfig result;
+        result.fpsCap = config_.fpsCap;
+        result.throttleFps = config_.throttleFps;
+        result.fullscreenAction = config_.fullscreenAction;
+        result.maximizedAction = config_.maximizedAction;
+        result.remoteSessionAction = config_.remoteSessionAction;
+        result.batterySaverAction = config_.batterySaverAction;
+        result.lockedSessionAction = config_.lockedSessionAction;
+        result.idleAction = config_.idleAction;
+        result.idleThresholdSeconds = config_.idleThresholdSeconds;
+        return result;
+    }
+
+    void SetRenderTimerFps(int fps) {
+        if (!control_) return;
+        const UINT interval = fps > 0 ? static_cast<UINT>(std::max(8, 1000 / turingdesk::wallpaper::NormalizeFpsCap(fps))) : 250U;
+        if (renderTimerIntervalMs_ == interval) return;
+        KillTimer(control_, kRenderTimer);
+        SetTimer(control_, kRenderTimer, interval, nullptr);
+        renderTimerIntervalMs_ = interval;
+    }
+
+    void ApplyPerformanceSnapshot(const turingdesk::wallpaper::PerformanceSnapshot& snapshot) {
+        currentPerformance_ = snapshot;
+        SetRenderTimerFps(snapshot.targetFps);
+
+        const bool stop = snapshot.action == turingdesk::wallpaper::PerformanceAction::Stop;
+        const bool pause = snapshot.action == turingdesk::wallpaper::PerformanceAction::Pause || stop;
+        if (config_.scene == L"video") videoSet_.SetPaused(pause);
+
+        if (stop) {
+            if (!performanceStopped_) {
+                ShowWindow(host_, SW_HIDE);
+                performanceStopped_ = true;
+            }
+            return;
+        }
+
+        if (performanceStopped_) {
+            AttachToDesktop();
+            ShowWindow(host_, SW_SHOWNOACTIVATE);
+            performanceStopped_ = false;
+            if (config_.scene == L"video" && !videoSet_.Active()) StartVideo();
+        }
+
+        if (snapshot.action == turingdesk::wallpaper::PerformanceAction::Pause) return;
+        if (config_.scene != L"video" && config_.image.empty()) {
+            const int fps = std::max(1, snapshot.targetFps);
+            time_ += 1.0f / static_cast<float>(fps);
+            InvalidateRect(host_, nullptr, FALSE);
+        }
+    }
+
     static LRESULT CALLBACK ControlProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) {
         auto* self = reinterpret_cast<WallpaperApp*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
         if (message == WM_NCCREATE) {
@@ -530,7 +634,9 @@ private:
             self->scaleCombo_ = nullptr;
             self->horizontalCombo_ = nullptr;
             self->verticalCombo_ = nullptr;
-            self->pauseCheck_ = nullptr;
+            self->fpsCombo_ = nullptr;
+            self->fullscreenActionCombo_ = nullptr;
+            self->maximizedActionCombo_ = nullptr;
             self->applyButton_ = nullptr;
             self->toggleButton_ = nullptr;
             self->closeButton_ = nullptr;
@@ -560,6 +666,12 @@ private:
         case kTrayMessage:
             HandleTray(static_cast<UINT>(lParam));
             return 0;
+        case WM_WTSSESSION_CHANGE:
+            if (wParam == WTS_SESSION_LOCK) performancePolicy_.SetSessionLocked(true);
+            else if (wParam == WTS_SESSION_UNLOCK) performancePolicy_.SetSessionLocked(false);
+            ApplyPerformanceSnapshot(performancePolicy_.Evaluate(host_, settings_, CurrentPerformanceConfig()));
+            RefreshSettings();
+            return 0;
         case WM_TIMER:
             if (wParam == kRenderTimer) {
                 ++healthTicks_;
@@ -573,19 +685,15 @@ private:
                     }
                 }
                 if (config_.enabled) {
-                    const bool paused = config_.pauseFullscreen && ForegroundIsFullscreen(host_, settings_);
                     if (config_.scene == L"video") {
                         videoSet_.Tick();
-                        videoSet_.SetPaused(paused);
                         const auto mediaError = videoSet_.LastErrorText();
                         if (mediaError != lastMediaError_) {
                             lastMediaError_ = mediaError;
                             RefreshSettings();
                         }
-                    } else if (config_.image.empty() && !paused) {
-                        time_ += 0.033f;
-                        InvalidateRect(host_, nullptr, FALSE);
                     }
+                    ApplyPerformanceSnapshot(performancePolicy_.Evaluate(host_, settings_, CurrentPerformanceConfig()));
                 }
             }
             return 0;
@@ -602,6 +710,7 @@ private:
             DestroyWindow(control_);
             return 0;
         case WM_DESTROY:
+            WTSUnRegisterSessionNotification(control_);
             KillTimer(control_, kRenderTimer);
             control_ = nullptr;
             PostQuitMessage(0);
@@ -760,7 +869,7 @@ private:
         mountOk_ = true;
         lastMountError_.clear();
         SaveMountDiagnostics(mountMode_, L"", &topology_, layoutMode);
-        if (config_.enabled) {
+        if (config_.enabled && !performanceStopped_) {
             ShowWindow(host_, SW_SHOWNOACTIVATE);
             InvalidateRect(host_, nullptr, FALSE);
             UpdateWindow(host_);
@@ -818,10 +927,8 @@ private:
         GetClientRect(host_, &rc);
         const UINT width = static_cast<UINT>(std::max<LONG>(1, rc.right - rc.left));
         const UINT height = static_cast<UINT>(std::max<LONG>(1, rc.bottom - rc.top));
-        const auto properties = D2D1::HwndRenderTargetProperties(host_, D2D1::SizeU(width, height),
-                                                                 D2D1_PRESENT_OPTIONS_IMMEDIATELY);
-        if (FAILED(d2dFactory_->CreateHwndRenderTarget(D2D1::RenderTargetProperties(), properties,
-                                                       renderTarget_.GetAddressOf()))) return;
+        const auto properties = D2D1::HwndRenderTargetProperties(host_, D2D1::SizeU(width, height), D2D1_PRESENT_OPTIONS_IMMEDIATELY);
+        if (FAILED(d2dFactory_->CreateHwndRenderTarget(D2D1::RenderTargetProperties(), properties, renderTarget_.GetAddressOf()))) return;
         renderTarget_->SetAntialiasMode(D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
         renderTarget_->CreateSolidColorBrush(D2D1::ColorF(D2D1::ColorF::White), brush_.GetAddressOf());
         LoadImage();
@@ -831,8 +938,7 @@ private:
         imageBitmap_.Reset();
         if (!renderTarget_ || config_.image.empty()) return;
         ComPtr<IWICBitmapDecoder> decoder;
-        if (FAILED(wicFactory_->CreateDecoderFromFilename(config_.image.c_str(), nullptr, GENERIC_READ,
-                                                          WICDecodeMetadataCacheOnLoad, decoder.GetAddressOf()))) return;
+        if (FAILED(wicFactory_->CreateDecoderFromFilename(config_.image.c_str(), nullptr, GENERIC_READ, WICDecodeMetadataCacheOnLoad, decoder.GetAddressOf()))) return;
         ComPtr<IWICBitmapFrameDecode> frame;
         if (FAILED(decoder->GetFrame(0, frame.GetAddressOf()))) return;
         ComPtr<IWICFormatConverter> converter;
@@ -844,15 +950,14 @@ private:
 
     void Draw() {
         EnsureRenderTarget();
-        if (!renderTarget_ || !brush_ || !config_.enabled) return;
+        if (!renderTarget_ || !brush_ || !config_.enabled || performanceStopped_) return;
         if (config_.scene == L"video" && videoSet_.Active()) return;
 
         renderTarget_->BeginDraw();
         renderTarget_->SetTransform(D2D1::Matrix3x2F::Identity());
         renderTarget_->Clear(D2D1::ColorF(0.0f, 0.0f, 0.0f));
 
-        auto regions = turingdesk::wallpaper::DrawRegionsInHost(
-            topology_, turingdesk::wallpaper::ParseLayoutMode(config_.layout));
+        auto regions = turingdesk::wallpaper::DrawRegionsInHost(topology_, turingdesk::wallpaper::ParseLayoutMode(config_.layout));
         if (regions.empty()) {
             const auto size = renderTarget_->GetSize();
             regions.push_back(RECT{0, 0, static_cast<LONG>(size.width), static_cast<LONG>(size.height)});
@@ -863,10 +968,8 @@ private:
             const D2D1_RECT_F clip = D2D1::RectF(static_cast<float>(region.left), static_cast<float>(region.top),
                                                   static_cast<float>(region.right), static_cast<float>(region.bottom));
             renderTarget_->PushAxisAlignedClip(clip, D2D1_ANTIALIAS_MODE_ALIASED);
-            renderTarget_->SetTransform(D2D1::Matrix3x2F::Translation(
-                static_cast<float>(region.left), static_cast<float>(region.top)));
-            const D2D1_SIZE_F size = D2D1::SizeF(static_cast<float>(region.right - region.left),
-                                                 static_cast<float>(region.bottom - region.top));
+            renderTarget_->SetTransform(D2D1::Matrix3x2F::Translation(static_cast<float>(region.left), static_cast<float>(region.top)));
+            const D2D1_SIZE_F size = D2D1::SizeF(static_cast<float>(region.right - region.left), static_cast<float>(region.bottom - region.top));
 
             if (!config_.image.empty() && imageBitmap_) DrawImage(size);
             else if (config_.scene == L"neon") DrawNeon(size);
@@ -890,11 +993,9 @@ private:
         FillRegionBackground(target, D2D1::ColorF(0.0f, 0.0f, 0.0f));
         const auto sourceSize = imageBitmap_->GetSize();
         const auto mode = turingdesk::wallpaper::ParseScaleMode(config_.scale);
-        const auto placement = turingdesk::wallpaper::ComputePlacement(
-            sourceSize.width, sourceSize.height, target.width, target.height,
-            mode, config_.focalX, config_.focalY);
-        const D2D1_RECT_F source = D2D1::RectF(
-            placement.source.left, placement.source.top, placement.source.right, placement.source.bottom);
+        const auto placement = turingdesk::wallpaper::ComputePlacement(sourceSize.width, sourceSize.height, target.width, target.height,
+                                                                        mode, config_.focalX, config_.focalY);
+        const D2D1_RECT_F source = D2D1::RectF(placement.source.left, placement.source.top, placement.source.right, placement.source.bottom);
 
         if (placement.tiled) {
             const float tileWidth = std::max(1.0f, placement.destination.right - placement.destination.left);
@@ -904,30 +1005,24 @@ private:
             for (float y = 0.0f; y < target.height && draws < kMaxTileDraws; y += tileHeight) {
                 for (float x = 0.0f; x < target.width && draws < kMaxTileDraws; x += tileWidth) {
                     const D2D1_RECT_F destination = D2D1::RectF(x, y, x + tileWidth, y + tileHeight);
-                    renderTarget_->DrawBitmap(imageBitmap_.Get(), destination, 1.0f,
-                                              D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, &source);
+                    renderTarget_->DrawBitmap(imageBitmap_.Get(), destination, 1.0f, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, &source);
                     ++draws;
                 }
             }
             return;
         }
 
-        const D2D1_RECT_F destination = D2D1::RectF(
-            placement.destination.left, placement.destination.top,
-            placement.destination.right, placement.destination.bottom);
-        renderTarget_->DrawBitmap(imageBitmap_.Get(), destination, 1.0f,
-                                  D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, &source);
+        const D2D1_RECT_F destination = D2D1::RectF(placement.destination.left, placement.destination.top,
+                                                     placement.destination.right, placement.destination.bottom);
+        renderTarget_->DrawBitmap(imageBitmap_.Get(), destination, 1.0f, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, &source);
     }
 
     void DrawAurora(const D2D1_SIZE_F& size) {
         FillRegionBackground(size, D2D1::ColorF(0.008f, 0.014f, 0.050f));
         const std::array<D2D1_COLOR_F, 6> colors = {
-            D2D1::ColorF(0.04f, 0.95f, 0.72f, 0.28f),
-            D2D1::ColorF(0.10f, 0.52f, 1.00f, 0.30f),
-            D2D1::ColorF(0.62f, 0.18f, 1.00f, 0.27f),
-            D2D1::ColorF(0.05f, 0.82f, 0.98f, 0.24f),
-            D2D1::ColorF(0.20f, 0.98f, 0.50f, 0.22f),
-            D2D1::ColorF(0.86f, 0.16f, 0.94f, 0.20f),
+            D2D1::ColorF(0.04f, 0.95f, 0.72f, 0.28f), D2D1::ColorF(0.10f, 0.52f, 1.00f, 0.30f),
+            D2D1::ColorF(0.62f, 0.18f, 1.00f, 0.27f), D2D1::ColorF(0.05f, 0.82f, 0.98f, 0.24f),
+            D2D1::ColorF(0.20f, 0.98f, 0.50f, 0.22f), D2D1::ColorF(0.86f, 0.16f, 0.94f, 0.20f),
         };
         for (int i = 0; i < static_cast<int>(colors.size()); ++i) {
             const float phase = time_ * (0.30f + i * 0.018f) + i * 1.13f;
@@ -947,20 +1042,15 @@ private:
         FillRegionBackground(size, D2D1::ColorF(0.004f, 0.006f, 0.020f));
         constexpr float spacing = 58.0f;
         const float offset = static_cast<float>(std::fmod(time_ * 30.0f, spacing));
-
         brush_->SetColor(D2D1::ColorF(0.02f, 0.82f, 1.00f, 0.42f));
         for (float x = -spacing + offset; x < size.width + spacing; x += spacing)
             renderTarget_->DrawLine(D2D1::Point2F(x, 0), D2D1::Point2F(x, size.height), brush_.Get(), 1.4f);
         brush_->SetColor(D2D1::ColorF(0.92f, 0.04f, 0.84f, 0.34f));
         for (float y = -spacing + offset; y < size.height + spacing; y += spacing)
             renderTarget_->DrawLine(D2D1::Point2F(0, y), D2D1::Point2F(size.width, y), brush_.Get(), 1.2f);
-
         for (int i = 0; i < 7; ++i) {
-            const float x = static_cast<float>(std::fmod(time_ * (82.0f + i * 13.0f) + i * size.width * 0.17f,
-                                                         size.width + 320.0f)) - 160.0f;
-            brush_->SetColor((i % 2) == 0
-                ? D2D1::ColorF(0.00f, 0.82f, 1.00f, 0.22f)
-                : D2D1::ColorF(1.00f, 0.08f, 0.80f, 0.20f));
+            const float x = static_cast<float>(std::fmod(time_ * (82.0f + i * 13.0f) + i * size.width * 0.17f, size.width + 320.0f)) - 160.0f;
+            brush_->SetColor((i % 2) == 0 ? D2D1::ColorF(0.00f, 0.82f, 1.00f, 0.22f) : D2D1::ColorF(1.00f, 0.08f, 0.80f, 0.20f));
             renderTarget_->FillRectangle(D2D1::RectF(x, size.height * 0.10f, x + 120.0f, size.height * 0.90f), brush_.Get());
         }
     }
@@ -973,12 +1063,10 @@ private:
             renderTarget_->DrawLine(D2D1::Point2F(x, 0), D2D1::Point2F(x, size.height), brush_.Get());
         for (float y = 0; y < size.height; y += spacing)
             renderTarget_->DrawLine(D2D1::Point2F(0, y), D2D1::Point2F(size.width, y), brush_.Get());
-
         const float pulse = 0.5f + 0.5f * static_cast<float>(std::sin(time_ * 0.72f));
         brush_->SetColor(D2D1::ColorF(0.15f, 0.66f, 0.82f, 0.14f + pulse * 0.10f));
         renderTarget_->FillEllipse(D2D1::Ellipse(D2D1::Point2F(size.width * 0.5f, size.height * 0.5f),
-                                                 size.width * (0.18f + pulse * 0.05f),
-                                                 size.height * (0.20f + pulse * 0.05f)), brush_.Get());
+                                                 size.width * (0.18f + pulse * 0.05f), size.height * (0.20f + pulse * 0.05f)), brush_.Get());
     }
 
     bool ApplyConfig(const Config& next, bool persist = true) {
@@ -989,11 +1077,14 @@ private:
         config_.scale = turingdesk::wallpaper::ScaleModeKey(turingdesk::wallpaper::ParseScaleMode(config_.scale));
         config_.focalX = turingdesk::wallpaper::ClampFocal(config_.focalX);
         config_.focalY = turingdesk::wallpaper::ClampFocal(config_.focalY);
+        config_.fpsCap = turingdesk::wallpaper::NormalizeFpsCap(config_.fpsCap);
+        config_.throttleFps = turingdesk::wallpaper::NormalizeFpsCap(config_.throttleFps);
         if (persist) SaveConfig(config_);
         pendingImage_.clear();
         pendingVideo_.clear();
         imageBitmap_.Reset();
         if (renderTarget_) LoadImage();
+        performanceStopped_ = false;
         const bool mounted = AttachToDesktop();
         if (config_.enabled && mounted) {
             ShowWindow(host_, SW_SHOWNOACTIVATE);
@@ -1003,6 +1094,7 @@ private:
         } else if (!config_.enabled) {
             ShowWindow(host_, SW_HIDE);
         }
+        SetRenderTimerFps(config_.fpsCap);
         RefreshSettings();
         return mounted;
     }
@@ -1014,12 +1106,8 @@ private:
             lastMediaError_ = L"视频文件不存在";
             return false;
         }
-
-        auto regions = turingdesk::wallpaper::DrawRegionsInHost(
-            topology_, turingdesk::wallpaper::ParseLayoutMode(config_.layout));
-        if (!videoSet_.Start(host_, config_.video, regions,
-                             turingdesk::wallpaper::ParseScaleMode(config_.scale),
-                             config_.focalX, config_.focalY)) {
+        auto regions = turingdesk::wallpaper::DrawRegionsInHost(topology_, turingdesk::wallpaper::ParseLayoutMode(config_.layout));
+        if (!videoSet_.Start(host_, config_.video, regions, turingdesk::wallpaper::ParseScaleMode(config_.scale), config_.focalX, config_.focalY)) {
             lastMediaError_ = videoSet_.LastErrorText();
             if (lastMediaError_.empty()) lastMediaError_ = L"Media Foundation 无法启动该视频";
             return false;
@@ -1040,10 +1128,8 @@ private:
         if (!GetOpenFileNameW(&dialog)) return;
         const std::wstring selectedPath = path;
         const auto extension = fs::path(selectedPath).extension().wstring();
-        const bool isVideo = _wcsicmp(extension.c_str(), L".mp4") == 0 ||
-                             _wcsicmp(extension.c_str(), L".mov") == 0 ||
-                             _wcsicmp(extension.c_str(), L".wmv") == 0 ||
-                             _wcsicmp(extension.c_str(), L".m4v") == 0;
+        const bool isVideo = _wcsicmp(extension.c_str(), L".mp4") == 0 || _wcsicmp(extension.c_str(), L".mov") == 0 ||
+                             _wcsicmp(extension.c_str(), L".wmv") == 0 || _wcsicmp(extension.c_str(), L".m4v") == 0;
         if (isVideo) {
             pendingVideo_ = selectedPath;
             SendMessageW(sceneCombo_, CB_SETCURSEL, 4, 0);
@@ -1060,14 +1146,20 @@ private:
         const int selectedScale = static_cast<int>(SendMessageW(scaleCombo_, CB_GETCURSEL, 0, 0));
         const int selectedHorizontal = static_cast<int>(SendMessageW(horizontalCombo_, CB_GETCURSEL, 0, 0));
         const int selectedVertical = static_cast<int>(SendMessageW(verticalCombo_, CB_GETCURSEL, 0, 0));
+        const int selectedFps = static_cast<int>(SendMessageW(fpsCombo_, CB_GETCURSEL, 0, 0));
+        constexpr int fpsValues[] = {15, 30, 45, 60, 120};
+
         Config next = config_;
         next.enabled = true;
-        next.pauseFullscreen = SendMessageW(pauseCheck_, BM_GETCHECK, 0, 0) == BST_CHECKED;
         next.layout = selectedLayout == 1 ? L"clone" : selectedLayout == 2 ? L"primary" : L"span";
         next.scale = selectedScale == 1 ? L"contain" : selectedScale == 2 ? L"stretch" :
                      selectedScale == 3 ? L"center" : selectedScale == 4 ? L"tile" : L"cover";
         next.focalX = selectedHorizontal == 0 ? 0.0f : selectedHorizontal == 2 ? 1.0f : 0.5f;
         next.focalY = selectedVertical == 0 ? 0.0f : selectedVertical == 2 ? 1.0f : 0.5f;
+        if (selectedFps >= 0 && selectedFps < static_cast<int>(std::size(fpsValues))) next.fpsCap = fpsValues[selectedFps];
+        next.fullscreenAction = ActionFromCombo(fullscreenActionCombo_);
+        next.maximizedAction = ActionFromCombo(maximizedActionCombo_);
+        next.pauseFullscreen = next.fullscreenAction == turingdesk::wallpaper::PerformanceAction::Pause;
         next.image.clear();
         next.video.clear();
 
@@ -1113,11 +1205,15 @@ private:
                                   scaleMode == turingdesk::wallpaper::ScaleMode::Center ? 3 :
                                   scaleMode == turingdesk::wallpaper::ScaleMode::Tile ? 4 : 0;
         if (scaleCombo_) SendMessageW(scaleCombo_, CB_SETCURSEL, scaleSelected, 0);
-        if (horizontalCombo_) SendMessageW(horizontalCombo_, CB_SETCURSEL,
-                                            config_.focalX < 0.25f ? 0 : config_.focalX > 0.75f ? 2 : 1, 0);
-        if (verticalCombo_) SendMessageW(verticalCombo_, CB_SETCURSEL,
-                                          config_.focalY < 0.25f ? 0 : config_.focalY > 0.75f ? 2 : 1, 0);
-        SendMessageW(pauseCheck_, BM_SETCHECK, config_.pauseFullscreen ? BST_CHECKED : BST_UNCHECKED, 0);
+        if (horizontalCombo_) SendMessageW(horizontalCombo_, CB_SETCURSEL, config_.focalX < 0.25f ? 0 : config_.focalX > 0.75f ? 2 : 1, 0);
+        if (verticalCombo_) SendMessageW(verticalCombo_, CB_SETCURSEL, config_.focalY < 0.25f ? 0 : config_.focalY > 0.75f ? 2 : 1, 0);
+
+        constexpr int fpsValues[] = {15, 30, 45, 60, 120};
+        int fpsSelected = 1;
+        for (int i = 0; i < static_cast<int>(std::size(fpsValues)); ++i) if (fpsValues[i] == config_.fpsCap) fpsSelected = i;
+        if (fpsCombo_) SendMessageW(fpsCombo_, CB_SETCURSEL, fpsSelected, 0);
+        if (fullscreenActionCombo_) SendMessageW(fullscreenActionCombo_, CB_SETCURSEL, ActionIndex(config_.fullscreenAction), 0);
+        if (maximizedActionCombo_) SendMessageW(maximizedActionCombo_, CB_SETCURSEL, ActionIndex(config_.maximizedAction), 0);
         SetWindowTextW(toggleButton_, config_.enabled ? L"停止" : L"恢复");
 
         std::wstring status;
@@ -1127,17 +1223,14 @@ private:
             status = L"应用失败：" + (lastMountError_.empty() ? L"没有挂载到 Windows 桌面层" : lastMountError_);
         } else {
             const wchar_t* scene = selected == 0 ? L"Aurora Flow" : selected == 1 ? L"Neon Flow" : selected == 2 ? L"Quiet Grid" : selected == 3 ? L"图片壁纸" : L"视频壁纸";
-            status = std::wstring(scene) + L" 已应用 · " + turingdesk::wallpaper::LayoutModeDisplayName(layoutMode) +
-                     L" · " + turingdesk::wallpaper::ScaleModeDisplayName(scaleMode) +
-                     L" · " + std::to_wstring(topology_.monitors.size()) + L" 屏 · 桌面层：" + MountModeText(mountMode_);
-            if (selected <= 2) status += L" · Direct2D 约 30 FPS";
-            else if (selected == 4) {
+            status = std::wstring(scene) + L" · " + turingdesk::wallpaper::LayoutModeDisplayName(layoutMode) + L" · " +
+                     turingdesk::wallpaper::ScaleModeDisplayName(scaleMode) + L" · " + std::to_wstring(topology_.monitors.size()) + L" 屏";
+            status += L"\r\n性能：" + std::wstring(turingdesk::wallpaper::PerformanceActionDisplayName(currentPerformance_.action));
+            if (currentPerformance_.targetFps > 0) status += L" · " + std::to_wstring(currentPerformance_.targetFps) + L" FPS";
+            if (!currentPerformance_.reason.empty()) status += L" · 原因：" + currentPerformance_.reason;
+            if (selected == 4) {
                 if (!lastMediaError_.empty()) status = L"视频壁纸错误：" + lastMediaError_;
-                else {
-                    status += L" · Media Foundation · 静音循环";
-                    if (scaleMode == turingdesk::wallpaper::ScaleMode::Tile)
-                        status += L" · 视频 Tile 当前安全降级为 Center";
-                }
+                else if (scaleMode == turingdesk::wallpaper::ScaleMode::Tile) status += L" · 视频 Tile 当前安全降级为 Center";
             }
             status += L"\r\n" + turingdesk::wallpaper::DescribeMonitorTopology(topology_);
         }
@@ -1155,7 +1248,9 @@ private:
     HWND scaleCombo_{};
     HWND horizontalCombo_{};
     HWND verticalCombo_{};
-    HWND pauseCheck_{};
+    HWND fpsCombo_{};
+    HWND fullscreenActionCombo_{};
+    HWND maximizedActionCombo_{};
     HWND applyButton_{};
     HWND toggleButton_{};
     HWND closeButton_{};
@@ -1163,12 +1258,16 @@ private:
     NOTIFYICONDATAW tray_{};
     bool trayAdded_{};
     bool mountOk_{};
+    bool performanceStopped_{};
     UINT taskbarCreated_{};
+    UINT renderTimerIntervalMs_{};
     unsigned healthTicks_{};
     MountMode mountMode_{MountMode::None};
     std::wstring lastMountError_;
     Config config_;
     turingdesk::wallpaper::MonitorTopology topology_;
+    turingdesk::wallpaper::WallpaperPerformancePolicy performancePolicy_;
+    turingdesk::wallpaper::PerformanceSnapshot currentPerformance_;
     std::wstring pendingImage_;
     std::wstring pendingVideo_;
     std::wstring lastMediaError_;
@@ -1198,10 +1297,8 @@ int RunSelfTest(HINSTANCE instance) {
         if (SUCCEEDED(com)) CoUninitialize();
         return 22;
     }
-
     ComPtr<IWICImagingFactory> wic;
-    if (FAILED(CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER,
-                                IID_PPV_ARGS(wic.GetAddressOf())))) {
+    if (FAILED(CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(wic.GetAddressOf())))) {
         if (SUCCEEDED(com)) CoUninitialize();
         return 23;
     }
@@ -1215,9 +1312,8 @@ int RunSelfTest(HINSTANCE instance) {
         if (SUCCEEDED(com)) CoUninitialize();
         return 24;
     }
-
-    HWND test = CreateWindowExW(WS_EX_LAYERED | WS_EX_TOOLWINDOW, kSelfTestClass, L"",
-                                WS_POPUP, 0, 0, 16, 16, nullptr, nullptr, instance, nullptr);
+    HWND test = CreateWindowExW(WS_EX_LAYERED | WS_EX_TOOLWINDOW, kSelfTestClass, L"", WS_POPUP,
+                                0, 0, 16, 16, nullptr, nullptr, instance, nullptr);
     if (!test) {
         if (SUCCEEDED(com)) CoUninitialize();
         return 25;
@@ -1228,6 +1324,7 @@ int RunSelfTest(HINSTANCE instance) {
     const bool pathOk = !ConfigPath().empty();
     const bool layoutGeometryOk = turingdesk::wallpaper::SelfTestMonitorLayoutGeometry();
     const bool scalingGeometryOk = turingdesk::wallpaper::SelfTestScalingGeometry();
+    const bool performancePolicyOk = turingdesk::wallpaper::WallpaperPerformancePolicy::SelfTest();
     const auto topology = turingdesk::wallpaper::QueryMonitorTopology();
     const bool topologyOk = topology.Valid();
     const bool mediaFoundationOk = turingdesk::VideoWallpaperPlayer::MediaFoundationAvailable();
@@ -1239,6 +1336,7 @@ int RunSelfTest(HINSTANCE instance) {
     if (!layoutGeometryOk) return 29;
     if (!topologyOk) return 30;
     if (!scalingGeometryOk) return 31;
+    if (!performancePolicyOk) return 32;
     return mediaFoundationOk ? 0 : 28;
 }
 
