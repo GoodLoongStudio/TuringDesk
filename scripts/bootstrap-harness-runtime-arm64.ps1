@@ -58,7 +58,7 @@ if (-not (Get-Command curl.exe -ErrorAction SilentlyContinue)) {
 
 if (-not $Force -and (Test-Path (Join-Path $NodeTarget "node.exe") -PathType Leaf) -and (Test-DshRuntime)) {
     Write-Host "Harness runtime is already ready: Node $NodeVersion + DSH $DshVersion" -ForegroundColor Green
-    exit 0
+    return
 }
 
 New-Item -ItemType Directory -Force -Path $CacheRoot | Out-Null
