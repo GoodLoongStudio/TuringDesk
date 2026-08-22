@@ -8,6 +8,8 @@
 
 namespace {
 
+constexpr wchar_t kSearchWindowClass[] = L"TuringDesk.Native.SearchWindow";
+
 bool RunNativeSelfTest() {
     turingdesk::AppSearch apps;
     apps.BuildIndex();
@@ -47,6 +49,16 @@ bool RunNativeSelfTest() {
     return true;
 }
 
+void ActivateExistingSearchWindow() {
+    const HWND existing = FindWindowW(kSearchWindowClass, nullptr);
+    if (!existing) return;
+
+    ShowWindow(existing, SW_SHOWNORMAL);
+    SetForegroundWindow(existing);
+    const HWND edit = FindWindowExW(existing, nullptr, L"EDIT", nullptr);
+    if (edit) SetFocus(edit);
+}
+
 } // namespace
 
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR commandLine, int) {
@@ -66,6 +78,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR commandLine, int) {
         return 2;
     }
     if (GetLastError() == ERROR_ALREADY_EXISTS) {
+        ActivateExistingSearchWindow();
         CloseHandle(mutex);
         if (SUCCEEDED(com)) CoUninitialize();
         return 0;
