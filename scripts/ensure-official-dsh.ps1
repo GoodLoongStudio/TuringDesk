@@ -61,10 +61,12 @@ if (-not $npm) {
 }
 
 Step "Installing official DeepSeek Harness"
-Write-Host "Package: $Package" -ForegroundColor DarkGray
-Write-Host "This is a one-time official npm installation. TuringDesk will not create a private HarnessRuntime." -ForegroundColor DarkGray
+Write-Host "Official project: deepseek-ai/deepseek-harness" -ForegroundColor DarkGray
+Write-Host "Official npm CLI package: $Package" -ForegroundColor DarkGray
+Write-Host "Official command after installation: dsh" -ForegroundColor DarkGray
+Write-Host "This is a one-time installation of the official upstream package. TuringDesk will not create a private HarnessRuntime." -ForegroundColor DarkGray
 
-# The official package currently has a large dependency tree. On a 4 GB Windows
+# The upstream package currently has a large dependency tree. On a 4 GB Windows
 # machine npm can hit V8's ~2 GB default heap while resolving it, so give the
 # installer a bounded 3 GB ceiling. This affects only this one installation
 # process; the installed Harness does not reserve 3 GB at runtime.
