@@ -1,6 +1,5 @@
 param(
-    [string]$Repo = "GoodLoongStudio/TuringDesk",
-    [switch]$Full
+    [string]$Repo = "GoodLoongStudio/TuringDesk"
 )
 
 $ErrorActionPreference = "Stop"
@@ -17,12 +16,6 @@ function Step([string]$Text) {
     Write-Host "`n==> $Text" -ForegroundColor Cyan
 }
 
-function Refresh-ProcessPath {
-    $machine = [Environment]::GetEnvironmentVariable("Path", "Machine")
-    $user = [Environment]::GetEnvironmentVariable("Path", "User")
-    $env:PATH = (($machine, $user) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) -join ";"
-}
-
 function Stop-DeployedInstance {
     Step "Stopping previous TuringDesk processes"
     foreach ($ProcessName in @("TuringDesk", "TuringDeskWallpaper", "TuringDeskHarness")) {
@@ -30,6 +23,18 @@ function Stop-DeployedInstance {
             try { Stop-Process -Id $Process.Id -Force -ErrorAction SilentlyContinue } catch { }
         }
     }
+    try {
+        $runtimeNode = [System.IO.Path]::GetFullPath((Join-Path $DeployDir "Runtime\Node"))
+        foreach ($process in @(Get-CimInstance Win32_Process -Filter "Name='node.exe'" -ErrorAction Stop)) {
+            $exe = [string]$process.ExecutablePath
+            if (-not $exe) { continue }
+            $full = [System.IO.Path]::GetFullPath($exe)
+            if ($full.StartsWith($runtimeNode + "\", [System.StringComparison]::OrdinalIgnoreCase)) {
+                & taskkill.exe /PID $process.ProcessId /T /F 2>$null | Out-Null
+            }
+        }
+    }
+    catch { }
     Start-Sleep -Milliseconds 350
 }
 
@@ -56,6 +61,15 @@ function Test-Binary([string]$Exe, [string]$Name) {
     }
 }
 
+function Test-HarnessSmoke([string]$Exe) {
+    Step "Running bundled DeepSeek Harness smoke test"
+    $Process = Start-Process -FilePath $Exe -ArgumentList "--harness-smoke-test" -Wait -PassThru
+    if ($Process.ExitCode -ne 0) {
+        $log = Join-Path $env:LOCALAPPDATA "TuringDesk\Logs\harness.log"
+        throw "Bundled DeepSeek Harness smoke test failed with exit code $($Process.ExitCode). Log: $log"
+    }
+}
+
 function Get-MainSha {
     $Sha = ((& gh api "repos/$Repo/commits/main" --jq ".sha") | Select-Object -First 1).Trim()
     if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($Sha)) {
@@ -71,28 +85,21 @@ function Get-RunsForCommit([string]$Sha) {
 }
 
 function Wait-ForRun([long]$RunId) {
-    Step "Waiting for GitHub Actions run $RunId"
+    Step "Waiting for ARM64 GitHub Actions run $RunId"
     & gh run watch $RunId --repo $Repo --exit-status | Out-Host
     if ($LASTEXITCODE -ne 0) {
-        Step "Failed GitHub Actions log for run $RunId"
+        Step "Failed ARM64 GitHub Actions log for run $RunId"
         & gh run view $RunId --repo $Repo --log-failed | Out-Host
-        throw "GitHub Actions build failed (run $RunId)"
+        throw "ARM64 GitHub Actions build failed (run $RunId)"
     }
     return $RunId
 }
 
-function Start-And-WaitForRun([string]$Sha, [bool]$BuildX64) {
+function Start-And-WaitForRun([string]$Sha) {
     $Before = @((Get-RunsForCommit -Sha $Sha) | ForEach-Object { [long]$_.databaseId })
-
-    if ($BuildX64) {
-        Step "Starting ARM64 + x64 native validation"
-        & gh workflow run $Workflow --repo $Repo --ref main -f build_x64=true | Out-Host
-    }
-    else {
-        Step "Starting QUICK ARM64 native validation"
-        & gh workflow run $Workflow --repo $Repo --ref main | Out-Host
-    }
-    if ($LASTEXITCODE -ne 0) { throw "Unable to start GitHub Actions workflow" }
+    Step "Starting ARM64-only native validation"
+    & gh workflow run $Workflow --repo $Repo --ref main | Out-Host
+    if ($LASTEXITCODE -ne 0) { throw "Unable to start ARM64 GitHub Actions workflow" }
 
     $Run = $null
     for ($i = 0; $i -lt 45; $i++) {
@@ -103,7 +110,7 @@ function Start-And-WaitForRun([string]$Sha, [bool]$BuildX64) {
             Select-Object -First 1
         if ($Run) { break }
     }
-    if (-not $Run) { throw "Workflow was started but its run could not be found" }
+    if (-not $Run) { throw "ARM64 workflow was started but its run could not be found" }
     return (Wait-ForRun -RunId ([long]$Run.databaseId))
 }
 
@@ -111,28 +118,26 @@ function Resolve-Run([string]$Sha) {
     $Runs = Get-RunsForCommit -Sha $Sha
     $Successful = $Runs | Where-Object { $_.status -eq "completed" -and $_.conclusion -eq "success" } |
         Sort-Object createdAt -Descending | Select-Object -First 1
-    if ($Successful -and -not $Full) {
+    if ($Successful) {
         Step "Found successful ARM64 build for current main: run $($Successful.databaseId)"
         return [long]$Successful.databaseId
     }
 
-    if (-not $Full) {
-        $PushRun = $Runs | Where-Object { $_.event -eq "push" -and $_.status -ne "completed" } |
-            Sort-Object createdAt -Descending | Select-Object -First 1
-        if ($PushRun) {
-            Step "Using automatic ARM64 validation already running: run $($PushRun.databaseId)"
-            return (Wait-ForRun -RunId ([long]$PushRun.databaseId))
-        }
+    $PushRun = $Runs | Where-Object { $_.event -eq "push" -and $_.status -ne "completed" } |
+        Sort-Object createdAt -Descending | Select-Object -First 1
+    if ($PushRun) {
+        Step "Using automatic ARM64 validation already running: run $($PushRun.databaseId)"
+        return (Wait-ForRun -RunId ([long]$PushRun.databaseId))
     }
 
-    return (Start-And-WaitForRun -Sha $Sha -BuildX64 ([bool]$Full))
+    return (Start-And-WaitForRun -Sha $Sha)
 }
 
 function Download-Artifact([long]$RunId) {
     $Temp = Join-Path $env:TEMP ("TuringDesk-ARM64-" + [guid]::NewGuid().ToString("N"))
     New-Item -ItemType Directory -Force -Path $Temp | Out-Null
 
-    Step "Downloading ARM64 artifact from run $RunId"
+    Step "Downloading verified ARM64 artifact from TuringDesk run $RunId"
     & gh run download $RunId --repo $Repo --name $ArtifactName --dir $Temp | Out-Host
     if ($LASTEXITCODE -ne 0) {
         Remove-Item $Temp -Recurse -Force -ErrorAction SilentlyContinue
@@ -177,27 +182,27 @@ if ($LASTEXITCODE -ne 0) {
     throw "GitHub CLI is not authenticated. Run: gh auth login"
 }
 
-Refresh-ProcessPath
-$Npx = Get-Command npx.cmd -ErrorAction SilentlyContinue | Select-Object -First 1
-if (-not $Npx) {
-    throw "Official Node.js/npx is missing. The one-click prerequisite step should install it automatically."
+$BundledNode = Join-Path $DeployDir "Runtime\Node\node.exe"
+$BundledHarness = Join-Path $DeployDir "Runtime\Node\node_modules\@deepseek-ai\dsh\lib\bin.js"
+if (-not (Test-Path $BundledNode -PathType Leaf) -or -not (Test-Path $BundledHarness -PathType Leaf)) {
+    throw "Repository-vendored ARM64 RuntimeBundle is not prepared. Run only DEPLOY-NATIVE-ARM64.cmd; its previous step should prepare it."
 }
-Write-Host "DeepSeek Harness mode: official npx @deepseek-ai/dsh + TuringDesk WebView2 shell" -ForegroundColor Green
-Write-Host "npx: $($Npx.Source)" -ForegroundColor DarkGray
+Write-Host "DeepSeek Harness mode: repository-vendored official package + bundled ARM64 Node + TuringDesk WebView2 shell" -ForegroundColor Green
+Write-Host "Bundled Node: $BundledNode" -ForegroundColor DarkGray
 
 Step "Resolving current main commit"
 $MainSha = Get-MainSha
 Write-Host "main: $MainSha" -ForegroundColor DarkGray
-Write-Host ($(if ($Full) { "Deploy mode: ARM64 + x64 validation" } else { "Deploy mode: QUICK ARM64" })) -ForegroundColor DarkGray
+Write-Host "Deploy mode: ARM64 only" -ForegroundColor DarkGray
 
 $RunId = [long](Resolve-Run -Sha $MainSha)
 $Downloaded = Download-Artifact -RunId $RunId
 try {
     Test-Binary -Exe $Downloaded.Exe -Name "Native Search"
     Test-Binary -Exe $Downloaded.WallpaperExe -Name "Native Wallpaper"
-    Test-Binary -Exe $Downloaded.HarnessExe -Name "Native Harness WebView2 shell"
+    Test-Binary -Exe $Downloaded.HarnessExe -Name "Native Harness shell"
 
-    Step "Deploying to $DeployDir"
+    Step "Deploying ARM64 binaries to $DeployDir"
     Stop-DeployedInstance
     New-Item -ItemType Directory -Force -Path $DeployDir | Out-Null
 
@@ -208,8 +213,10 @@ try {
     Copy-WithRetry -Source $Downloaded.WallpaperExe -Destination $DeployedWallpaper
     Copy-WithRetry -Source $Downloaded.HarnessExe -Destination $DeployedHarness
 
+    Test-Binary -Exe $DeployedExe -Name "Deployed Search"
     Test-Binary -Exe $DeployedWallpaper -Name "Deployed Wallpaper"
-    Test-Binary -Exe $DeployedHarness -Name "Deployed Harness WebView2 shell"
+    Test-Binary -Exe $DeployedHarness -Name "Deployed Harness shell"
+    Test-HarnessSmoke -Exe $DeployedHarness
 
     Step "Starting TuringDesk Wallpaper"
     if (Should-ShowWallpaperSettings) {
@@ -223,7 +230,7 @@ try {
     Start-Process $DeployedExe
 
     Write-Host "`nDeployment complete. Press Alt+Space to open Search." -ForegroundColor Green
-    Write-Host "DeepSeek Harness remains the official upstream package; TuringDesk only opens it inside WebView2." -ForegroundColor Green
+    Write-Host "DeepSeek Harness is running from the pinned RuntimeBundle in this repository; no npm install occurs on the user machine." -ForegroundColor Green
     Write-Host "Path: $DeployDir" -ForegroundColor DarkGray
 }
 finally {
