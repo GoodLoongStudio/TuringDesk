@@ -353,18 +353,24 @@ std::wstring CodexRuntime::FindBinary(bool& isCliBinary) const {
         if (fs::exists(explicitPath, ec)) return explicitPath;
     }
 
-    const auto bundled = ModuleDirectory() / L"Codex" / L"codex-app-server.exe";
     std::error_code ec;
-    if (fs::exists(bundled, ec)) return bundled.wstring();
+    const auto bundledCli = ModuleDirectory() / L"Codex" / L"codex.exe";
+    if (fs::exists(bundledCli, ec)) {
+        isCliBinary = true;
+        return bundledCli.wstring();
+    }
 
-    auto found = SearchExecutable(L"codex-app-server.exe");
-    if (!found.empty()) return found;
+    const auto bundledServer = ModuleDirectory() / L"Codex" / L"codex-app-server.exe";
+    if (fs::exists(bundledServer, ec)) return bundledServer.wstring();
 
-    found = SearchExecutable(L"codex.exe");
+    auto found = SearchExecutable(L"codex.exe");
     if (!found.empty()) {
         isCliBinary = true;
         return found;
     }
+
+    found = SearchExecutable(L"codex-app-server.exe");
+    if (!found.empty()) return found;
     return {};
 }
 
@@ -379,10 +385,10 @@ CodexRuntimeStatus CodexRuntime::Status(const L3Agent& agent) const {
         std::scoped_lock lock(processMutex_);
         status.running = process_ != nullptr;
     }
-    if (!status.binaryAvailable) status.message = L"Codex sidecar 未安装；当前使用 Direct Runtime";
+    if (!status.binaryAvailable) status.message = L"Codex CLI 未安装；当前使用兼容 Runtime";
     else if (!status.providerCompatible) status.message = setup.message;
-    else if (status.running) status.message = L"Codex Agent Runtime 正在运行";
-    else status.message = L"Codex Agent Runtime 可用，将在下一次请求时按需启动";
+    else if (status.running) status.message = L"Codex CLI Agent Runtime 正在运行";
+    else status.message = L"Codex CLI Agent Runtime 可用，将在下一次请求时按需启动";
     return status;
 }
 
@@ -407,7 +413,7 @@ bool CodexRuntime::ConfigureCodexHome(const ProviderSetup& setup, std::wstring& 
     }
     stream << L"model_provider = \"turingdesk\"\n"
            << L"approval_policy = \"never\"\n"
-           << L"sandbox_mode = \"read-only\"\n\n"
+           << L"sandbox_mode = \"workspace-write\"\n\n"
            << L"[model_providers.turingdesk]\n"
            << L"name = \"TuringDesk Responses Provider\"\n"
            << L"base_url = \"" << TomlEscape(setup.baseUrl) << L"\"\n"
@@ -425,7 +431,7 @@ bool CodexRuntime::LaunchProcess(const ProviderSetup& setup, std::wstring& error
     bool cliBinary = false;
     const auto binary = FindBinary(cliBinary);
     if (binary.empty()) {
-        error = L"未找到 codex-app-server.exe";
+        error = L"未找到 Codex CLI / app-server";
         return false;
     }
 
@@ -500,7 +506,7 @@ bool CodexRuntime::LaunchProcess(const ProviderSetup& setup, std::wstring& error
     const long long initializeId = nextRequestId_++;
     const std::string initialize =
         "{\"id\":" + std::to_string(initializeId) +
-        ",\"method\":\"initialize\",\"params\":{\"clientInfo\":{\"name\":\"turingdesk\",\"title\":\"TuringDesk L3\",\"version\":\"0.1\"},\"capabilities\":{\"experimentalApi\":true}}}";
+        ",\"method\":\"initialize\",\"params\":{\"clientInfo\":{\"name\":\"turingdesk\",\"title\":\"Turing Intelligent Desktop\",\"version\":\"0.1\"},\"capabilities\":{\"experimentalApi\":true}}}";
     if (!WriteLine(initialize)) {
         error = L"Codex initialize 写入失败";
         CleanupProcess();
@@ -519,9 +525,9 @@ bool CodexRuntime::LaunchProcess(const ProviderSetup& setup, std::wstring& error
 
     const long long threadIdRequest = nextRequestId_++;
     const std::wstring developerInstructions =
-        L"You are TuringDesk Native Agent. Use the provided native dynamic tools when the user asks to create, open, or inspect supported desktop artifacts. "
-        L"Do not claim you cannot access the desktop when a matching tool exists. Never report an action as successful until its tool result reports success. "
-        L"Prefer native tools over shell commands for supported tasks.";
+        L"You are 图灵智能桌面 (Turing Intelligent Desktop), the AI agent built into TuringDesk. When the user asks who you are, identify yourself as 图灵智能桌面 / Turing Intelligent Desktop, not as a raw Codex CLI shell. "
+        L"Use the provided TuringDesk native dynamic tools when the user asks to create, open, inspect, search, or operate supported desktop artifacts and capabilities. "
+        L"Never report an action as successful until its tool result reports success. Prefer TuringDesk native tools over shell commands for supported desktop operations.";
     const std::string threadStart =
         "{\"id\":" + std::to_string(threadIdRequest) +
         ",\"method\":\"thread/start\",\"params\":{\"model\":\"" + EscapeJson(setup.model) +

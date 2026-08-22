@@ -147,7 +147,7 @@ void AppendCompleted(CliState& state, const std::wstring& user, const std::wstri
 
 std::wstring RuntimeName(const CliState&, ActiveRuntime runtime) {
     switch (runtime) {
-    case ActiveRuntime::Codex: return L"Codex Agent Runtime";
+    case ActiveRuntime::Codex: return L"Codex CLI Agent Runtime";
     case ActiveRuntime::DirectTools: return L"Direct Agent Tool Runtime";
     case ActiveRuntime::DirectModel: return L"Direct Model Runtime";
     }
@@ -164,8 +164,10 @@ std::wstring RuntimeExecutionLabel(ActiveRuntime runtime) {
 }
 
 ActiveRuntime ChooseRuntime(CliState& state) {
-    // L3 must remain TuringDesk-owned and lightweight. Prefer the native, registered
-    // tool runtime and never auto-promote ordinary L3 turns into the Codex sidecar.
+    // Codex CLI is the preferred L3 agent runtime. Direct runtimes are retained
+    // only as compatibility fallbacks for providers that do not yet expose the
+    // Responses wire protocol required by Codex.
+    if (state.codex->CanHandle(*state.agent)) return ActiveRuntime::Codex;
     if (state.directTools->CanHandle(*state.agent)) return ActiveRuntime::DirectTools;
     return ActiveRuntime::DirectModel;
 }
@@ -175,11 +177,11 @@ std::wstring RuntimeStatusText(CliState& state) {
     const auto selected = ChooseRuntime(state);
     std::wstring text = L"当前路由：" + RuntimeName(state, selected);
     text += L" · " + RuntimeExecutionLabel(selected);
-    text += L"\r\nCodex sidecar：";
+    text += L"\r\nCodex CLI：";
     text += status.binaryAvailable ? L"已安装" : L"未安装";
     text += L"\r\nProvider → Codex：";
-    text += status.providerCompatible ? L"Responses 可直连（L3 不自动使用）" : L"等待协议桥";
-    text += L"\r\nDirect Tools：" + state.directTools->StatusText(*state.agent);
+    text += status.providerCompatible ? L"Responses 可直连（默认使用 Codex CLI）" : L"等待 Responses 协议桥";
+    text += L"\r\nDirect Tools fallback：" + state.directTools->StatusText(*state.agent);
     text += L"\r\n" + status.message;
     return text;
 }
@@ -354,7 +356,7 @@ LRESULT CALLBACK CliProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) 
         state->streaming.clear();
         state->busy = false;
         EnableWindow(state->input, TRUE);
-        RenderTranscript(*state);
+        RenderTranscript(state->streaming.empty() ? *state : *state);
         SetFocus(state->input);
         return 0;
     }
@@ -417,7 +419,7 @@ bool ShowL3CliWindow(HINSTANCE instance, HWND owner, L3Agent& agent, const std::
     const int x = ownerRect.left;
     const int y = ownerRect.top;
 
-    HWND window = CreateWindowExW(WS_EX_TOOLWINDOW, kCliClass, L"TuringDesk L3 CLI",
+    HWND window = CreateWindowExW(WS_EX_TOOLWINDOW, kCliClass, L"图灵智能桌面 · AI Agent",
                                   WS_POPUP | WS_BORDER,
                                   x, y, width, height, owner, nullptr, instance, &state);
     if (!window) {
@@ -426,8 +428,8 @@ bool ShowL3CliWindow(HINSTANCE instance, HWND owner, L3Agent& agent, const std::
         return false;
     }
 
-    HWND title = CreateWindowExW(0, L"STATIC", L"L3 CLI · Agent Runtime", WS_CHILD | WS_VISIBLE,
-                                 16, 16, 300, 24, window, nullptr, instance, nullptr);
+    HWND title = CreateWindowExW(0, L"STATIC", L"图灵智能桌面 · Codex CLI Agent", WS_CHILD | WS_VISIBLE,
+                                 16, 16, 360, 24, window, nullptr, instance, nullptr);
     state.settings = CreateWindowExW(0, L"BUTTON", L"AI 设置", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
                                      width - 112, 14, 96, 28, window,
                                      reinterpret_cast<HMENU>(static_cast<INT_PTR>(kSettingsId)), instance, nullptr);

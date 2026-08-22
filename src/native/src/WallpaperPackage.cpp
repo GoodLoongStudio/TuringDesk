@@ -3,10 +3,12 @@
 #include <windows.h>
 #include <algorithm>
 #include <cctype>
+#include <cstdio>
 #include <cwctype>
 #include <fstream>
 #include <iterator>
 #include <string_view>
+#include <utility>
 
 namespace fs = std::filesystem;
 
