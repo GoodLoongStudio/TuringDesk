@@ -23,6 +23,7 @@ constexpr std::size_t kMaxReadinessProbeBytes = 256 * 1024;
 struct LaunchSpec {
     std::wstring application;
     std::wstring commandLine;
+    std::wstring mode;
     bool Valid() const { return !application.empty() && !commandLine.empty(); }
 };
 
@@ -41,18 +42,6 @@ std::wstring Win32ErrorText(DWORD error) {
     }
     if (buffer) LocalFree(buffer);
     return text;
-}
-
-std::wstring ComSpecPath() {
-    wchar_t value[32768]{};
-    const DWORD length = GetEnvironmentVariableW(L"ComSpec", value, static_cast<DWORD>(std::size(value)));
-    if (length > 0 && length < std::size(value)) return value;
-
-    wchar_t systemDir[MAX_PATH]{};
-    const UINT systemLength = GetSystemDirectoryW(systemDir, static_cast<UINT>(std::size(systemDir)));
-    if (systemLength > 0 && systemLength < std::size(systemDir))
-        return std::wstring(systemDir) + L"\\cmd.exe";
-    return L"cmd.exe";
 }
 
 fs::path LocalAppDataDirectory() {
@@ -83,6 +72,11 @@ std::wstring UserHomeDirectory() {
     return {};
 }
 
+bool IsRegularFile(const fs::path& path) {
+    std::error_code ec;
+    return !path.empty() && fs::is_regular_file(path, ec);
+}
+
 std::wstring ResolvePath(const wchar_t* fileName) {
     wchar_t path[32768]{};
     const DWORD length = SearchPathW(nullptr, fileName, nullptr,
@@ -91,27 +85,70 @@ std::wstring ResolvePath(const wchar_t* fileName) {
     return {};
 }
 
-std::wstring BuildCmdLaunchCommand(const std::wstring& commandPath, const std::wstring& arguments) {
-    return L"cmd.exe /d /s /c \"\"" + commandPath + L"\" " + arguments + L"\"";
+std::wstring Quote(const std::wstring& value) {
+    return L"\"" + value + L"\"";
 }
 
-std::wstring BuildOfficialNpxCommandFor(const std::wstring& npxPath) {
-    return BuildCmdLaunchCommand(npxPath,
-                                 L"--yes " + std::wstring(kHarnessPackage) + L" " + kHarnessArgs);
+std::wstring BuildDirectDshCommand(const std::wstring& nodePath, const std::wstring& dshBin) {
+    return Quote(nodePath) + L" " + Quote(dshBin) + L" " + kHarnessArgs;
+}
+
+std::wstring BuildDirectNpxCommand(const std::wstring& nodePath, const std::wstring& npxCli) {
+    return Quote(nodePath) + L" " + Quote(npxCli) + L" --yes --loglevel=notice " +
+           std::wstring(kHarnessPackage) + L" " + kHarnessArgs;
 }
 
 LaunchSpec ResolveLaunchSpec() {
-    const std::wstring dsh = ResolvePath(L"dsh.cmd");
-    if (!dsh.empty()) {
-        return {ComSpecPath(), BuildCmdLaunchCommand(dsh, kHarnessArgs)};
+    std::wstring node = ResolvePath(L"node.exe");
+
+    // If the user already installed the official package globally, execute the
+    // published dsh lib/bin.js directly with the system Node runtime. This avoids
+    // an extra cmd.exe/dsh.cmd wrapper while running exactly the upstream package.
+    const std::wstring dshCmd = ResolvePath(L"dsh.cmd");
+    if (!node.empty() && !dshCmd.empty()) {
+        const fs::path prefix = fs::path(dshCmd).parent_path();
+        const fs::path dshBin = prefix / L"node_modules" / L"@deepseek-ai" / L"dsh" / L"lib" / L"bin.js";
+        if (IsRegularFile(dshBin)) {
+            return {node, BuildDirectDshCommand(node, dshBin.wstring()), L"official global dsh"};
+        }
     }
 
-    const std::wstring npx = ResolvePath(L"npx.cmd");
-    if (!npx.empty()) {
-        return {ComSpecPath(), BuildOfficialNpxCommandFor(npx)};
+    // Default official README path: npx @deepseek-ai/dsh web. Run npm's actual
+    // npx-cli.js with node.exe directly so Win32 process lifetime and redirected
+    // stdout/stderr are deterministic and do not depend on .cmd quoting semantics.
+    const std::wstring npxCmd = ResolvePath(L"npx.cmd");
+    if (!npxCmd.empty()) {
+        const fs::path nodeRoot = fs::path(npxCmd).parent_path();
+        if (node.empty()) {
+            const fs::path siblingNode = nodeRoot / L"node.exe";
+            if (IsRegularFile(siblingNode)) node = siblingNode.wstring();
+        }
+        const fs::path npxCli = nodeRoot / L"node_modules" / L"npm" / L"bin" / L"npx-cli.js";
+        if (!node.empty() && IsRegularFile(npxCli)) {
+            return {node, BuildDirectNpxCommand(node, npxCli.wstring()), L"official npx @deepseek-ai/dsh"};
+        }
     }
 
     return {};
+}
+
+std::string WideToUtf8(const std::wstring& value) {
+    if (value.empty()) return {};
+    const int count = WideCharToMultiByte(CP_UTF8, 0, value.data(), static_cast<int>(value.size()),
+                                          nullptr, 0, nullptr, nullptr);
+    if (count <= 0) return {};
+    std::string text(static_cast<std::size_t>(count), '\0');
+    WideCharToMultiByte(CP_UTF8, 0, value.data(), static_cast<int>(value.size()),
+                        text.data(), count, nullptr, nullptr);
+    return text;
+}
+
+void WriteLogLine(HANDLE handle, const std::wstring& line) {
+    if (!handle || handle == INVALID_HANDLE_VALUE) return;
+    const std::string utf8 = WideToUtf8(line + L"\r\n");
+    if (utf8.empty()) return;
+    DWORD written = 0;
+    WriteFile(handle, utf8.data(), static_cast<DWORD>(utf8.size()), &written, nullptr);
 }
 
 bool ResponseContainsHarnessBootManifest(HINTERNET request) {
@@ -221,7 +258,7 @@ bool HarnessProcessManager::Start() {
 
     const LaunchSpec launch = ResolveLaunchSpec();
     if (!launch.Valid()) {
-        impl_->lastError = L"未找到 Node.js / npx。TuringDesk 直接运行 DeepSeek 官方 @deepseek-ai/dsh；请先安装 Node.js。";
+        impl_->lastError = L"未找到可用的官方 Node.js/npm npx 运行入口。请重新运行 TuringDesk 一键部署以修复 Node.js。";
         return false;
     }
 
@@ -259,10 +296,21 @@ bool HarnessProcessManager::Start() {
         return false;
     }
 
+    // Always emit our own launch diagnostics before the upstream process starts.
+    // Therefore an empty harness.log itself is now actionable: it means the host
+    // never reached process creation rather than that npm happened to be quiet.
+    WriteLogLine(logHandle, L"[TuringDesk] DeepSeek Harness launch requested");
+    WriteLogLine(logHandle, L"[TuringDesk] mode: " + launch.mode);
+    WriteLogLine(logHandle, L"[TuringDesk] application: " + launch.application);
+    WriteLogLine(logHandle, L"[TuringDesk] command: " + launch.commandLine);
+    WriteLogLine(logHandle, L"[TuringDesk] waiting for upstream stdout/stderr...");
+    FlushFileBuffers(logHandle);
+
     HANDLE inputHandle = CreateFileW(L"NUL", GENERIC_READ | GENERIC_WRITE,
                                      FILE_SHARE_READ | FILE_SHARE_WRITE,
                                      &security, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
     if (inputHandle == INVALID_HANDLE_VALUE) {
+        WriteLogLine(logHandle, L"[TuringDesk] ERROR: unable to open NUL stdin: " + Win32ErrorText(GetLastError()));
         impl_->lastError = L"无法初始化 Harness 标准输入：" + Win32ErrorText(GetLastError());
         CloseHandle(logHandle);
         CloseHandle(job);
@@ -287,9 +335,11 @@ bool HarnessProcessManager::Start() {
                                         nullptr, home.empty() ? nullptr : home.c_str(), &startup, &processInfo);
     const DWORD createError = created ? ERROR_SUCCESS : GetLastError();
     CloseHandle(inputHandle);
-    CloseHandle(logHandle);
 
     if (!created) {
+        WriteLogLine(logHandle, L"[TuringDesk] ERROR: CreateProcessW failed: " + Win32ErrorText(createError));
+        FlushFileBuffers(logHandle);
+        CloseHandle(logHandle);
         impl_->lastError = L"无法启动 DeepSeek Harness：" + Win32ErrorText(createError) +
                            L" · 日志：" + logPath.wstring();
         CloseHandle(job);
@@ -297,6 +347,9 @@ bool HarnessProcessManager::Start() {
     }
 
     if (!AssignProcessToJobObject(job, processInfo.hProcess)) {
+        WriteLogLine(logHandle, L"[TuringDesk] ERROR: AssignProcessToJobObject failed: " + Win32ErrorText(GetLastError()));
+        FlushFileBuffers(logHandle);
+        CloseHandle(logHandle);
         impl_->lastError = L"无法接管 Harness 进程树：" + Win32ErrorText(GetLastError()) +
                            L" · 日志：" + logPath.wstring();
         TerminateProcess(processInfo.hProcess, 1);
@@ -307,6 +360,9 @@ bool HarnessProcessManager::Start() {
     }
 
     if (ResumeThread(processInfo.hThread) == static_cast<DWORD>(-1)) {
+        WriteLogLine(logHandle, L"[TuringDesk] ERROR: ResumeThread failed: " + Win32ErrorText(GetLastError()));
+        FlushFileBuffers(logHandle);
+        CloseHandle(logHandle);
         impl_->lastError = L"无法恢复 Harness 进程：" + Win32ErrorText(GetLastError()) +
                            L" · 日志：" + logPath.wstring();
         TerminateJobObject(job, 1);
@@ -316,6 +372,9 @@ bool HarnessProcessManager::Start() {
         return false;
     }
 
+    WriteLogLine(logHandle, L"[TuringDesk] process started, pid=" + std::to_wstring(processInfo.dwProcessId));
+    FlushFileBuffers(logHandle);
+    CloseHandle(logHandle);
     CloseHandle(processInfo.hThread);
     impl_->job = job;
     impl_->process = processInfo.hProcess;
@@ -384,12 +443,15 @@ std::wstring HarnessProcessManager::LogPath() {
 std::wstring HarnessProcessManager::BuildLaunchCommand() {
     const LaunchSpec resolved = ResolveLaunchSpec();
     if (resolved.Valid()) return resolved.commandLine;
-    return BuildOfficialNpxCommandFor(L"npx.cmd");
+    return L"node.exe npx-cli.js --yes @deepseek-ai/dsh web --no-open --host 127.0.0.1 --port 3080";
 }
 
 bool HarnessProcessManager::SelfTest() {
-    const std::wstring npxCommand = BuildOfficialNpxCommandFor(L"C:\\Program Files\\nodejs\\npx.cmd");
-    const std::wstring dshCommand = BuildCmdLaunchCommand(L"C:\\Users\\test\\AppData\\Roaming\\npm\\dsh.cmd", kHarnessArgs);
+    const std::wstring sampleNode = L"C:\\Program Files\\nodejs\\node.exe";
+    const std::wstring sampleNpx = L"C:\\Program Files\\nodejs\\node_modules\\npm\\bin\\npx-cli.js";
+    const std::wstring sampleDsh = L"C:\\Users\\test\\AppData\\Roaming\\npm\\node_modules\\@deepseek-ai\\dsh\\lib\\bin.js";
+    const std::wstring npxCommand = BuildDirectNpxCommand(sampleNode, sampleNpx);
+    const std::wstring dshCommand = BuildDirectDshCommand(sampleNode, sampleDsh);
 
     const auto bindsOnlyLoopback = [](const std::wstring& command) {
         return command.find(L"--host 127.0.0.1") != std::wstring::npos &&
@@ -399,11 +461,12 @@ bool HarnessProcessManager::SelfTest() {
     };
 
     return DefaultUrl() == L"http://localhost:3080" &&
+           npxCommand.find(L"npx-cli.js") != std::wstring::npos &&
            npxCommand.find(kHarnessPackage) != std::wstring::npos &&
            npxCommand.find(L"--no-open") != std::wstring::npos &&
-           npxCommand.find(L"/d /s /c") != std::wstring::npos &&
+           npxCommand.find(L"cmd.exe") == std::wstring::npos &&
            bindsOnlyLoopback(npxCommand) &&
-           dshCommand.find(L"dsh.cmd") != std::wstring::npos &&
+           dshCommand.find(L"@deepseek-ai\\dsh\\lib\\bin.js") != std::wstring::npos &&
            dshCommand.find(L"--no-open") != std::wstring::npos &&
            bindsOnlyLoopback(dshCommand) &&
            std::string_view(kHarnessBootMarker) == "window.__DSH_BOOT__" &&
