@@ -32,6 +32,7 @@ endif()
 add_executable(TuringDesk WIN32
     src/main.cpp
     src/SearchWindow.cpp
+    src/SettingsCenterWindow.cpp
     src/ModelSettingsWindow.cpp
     src/L3CliWindow.cpp
     src/CodexRuntime.cpp
